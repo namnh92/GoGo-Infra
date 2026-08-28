@@ -1,0 +1,14 @@
+# Pinned SSH host key for the production VPS.
+#
+# A public host key is not a secret, so it belongs in Git: pinning it here makes
+# a host-key change show up as a reviewable diff instead of being silently
+# accepted by ssh-keyscan on the next deploy.
+#
+# Record it out of band — from the VPS console, not over the network you are
+# trying to authenticate:
+#
+#   ssh-keyscan -t ed25519 <host>          # only to compare
+#   ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub    # run ON the host
+#
+# Verify the fingerprints match before committing. Format:
+#   [host]:port ssh-ed25519 AAAA...

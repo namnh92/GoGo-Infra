@@ -38,3 +38,6 @@ secrets.auto.tfvars
 .idea/
 .vscode/
 *.log
+
+# Generated during bootstrap
+backend_override.tf

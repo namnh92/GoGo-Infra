@@ -29,8 +29,8 @@ terraform/environments/      dev | staging | prod, one state key each
 scripts/secrets/             put / pull / list / delete / validate against SSM
 scripts/bootstrap/           Neon, Upstash, R2 lifecycle, service smoke checks
 scripts/deploy/              render-env.sh, used by the deploy workflow
-secrets.manifest.yaml        The names of every parameter — never the values
-docs/                        Architecture, environments, secrets, accounts, DR, onboarding
+config/                      Committed non-secret tfvars, pinned host keys, secret manifest
+docs/                        Architecture, environments, secrets, accounts, bootstrap, rollback, DR, ADRs
 ```
 
 ## Quick start
@@ -63,7 +63,10 @@ Free tiers are a development convenience, never a production SLA.
   and are read after OIDC. That makes `.github/workflows/**` an authorization boundary, which
   is why CODEOWNER review on it is a security control — see [`docs/adr/0001`](docs/adr/0001-ci-credentials-in-ssm.md).
 - `terraform plan` runs on pull requests, so it gets read-only provider credentials. The
-  write-capable pair is reachable only from an approved apply.
+  write-capable pair is reachable only from an approved apply. Read and write live in separate
+  SSM sub-paths, not sibling names, so no prefix grant can span both.
+- A pull request's OIDC subject does not encode the base branch, so splitting plan-dev from
+  plan-prod is defence in depth. What contains the risk is that neither holds a write credential.
 - OIDC trust policies pin repository **and** ref or environment. Wildcards are rejected by a
   variable validation, not by review discipline.
 - SSM read permission is scoped per environment path, never `/gogo/*`.

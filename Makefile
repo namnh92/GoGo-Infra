@@ -1,6 +1,7 @@
 SHELL := /bin/bash
 ENV ?= dev
 TF_DIR := terraform/environments/$(ENV)
+TF_VARS := -var-file=../../../config/global.tfvars -var-file=../../../config/$(ENV).tfvars
 
 .DEFAULT_GOAL := help
 
@@ -37,11 +38,11 @@ scan: ## Run gitleaks over the working tree
 
 .PHONY: plan
 plan: ## terraform plan for $(ENV)
-	terraform -chdir=$(TF_DIR) plan -input=false
+	terraform -chdir=$(TF_DIR) plan -input=false $(TF_VARS)
 
 .PHONY: apply
 apply: ## terraform apply for $(ENV) — prefer the CI workflow for prod
-	terraform -chdir=$(TF_DIR) apply -input=false
+	terraform -chdir=$(TF_DIR) apply -input=false $(TF_VARS)
 
 .PHONY: check
 check: fmt-check validate lint scan ## Everything CI runs before plan

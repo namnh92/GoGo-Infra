@@ -1,13 +1,15 @@
 locals {
-  environment = "staging"
-  name_prefix = "gogo-staging"
+  environment = var.environment
+  repo        = "${var.github_owner}/${var.infra_repository}"
+}
 
-  tags = {
-    env        = local.environment
-    project    = "gogo"
-    managed_by = "terraform"
-    repository = "namnh92/GoGo-Infra"
-  }
+module "tags" {
+  source = "../../modules/common-tags"
+
+  environment      = var.environment
+  project_name     = var.project_name
+  github_owner     = var.github_owner
+  infra_repository = var.infra_repository
 }
 
 data "aws_kms_key" "ssm" {
@@ -21,39 +23,33 @@ data "aws_iam_openid_connect_provider" "github" {
 }
 
 
-module "github_oidc" {
-  source = "../../modules/aws-github-oidc"
+# --- Scoped SSM policies -----------------------------------------------------
+#
+# Plan and apply read different sub-paths. There is no prefix under which a plan
+# role can reach a write-capable credential (see modules/aws-ssm-iam/README.md).
 
-  name_prefix                = local.name_prefix
-  create_oidc_provider       = false
-  existing_oidc_provider_arn = data.aws_iam_openid_connect_provider.github.arn
+module "policy_plan" {
+  source = "../../modules/aws-ssm-iam"
 
-  roles = {
-    infra-plan = {
-      description = "Terraform plan for staging from pull requests"
-      subjects    = ["repo:namnh92/GoGo-Infra:pull_request"]
-      policy_arns = ["arn:aws:iam::aws:policy/ReadOnlyAccess"]
-    }
-
-    infra-apply = {
-      description = "Terraform apply for staging after environment approval"
-      subjects    = ["repo:namnh92/GoGo-Infra:environment:staging"]
-      policy_arns = [aws_iam_policy.infra_apply.arn]
-    }
-
-    deploy = {
-      description = "Application deploy: read staging backend secrets only"
-      subjects    = ["repo:namnh92/GoGo-BE:environment:staging"]
-      policy_arns = [module.ssm.read_policy_arn]
-    }
-  }
-
-  tags = local.tags
+  name            = "${module.tags.name_prefix}-plan"
+  description     = "Read-only provider and state credentials for terraform plan in ${var.environment}"
+  parameter_paths = ["ci/${var.environment}/terraform/read/*"]
+  kms_key_arn     = data.aws_kms_key.ssm.arn
+  tags            = module.tags.tags
 }
 
-# Apply permissions are deliberately enumerated rather than granted through a
-# managed policy: this role can create IAM roles, so a broad grant here is a
-# privilege escalation path.
+module "policy_apply" {
+  source = "../../modules/aws-ssm-iam"
+
+  name            = "${module.tags.name_prefix}-apply"
+  description     = "Write-capable provider and state credentials for terraform apply in ${var.environment}"
+  parameter_paths = ["ci/${var.environment}/terraform/write/*"]
+  kms_key_arn     = data.aws_kms_key.ssm.arn
+  tags            = module.tags.tags
+}
+
+# Apply permissions are enumerated rather than granted through a managed policy:
+# this role can create IAM roles, so a broad grant is a privilege-escalation path.
 data "aws_iam_policy_document" "infra_apply" {
   statement {
     effect = "Allow"
@@ -71,36 +67,62 @@ data "aws_iam_policy_document" "infra_apply" {
     resources = ["*"]
   }
 
-  # The apply role must never read secret values, only manage the paths.
+  # Managing infrastructure never requires reading a secret value.
   statement {
     effect    = "Deny"
     actions   = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"]
-    resources = ["*"]
+    resources = ["arn:aws:ssm:*:*:parameter/gogo/${var.environment}/backend/*"]
   }
 }
 
 resource "aws_iam_policy" "infra_apply" {
-  name        = "${local.name_prefix}-infra-apply"
-  description = "Resources GoGo-Infra manages in staging"
+  name        = "${module.tags.name_prefix}-infra-apply"
+  description = "Resources GoGo-Infra manages in ${var.environment}"
   policy      = data.aws_iam_policy_document.infra_apply.json
-  tags        = local.tags
+  tags        = module.tags.tags
 }
 
-module "ssm" {
-  source = "../../modules/aws-ssm-iam"
+# --- GitHub OIDC roles -------------------------------------------------------
+#
+# Trust is pinned per repository and per ref or GitHub Environment.
+#
+# Known limitation: a pull request's OIDC subject is `repo:<owner>/<repo>:pull_request`
+# and does NOT encode the base branch, so a plan role trusted on `pull_request`
+# is assumable from a pull request targeting any branch. Separating plan-dev from
+# plan-prod is therefore defence in depth, not an enforced boundary — both are
+# read-only, which is what actually contains the risk.
 
-  name_prefix         = local.name_prefix
-  environment         = local.environment
-  kms_key_arn         = data.aws_kms_key.ssm.arn
-  create_write_policy = false
-  tags                = local.tags
+module "github_oidc" {
+  source = "../../modules/aws-github-oidc"
+
+  name_prefix                = module.tags.name_prefix
+  create_oidc_provider       = false
+  existing_oidc_provider_arn = data.aws_iam_openid_connect_provider.github.arn
+
+  roles = {
+    plan = {
+      description = "terraform plan for staging from pull requests"
+      subjects    = ["repo:${local.repo}:pull_request"]
+      policy_arns = ["arn:aws:iam::aws:policy/ReadOnlyAccess", module.policy_plan.policy_arn]
+    }
+
+    apply = {
+      description = "terraform apply for staging after environment approval"
+      subjects    = ["repo:${local.repo}:environment:staging"]
+      policy_arns = [aws_iam_policy.infra_apply.arn, module.policy_apply.policy_arn]
+    }
+  }
+
+  tags = module.tags.tags
 }
+
+# --- Infrastructure ----------------------------------------------------------
 
 module "assets_bucket" {
   source = "../../modules/cloudflare-r2"
 
   account_id           = var.cloudflare_account_id
-  bucket_name          = "gogo-staging-assets"
+  bucket_name          = "${module.tags.name_prefix}-assets"
   cors_allowed_origins = var.cors_allowed_origins
 }
 

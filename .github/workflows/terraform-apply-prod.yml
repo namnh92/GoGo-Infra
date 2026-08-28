@@ -1,0 +1,55 @@
+name: terraform-apply-prod
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'terraform/**'
+      - 'config/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: gogo-terraform-prod
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    name: apply (prod)
+    runs-on: ubuntu-latest
+
+    # The production environment supplies the approval gate, and the apply role's
+    # trust policy is pinned to environment:production — so this role cannot be
+    # assumed from a branch or a pull request even if a workflow tries.
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/tf-setup
+        with:
+          environment: prod
+          stage: write
+          role-to-assume: ${{ vars.AWS_APPLY_PROD_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          cloudflare-account-id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+
+      # Plan first and keep the artifact-free summary in the log, so the approval
+      # record and the applied change can be reconciled after the fact.
+      - name: terraform plan
+        working-directory: terraform/environments/prod
+        run: |
+          terraform plan -input=false -no-color -out=tfplan \
+            -var-file=../../../config/global.tfvars \
+            -var-file=../../../config/prod.tfvars
+
+      - name: terraform apply
+        working-directory: terraform/environments/prod
+        run: terraform apply -input=false -auto-approve tfplan
+
+      # Sensitive outputs are never printed.
+      - name: done
+        run: echo "prod apply finished"

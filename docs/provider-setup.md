@@ -48,10 +48,10 @@ Console → **R2** and **Manage Account → Account ID**.
 | --- | --- | --- |
 | non-secret | account id | GitHub variable `CLOUDFLARE_ACCOUNT_ID`, and `cloudflare_account_id` in each `terraform.tfvars` |
 | non-secret | zone id for the production domain | GitHub variable `CLOUDFLARE_ZONE_ID`, and `cloudflare_zone_id` in `prod/terraform.tfvars` |
-| secret | API token, **read-only** — used by `terraform plan` | SSM `/gogo/ci/terraform/plan/cloudflare-api-token-ro` |
-| secret | API token, **read-write** — used by `terraform apply` | SSM `/gogo/ci/terraform/apply/cloudflare-api-token` |
-| secret | R2 state credentials, read-only pair | SSM `/gogo/ci/terraform/plan/r2-state-*-ro` |
-| secret | R2 state credentials, read-write pair | SSM `/gogo/ci/terraform/apply/r2-state-*` |
+| secret | API token, **read-only**, scoped to one environment's resources | SSM `/gogo/ci/<env>/terraform/read/cloudflare-token` |
+| secret | API token, **write**, scoped to one environment's resources | SSM `/gogo/ci/<env>/terraform/write/cloudflare-token` |
+| secret | R2 state credentials, read-only pair | SSM `/gogo/ci/<env>/terraform/read/r2-state-*` |
+| secret | R2 state credentials, read-write pair (delete included — it releases the lock) | SSM `/gogo/ci/<env>/terraform/write/r2-state-*` |
 | secret | R2 access key id + secret for the **asset bucket** | `./scripts/secrets/put.sh <env> r2/access-key-id` / `r2/secret-access-key` |
 
 Scope each R2 token to one bucket. The state-bucket token must not reach the asset bucket and
@@ -148,8 +148,8 @@ which surface caused a cost spike.
 | Kind | Value | Where it goes |
 | --- | --- | --- |
 | non-secret | hostname/IP, port, deploy user, health URL | GitHub variables `DEPLOY_HOST`, `DEPLOY_PORT`, `DEPLOY_USER`, `HEALTH_URL` |
-| non-secret | pinned SSH host key | SSM `/gogo/ci/deploy/known-hosts` (String) |
-| secret | deploy SSH private key | SSM `/gogo/ci/deploy/ssh-private-key` |
+| non-secret | pinned SSH host key | committed at `config/known_hosts.prod` — public, and a change should be a reviewable diff |
+| secret | deploy SSH private key | SSM `/gogo/ci/prod/deploy/ssh-private-key` |
 
 The SSH key is itself a long-lived credential, which sits uneasily next to the
 no-static-credentials rule. Choosing between a scoped deploy key, a Cloudflare Tunnel and a

@@ -10,26 +10,35 @@ the application reads at runtime. A role with access to one has no access to the
 an ADR says why.
 
 ```
-/gogo/ci/terraform/plan/          read-only  — assumable from a pull request
-├── cloudflare-api-token-ro
-├── r2-state-access-key-id-ro
-└── r2-state-secret-access-key-ro
-
-/gogo/ci/terraform/apply/         read-write — environment approval required
-├── cloudflare-api-token
+/gogo/ci/<env>/terraform/read/    read-only  — assumable from a pull request
+├── cloudflare-token
 ├── r2-state-access-key-id
 └── r2-state-secret-access-key
 
-/gogo/ci/deploy/
-├── ssh-private-key
-└── known-hosts                   pinned host key, String
+/gogo/ci/<env>/terraform/write/   read-write — environment approval required
+├── cloudflare-token
+├── r2-state-access-key-id
+└── r2-state-secret-access-key
 
-/gogo/ci/sentry/
-└── auth-token                    release / source-map upload
+/gogo/ci/<env>/deploy/
+└── ssh-private-key               the host key is pinned in config/known_hosts.<env>
+
+/gogo/ci/<env>/sentry/
+├── auth-token                    backend release upload
+└── mobile-auth-token             mobile source-map upload, separate on purpose
 ```
 
-The plan/apply split is not tidiness. The plan workflow runs on `pull_request`, so anything it
-can read is readable by anyone who can open a pull request — see `docs/adr/0001`.
+Two dimensions, both required:
+
+- **By environment** — a dev apply must not hold a credential that can touch production. SSM
+  namespaces alone are not enough; the provider tokens themselves are scoped per environment.
+- **By privilege** — read and write are separate **sub-paths**, not sibling names. A policy
+  granting `terraform/*` would cover both, and `GetParametersByPath` on that prefix returns
+  both, which is exactly what the pull-request threat model forbids. Sub-paths also mean a
+  parameter added later inherits the permission its location implies.
+
+The plan workflow runs on `pull_request`, so anything it can read is readable by anyone who can
+open a pull request — see `docs/adr/0001`.
 
 ## Layout
 

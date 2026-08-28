@@ -46,6 +46,6 @@ module "github_oidc" {
     }
   }
 
-  tags = local.tags
+  tags = module.tags.tags
 }
 ```

@@ -1,0 +1,47 @@
+name: terraform-apply-dev
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - 'terraform/**'
+      - 'config/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+# cancel-in-progress stays false: cancelling an apply mid-flight leaves state
+# and reality out of sync. This is a second control on top of the state lock,
+# not a replacement for it.
+concurrency:
+  group: gogo-terraform-dev
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    name: apply (dev)
+    runs-on: ubuntu-latest
+    environment: dev
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/tf-setup
+        with:
+          environment: dev
+          stage: write
+          role-to-assume: ${{ vars.AWS_APPLY_DEV_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          cloudflare-account-id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: terraform apply
+        working-directory: terraform/environments/dev
+        run: |
+          terraform apply -input=false -auto-approve \
+            -var-file=../../../config/global.tfvars \
+            -var-file=../../../config/dev.tfvars
+
+      - name: done
+        run: echo "dev apply finished"

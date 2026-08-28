@@ -1,0 +1,71 @@
+name: terraform-plan-dev
+
+# Pull requests are untrusted execution: the workflow file itself can be edited
+# by the pull request. This job therefore assumes a role whose only credentials
+# are read-only, and runs with -lock=false because acquiring a state lock needs
+# write access to the lock object.
+on:
+  pull_request:
+    branches: [develop]
+    paths:
+      - 'terraform/**'
+      - 'config/**'
+      - '.github/workflows/terraform-*.yml'
+      - '.github/actions/**'
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+concurrency:
+  group: terraform-plan-dev-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    name: plan (dev)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/tf-setup
+        with:
+          environment: dev
+          stage: read
+          role-to-assume: ${{ vars.AWS_PLAN_DEV_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          cloudflare-account-id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: terraform plan
+        working-directory: terraform/environments/dev
+        run: |
+          set -o pipefail
+          terraform plan -input=false -no-color -lock=false \
+            -var-file=../../../config/global.tfvars \
+            -var-file=../../../config/dev.tfvars | tee plan.txt
+
+      - name: comment plan summary
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('terraform/environments/dev/plan.txt', 'utf8');
+            // Counts only. The full plan stays in the job log.
+            const summary = plan.split('\n').filter(l => /^(Plan:|No changes|Error)/.test(l)).join('\n');
+            const body = [
+              '### terraform plan — `dev`',
+              '',
+              'Advisory: run with `-lock=false`, so it can go stale if an apply lands first.',
+              '',
+              '```',
+              summary || 'see job log',
+              '```',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });
