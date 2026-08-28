@@ -13,6 +13,7 @@ not a committed `.env`.
 /gogo/<env>/backend/onesignal/{app-id,rest-api-key,identity-verification-key}
 /gogo/<env>/backend/tenjin/api-key
 /gogo/<env>/backend/google/{server-api-key,routes-api-key}
+/gogo/<env>/backend/observability/sentry-dsn
 ```
 
 `SecureString`, Standard tier. One parameter per independently permissioned value — a single
