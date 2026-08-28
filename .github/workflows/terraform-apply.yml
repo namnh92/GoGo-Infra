@@ -1,0 +1,71 @@
+name: terraform-apply
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'terraform/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to apply
+        required: true
+        default: dev
+        type: choice
+        options: [dev, staging, prod]
+
+permissions:
+  contents: read
+  id-token: write
+
+# Applies are serialized. cancel-in-progress must stay false: cancelling an
+# apply mid-flight leaves state and reality out of sync.
+concurrency:
+  group: terraform-${{ inputs.environment || 'dev' }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    name: apply (${{ inputs.environment || 'dev' }})
+    runs-on: ubuntu-latest
+
+    # The GitHub Environment supplies the approval gate. Production infrastructure
+    # never changes without a human clicking approve.
+    environment: ${{ inputs.environment || 'dev' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version_file: .terraform-version
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_INFRA_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: terraform init
+        working-directory: terraform/environments/${{ inputs.environment || 'dev' }}
+        env:
+          CF_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          R2_KEY: ${{ secrets.R2_STATE_ACCESS_KEY_ID }}
+          R2_SECRET: ${{ secrets.R2_STATE_SECRET_ACCESS_KEY }}
+        run: |
+          terraform init -input=false \
+            -backend-config="endpoints={s3=\"https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com\"}" \
+            -backend-config="access_key=${R2_KEY}" \
+            -backend-config="secret_key=${R2_SECRET}"
+
+      - name: terraform apply
+        working-directory: terraform/environments/${{ inputs.environment || 'dev' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TF_VAR_cloudflare_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          TF_VAR_cloudflare_zone_id: ${{ vars.CLOUDFLARE_ZONE_ID }}
+        run: terraform apply -input=false -auto-approve
+
+      # Outputs are never printed. Consumers read them from state with an
+      # explicit `terraform output` run by an operator.
+      - name: done
+        run: echo "apply finished for ${{ inputs.environment || 'dev' }}"

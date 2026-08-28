@@ -1,0 +1,47 @@
+title = "GoGo secret scanning"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "gogo-apns-auth-key"
+description = "Apple APNs .p8 auth key"
+regex = '''-----BEGIN PRIVATE KEY-----'''
+tags = ["apple", "apns", "key"]
+
+[[rules]]
+id = "gogo-firebase-service-account"
+description = "Firebase / Google service account JSON"
+regex = '''"type"\s*:\s*"service_account"'''
+tags = ["gcp", "firebase"]
+
+[[rules]]
+id = "gogo-onesignal-rest-key"
+description = "OneSignal REST API key header"
+regex = '''(?i)(onesignal[_-]?rest[_-]?api[_-]?key)\s*[:=]\s*['\"]?[A-Za-z0-9_\-]{20,}'''
+tags = ["onesignal"]
+
+[[rules]]
+id = "gogo-postgres-url"
+description = "PostgreSQL connection string with credentials"
+regex = '''postgres(ql)?://[^:\s]+:[^@\s]+@'''
+tags = ["database"]
+
+[[rules]]
+id = "gogo-redis-url"
+description = "Redis connection string with credentials"
+regex = '''rediss?://[^:\s]*:[^@\s]+@'''
+tags = ["redis"]
+
+[allowlist]
+description = "Placeholders and documentation examples"
+regexes = [
+  '''<[A-Z_]+>''',
+  '''postgres(ql)?://USER:PASSWORD@''',
+  '''rediss?://default:PASSWORD@''',
+  '''EXAMPLE|PLACEHOLDER|CHANGEME|xxxxx''',
+]
+paths = [
+  '''\.env\.example$''',
+  '''secrets\.manifest\.yaml$''',
+]

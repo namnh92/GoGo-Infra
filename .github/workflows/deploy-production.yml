@@ -1,0 +1,100 @@
+name: deploy-production
+
+# Application deployment. Kept separate from terraform-apply on purpose:
+# infrastructure changes and application releases have different blast radius,
+# different reviewers and different rollback paths.
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_ref:
+        description: Git ref or image tag of GoGo-BE to deploy
+        required: true
+      skip_migrations:
+        description: Skip the migration step (only for a config-only redeploy)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy backend to production VPS
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Temporary credentials via OIDC. The VPS itself never holds an AWS key
+      # (GOGO_SRS.md acceptance #15).
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: verify secrets match the manifest
+        run: ./scripts/secrets/validate.sh prod
+
+      - name: render env file
+        run: ./scripts/deploy/render-env.sh prod "${RUNNER_TEMP}/gogo.env"
+
+      - name: ship env file to the VPS
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          install -m 600 /dev/null "${RUNNER_TEMP}/deploy_key"
+          printf '%s' "$DEPLOY_SSH_KEY" > "${RUNNER_TEMP}/deploy_key"
+          mkdir -p ~/.ssh && ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          scp -i "${RUNNER_TEMP}/deploy_key" "${RUNNER_TEMP}/gogo.env" \
+            "${DEPLOY_USER}@${DEPLOY_HOST}:/etc/gogo/gogo.env.new"
+          ssh -i "${RUNNER_TEMP}/deploy_key" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            'sudo install -m 600 -o gogo -g gogo /etc/gogo/gogo.env.new /etc/gogo/gogo.env && rm -f /etc/gogo/gogo.env.new'
+          shred -u "${RUNNER_TEMP}/gogo.env" "${RUNNER_TEMP}/deploy_key"
+
+      - name: deploy artifact
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          ARTIFACT_REF: ${{ inputs.artifact_ref }}
+        run: |
+          echo "TODO(INF-018): invoke the VPS release script for ${ARTIFACT_REF}."
+          echo "Order is fixed: deploy artifact -> run migrations -> switch traffic."
+
+      - name: run migrations
+        if: ${{ !inputs.skip_migrations }}
+        run: |
+          echo "TODO(INF-018): run GoGo-BE migrations against production."
+          echo "Migrations belong to the application pipeline, never to terraform apply."
+
+      - name: health check
+        env:
+          HEALTH_URL: ${{ vars.HEALTH_URL }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 10); do
+            if curl -fsS --max-time 10 "$HEALTH_URL" | tee /dev/stderr | grep -q '"api":"healthy"'; then
+              echo "healthy after ${attempt} attempt(s)"
+              exit 0
+            fi
+            sleep 6
+          done
+          echo "health check failed" >&2
+          exit 1
+
+      # A push provider outage must not roll back a good deploy: the health
+      # endpoint reports onesignal separately as degraded (SRS §10.4).
+      - name: rollback on failure
+        if: failure()
+        run: |
+          echo "TODO(INF-018): re-deploy the previous artifact and restore the previous env file."
+          echo "Rollback must be rehearsed before pilot (INF-020)."

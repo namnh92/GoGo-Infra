@@ -1,0 +1,77 @@
+# GoGo-Infra
+
+Infrastructure as code for GoGo: Terraform modules, secret bootstrap, CI/CD for infrastructure,
+and the production deploy pipeline.
+
+**Source of truth:** [`GoGo-Infrastructure-Plan-Spec.md`](https://github.com/namnh92/GoGo-BE) ·
+`GOGO_SRS.md` §6.3, §6.4, §10.2, §10.5 · `GOGO_IMPLEMENTATION_WBS.md` §12b (`INF-*`)
+
+> Local development runs application code. Managed services run infrastructure.
+
+## What lives where
+
+| Owner | Owns |
+| --- | --- |
+| Terraform (this repo) | AWS IAM, GitHub OIDC, R2 buckets and lifecycle, DNS, infrastructure policy |
+| Bootstrap scripts (this repo) | Neon, Upstash, OneSignal, Tenjin, Google/Apple/Firebase credentials |
+| `scripts/secrets/*` | Writing secret **values** into AWS SSM Parameter Store |
+| GoGo-BE migrations | Schemas, tables, indexes, PostGIS objects |
+
+Terraform never manages a secret value. A value passed through Terraform is written in
+plaintext into state, which turns the state bucket into a credential store.
+
+## Layout
+
+```
+bootstrap/terraform-state/   One-time creation of the private R2 state bucket
+terraform/modules/           Reusable modules (OIDC, SSM IAM, R2, DNS)
+terraform/environments/      dev | staging | prod, one state key each
+scripts/secrets/             put / pull / list / delete / validate against SSM
+scripts/bootstrap/           Neon, Upstash, R2 lifecycle, service smoke checks
+scripts/deploy/              render-env.sh, used by the deploy workflow
+secrets.manifest.yaml        The names of every parameter — never the values
+docs/                        Architecture, environments, secrets, DR, onboarding
+```
+
+## Quick start
+
+```bash
+make help                     # every target
+make check                    # fmt + validate + tflint + gitleaks
+make plan ENV=dev             # terraform plan
+make secrets-validate ENV=dev # diff SSM against secrets.manifest.yaml
+```
+
+First-time setup is in [`docs/onboarding.md`](docs/onboarding.md).
+
+## Environments
+
+| Environment | State | Database | Redis | Assets | SSM prefix |
+| --- | --- | --- | --- | --- | --- |
+| `dev` | enabled | Neon (free tier) | Upstash | `gogo-dev-assets` | `/gogo/dev/backend/` |
+| `staging` | on demand | Neon branch | Upstash | `gogo-staging-assets` | `/gogo/staging/backend/` |
+| `prod` | enabled | managed PostgreSQL + PITR | Redis with an SLA | `gogo-prod-assets` | `/gogo/prod/backend/` |
+
+Dev and prod never share a database, Redis, bucket, auth secret, provider credential or API key.
+Free tiers are a development convenience, never a production SLA.
+
+## Non-negotiables
+
+- No secret in Git. No `.p8`, no service-account JSON, no `.env` with real values, no state file.
+- No long-lived AWS credentials in GitHub or on the production VPS. OIDC only.
+- OIDC trust policies pin repository **and** ref or environment. Wildcards are rejected by a
+  variable validation, not by review discipline.
+- SSM read permission is scoped per environment path, never `/gogo/*`.
+- A pull request can plan. Only an approved environment can apply.
+- A credential that was ever committed gets rotated, not deleted.
+
+## Git flow
+
+`master` is production, `develop` is integration, both protected. Branches are
+`feature/GOGO-<issue#>-<short-name>` off `develop`. Conventional Commits, squash merge for
+features. Same rules as every other GoGo repository.
+
+## Backlog
+
+GitHub issues labelled `wbs`, titled by WBS id (`INF-001` … `INF-023`), mirroring
+`GOGO_IMPLEMENTATION_WBS.md` §12b.

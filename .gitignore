@@ -1,0 +1,40 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+crash.log
+crash.*.log
+*.tfvars.local
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+.terraform.lock.hcl.local
+tfplan
+*.tfplan
+
+# Secrets — nothing with a real value may ever be committed
+.env
+.env.*
+!.env.example
+*.env.runtime
+*.p8
+*.p12
+*.mobileprovision
+*-service-account*.json
+*serviceaccount*.json
+credentials
+credentials.json
+secrets.auto.tfvars
+*.pem
+*.key
+!**/*.pub
+
+# Local
+.DS_Store
+.idea/
+.vscode/
+*.log

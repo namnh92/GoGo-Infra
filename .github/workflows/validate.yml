@@ -1,0 +1,78 @@
+name: validate
+
+on:
+  pull_request:
+  push:
+    branches: [master, develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  terraform:
+    name: terraform fmt / validate / tflint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version_file: .terraform-version
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive .
+
+      - name: terraform validate (modules and environments)
+        run: |
+          set -euo pipefail
+          for dir in terraform/modules/*/ terraform/environments/*/ bootstrap/*/; do
+            echo "::group::validate ${dir}"
+            # -backend=false: validation must not need remote state credentials.
+            terraform -chdir="${dir}" init -backend=false -input=false >/dev/null
+            terraform -chdir="${dir}" validate
+            echo "::endgroup::"
+          done
+
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+
+      - name: tflint
+        run: |
+          tflint --init
+          tflint --recursive
+
+  secrets:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+
+  scripts:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y shellcheck
+          shellcheck -x scripts/**/*.sh
+
+      - name: manifest parses
+        run: |
+          for env in dev staging prod; do
+            python3 scripts/lib/manifest.py "$env" >/dev/null
+            echo "${env}: $(python3 scripts/lib/manifest.py "$env" --required | wc -l) required parameters"
+          done
