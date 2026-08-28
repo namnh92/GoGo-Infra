@@ -11,10 +11,16 @@ die() {
   exit 1
 }
 
+# 'ci' is a namespace, not an environment: it holds pipeline-control credentials
+# under /gogo/ci/* rather than application runtime values. Scripts that render
+# env files reject it; put/list/delete accept it.
 require_env_arg() {
-  local env="${1:-}"
+  local env="${1:-}" allow_ci="${2:-no}"
   case "$env" in
     dev | staging | prod) ;;
+    ci)
+      [[ "$allow_ci" == "allow-ci" ]] || die "'ci' is not a runtime environment"
+      ;;
     *) die "environment must be one of: dev, staging, prod (got '${env:-<empty>}')" ;;
   esac
 }
@@ -25,7 +31,11 @@ require_aws() {
 }
 
 ssm_prefix() {
-  printf '/gogo/%s/backend' "$1"
+  if [[ "$1" == "ci" ]]; then
+    printf '/gogo/ci'
+  else
+    printf '/gogo/%s/backend' "$1"
+  fi
 }
 
 confirm_prod() {

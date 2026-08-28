@@ -41,8 +41,29 @@ if [[ -n "$unknown" ]]; then
   status=1
 fi
 
+# Name drift is the obvious failure. Type drift is the quiet one: a value stored
+# as String instead of SecureString is readable by anything with ssm:GetParameter
+# and is not encrypted at rest, and nothing downstream notices.
+wrong_type=""
+while IFS=$'\t' read -r path _env_var expected_type _required; do
+  actual_type="$(aws ssm get-parameter --name "${prefix}/${path}" \
+    --query 'Parameter.Type' --output text 2>/dev/null || true)"
+  [[ -n "$actual_type" && "$actual_type" != "None" ]] || continue
+  if [[ "$actual_type" != "$expected_type" ]]; then
+    wrong_type+="  - ${path}: expected ${expected_type}, found ${actual_type}"$'\n'
+  fi
+done < <(python3 "$MANIFEST_READER" "$ENVIRONMENT")
+
+if [[ -n "$wrong_type" ]]; then
+  echo "WRONG TYPE:"
+  printf '%s' "$wrong_type"
+  echo "  Recreate the parameter with the declared type. A SecureString stored as"
+  echo "  String is not encrypted at rest and needs rotating, not just retyping."
+  status=1
+fi
+
 if [[ "$status" -eq 0 ]]; then
-  echo "OK: ${ENVIRONMENT} matches secrets.manifest.yaml ($(echo "$expected_all" | wc -l | tr -d ' ') declared)."
+  echo "OK: ${ENVIRONMENT} matches secrets.manifest.yaml ($(echo "$expected_all" | wc -l | tr -d ' ') declared, names and types)."
 fi
 
 exit "$status"

@@ -7,7 +7,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 ENVIRONMENT="${1:-}"
-require_env_arg "$ENVIRONMENT"
+require_env_arg "$ENVIRONMENT" allow-ci
 require_aws
 
 prefix="$(ssm_prefix "$ENVIRONMENT")"

@@ -3,6 +3,8 @@
 # Write one secret value into SSM Parameter Store.
 #
 #   ./scripts/secrets/put.sh dev database/url
+#   ./scripts/secrets/put.sh ci  terraform/apply/cloudflare-api-token
+#   ./scripts/secrets/put.sh ci  deploy/known-hosts String
 #
 # The value is read from stdin, never from the command line: an argument would
 # land in shell history, in `ps` output, and in CI logs.
@@ -15,16 +17,24 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 ENVIRONMENT="${1:-}"
 PARAM_PATH="${2:-}"
 
-require_env_arg "$ENVIRONMENT"
-[[ -n "$PARAM_PATH" ]] || die "usage: put.sh <env> <path>   e.g. put.sh dev database/url"
+require_env_arg "$ENVIRONMENT" allow-ci
+[[ -n "$PARAM_PATH" ]] || die "usage: put.sh <env|ci> <path> [type]   e.g. put.sh dev database/url"
 require_aws
 
-PARAM_TYPE="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" | awk -F'\t' -v p="$PARAM_PATH" '$1 == p { print $3 }')"
-if [[ -z "$PARAM_TYPE" ]]; then
-  echo "warning: '${PARAM_PATH}' is not in secrets.manifest.yaml." >&2
-  echo "         Add it there first so validate.sh and GoGo-BE config validation stay in sync." >&2
-  PARAM_TYPE="SecureString"
+PARAM_TYPE="${3:-}"
+if [[ -z "$PARAM_TYPE" && "$ENVIRONMENT" != "ci" ]]; then
+  PARAM_TYPE="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" | awk -F'\t' -v p="$PARAM_PATH" '$1 == p { print $3 }')"
+  if [[ -z "$PARAM_TYPE" ]]; then
+    echo "warning: '${PARAM_PATH}' is not in secrets.manifest.yaml." >&2
+    echo "         Add it there first so validate.sh and GoGo-BE config validation stay in sync." >&2
+  fi
 fi
+PARAM_TYPE="${PARAM_TYPE:-SecureString}"
+
+case "$PARAM_TYPE" in
+  String | SecureString) ;;
+  *) die "type must be String or SecureString (got '${PARAM_TYPE}')" ;;
+esac
 
 confirm_prod "$ENVIRONMENT" "write ${PARAM_PATH}"
 

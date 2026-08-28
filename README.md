@@ -59,6 +59,11 @@ Free tiers are a development convenience, never a production SLA.
 
 - No secret in Git. No `.p8`, no service-account JSON, no `.env` with real values, no state file.
 - No long-lived AWS credentials in GitHub or on the production VPS. OIDC only.
+- No operational secret in GitHub at all: pipeline credentials live in SSM under `/gogo/ci/*`
+  and are read after OIDC. That makes `.github/workflows/**` an authorization boundary, which
+  is why CODEOWNER review on it is a security control — see [`docs/adr/0001`](docs/adr/0001-ci-credentials-in-ssm.md).
+- `terraform plan` runs on pull requests, so it gets read-only provider credentials. The
+  write-capable pair is reachable only from an approved apply.
 - OIDC trust policies pin repository **and** ref or environment. Wildcards are rejected by a
   variable validation, not by review discipline.
 - SSM read permission is scoped per environment path, never `/gogo/*`.

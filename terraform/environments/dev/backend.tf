@@ -14,6 +14,11 @@ terraform {
       s3 = "https://ACCOUNT_ID.r2.cloudflarestorage.com"
     }
 
+    # Credentials come from the named profile, never from environment
+    # variables (the AWS provider would pick those up) and never from
+    # -backend-config (Terraform persists those into .terraform/ in plaintext).
+    profile = "r2-state"
+
     use_path_style              = true
     use_lockfile                = true
     skip_credentials_validation = true
@@ -27,7 +32,7 @@ terraform {
 # The endpoint above contains the Cloudflare account id, which is not a secret
 # but is environment specific. Supply it at init time instead of committing it:
 #
+#   source scripts/lib/r2-profile.sh
+#   write_r2_profile /gogo/ci/terraform/plan      # or .../apply
 #   terraform -chdir=terraform/environments/dev init \
-#     -backend-config="endpoints={s3=\"https://$CF_ACCOUNT_ID.r2.cloudflarestorage.com\"}" \
-#     -backend-config="access_key=$R2_ACCESS_KEY_ID" \
-#     -backend-config="secret_key=$R2_SECRET_ACCESS_KEY"
+#     -backend-config="endpoints={s3=\"https://$CF_ACCOUNT_ID.r2.cloudflarestorage.com\"}"

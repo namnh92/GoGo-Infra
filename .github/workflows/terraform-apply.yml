@@ -21,7 +21,7 @@ permissions:
 # Applies are serialized. cancel-in-progress must stay false: cancelling an
 # apply mid-flight leaves state and reality out of sync.
 concurrency:
-  group: terraform-${{ inputs.environment || 'dev' }}
+  group: gogo-terraform-${{ inputs.environment || 'dev' }}
   cancel-in-progress: false
 
 jobs:
@@ -40,27 +40,39 @@ jobs:
         with:
           terraform_version_file: .terraform-version
 
+      # Only this workflow reaches /gogo/ci/terraform/apply/*, and only after the
+      # environment approval. Its trust policy is pinned to
+      # repo:namnh92/GoGo-Infra:environment:<env> — a pull request cannot assume it.
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_INFRA_APPLY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
+      - name: fetch backend credentials from SSM
+        run: |
+          source scripts/lib/r2-profile.sh
+          write_r2_profile /gogo/ci/terraform/apply
+
+      - name: fetch Cloudflare token
+        run: |
+          set -euo pipefail
+          token="$(aws ssm get-parameter \
+            --name /gogo/ci/terraform/apply/cloudflare-api-token \
+            --with-decryption --query 'Parameter.Value' --output text)"
+          echo "::add-mask::${token}"
+          echo "CLOUDFLARE_API_TOKEN=${token}" >> "$GITHUB_ENV"
+
       - name: terraform init
         working-directory: terraform/environments/${{ inputs.environment || 'dev' }}
         env:
           CF_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          R2_KEY: ${{ secrets.R2_STATE_ACCESS_KEY_ID }}
-          R2_SECRET: ${{ secrets.R2_STATE_SECRET_ACCESS_KEY }}
         run: |
           terraform init -input=false \
-            -backend-config="endpoints={s3=\"https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com\"}" \
-            -backend-config="access_key=${R2_KEY}" \
-            -backend-config="secret_key=${R2_SECRET}"
+            -backend-config="endpoints={s3=\"https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com\"}"
 
       - name: terraform apply
         working-directory: terraform/environments/${{ inputs.environment || 'dev' }}
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           TF_VAR_cloudflare_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           TF_VAR_cloudflare_zone_id: ${{ vars.CLOUDFLARE_ZONE_ID }}
         run: terraform apply -input=false -auto-approve

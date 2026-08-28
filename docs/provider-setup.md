@@ -15,8 +15,11 @@ GitHub secret, read from stdin:
 
 ```bash
 ./scripts/secrets/put.sh dev onesignal/rest-api-key    # prompts; input is not echoed
-gh secret set CLOUDFLARE_API_TOKEN -R namnh92/GoGo-Infra
 ```
+
+GitHub holds **no** operational secret. Pipeline credentials live under `/gogo/ci/*` and the
+workflow reads them after authenticating with OIDC (`docs/adr/0001`). GitHub keeps only
+non-secret repository variables.
 
 A secret that passes through a chat log is a rotated secret. Treat it as burned and rotate it
 at the provider (`docs/disaster-recovery.md`).
@@ -45,8 +48,10 @@ Console → **R2** and **Manage Account → Account ID**.
 | --- | --- | --- |
 | non-secret | account id | GitHub variable `CLOUDFLARE_ACCOUNT_ID`, and `cloudflare_account_id` in each `terraform.tfvars` |
 | non-secret | zone id for the production domain | GitHub variable `CLOUDFLARE_ZONE_ID`, and `cloudflare_zone_id` in `prod/terraform.tfvars` |
-| secret | API token, R2 admin — used by Terraform | `gh secret set CLOUDFLARE_API_TOKEN` |
-| secret | R2 access key id + secret for the **state bucket** | `gh secret set R2_STATE_ACCESS_KEY_ID` / `R2_STATE_SECRET_ACCESS_KEY` |
+| secret | API token, **read-only** — used by `terraform plan` | SSM `/gogo/ci/terraform/plan/cloudflare-api-token-ro` |
+| secret | API token, **read-write** — used by `terraform apply` | SSM `/gogo/ci/terraform/apply/cloudflare-api-token` |
+| secret | R2 state credentials, read-only pair | SSM `/gogo/ci/terraform/plan/r2-state-*-ro` |
+| secret | R2 state credentials, read-write pair | SSM `/gogo/ci/terraform/apply/r2-state-*` |
 | secret | R2 access key id + secret for the **asset bucket** | `./scripts/secrets/put.sh <env> r2/access-key-id` / `r2/secret-access-key` |
 
 Scope each R2 token to one bucket. The state-bucket token must not reach the asset bucket and
@@ -142,8 +147,9 @@ which surface caused a cost spike.
 
 | Kind | Value | Where it goes |
 | --- | --- | --- |
-| non-secret | hostname or IP, deploy user, health URL | GitHub variables `DEPLOY_HOST`, `DEPLOY_USER`, `HEALTH_URL` |
-| secret | deploy SSH private key | `gh secret set DEPLOY_SSH_KEY` |
+| non-secret | hostname/IP, port, deploy user, health URL | GitHub variables `DEPLOY_HOST`, `DEPLOY_PORT`, `DEPLOY_USER`, `HEALTH_URL` |
+| non-secret | pinned SSH host key | SSM `/gogo/ci/deploy/known-hosts` (String) |
+| secret | deploy SSH private key | SSM `/gogo/ci/deploy/ssh-private-key` |
 
 The SSH key is itself a long-lived credential, which sits uneasily next to the
 no-static-credentials rule. Choosing between a scoped deploy key, a Cloudflare Tunnel and a

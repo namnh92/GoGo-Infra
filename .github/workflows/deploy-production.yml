@@ -45,20 +45,40 @@ jobs:
       - name: render env file
         run: ./scripts/deploy/render-env.sh prod "${RUNNER_TEMP}/gogo.env"
 
+      # The SSH key and the pinned host key come from SSM, not from GitHub
+      # Secrets (docs/adr/0001). The host key is pinned rather than discovered
+      # with ssh-keyscan: trust-on-first-use on every run means anyone able to
+      # intercept the runner's connection receives the production env file.
       - name: ship env file to the VPS
         env:
           DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
           DEPLOY_USER: ${{ vars.DEPLOY_USER }}
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
         run: |
           set -euo pipefail
+
           install -m 600 /dev/null "${RUNNER_TEMP}/deploy_key"
-          printf '%s' "$DEPLOY_SSH_KEY" > "${RUNNER_TEMP}/deploy_key"
-          mkdir -p ~/.ssh && ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          scp -i "${RUNNER_TEMP}/deploy_key" "${RUNNER_TEMP}/gogo.env" \
+          aws ssm get-parameter --name /gogo/ci/deploy/ssh-private-key \
+            --with-decryption --query 'Parameter.Value' --output text \
+            > "${RUNNER_TEMP}/deploy_key"
+
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          aws ssm get-parameter --name /gogo/ci/deploy/known-hosts \
+            --query 'Parameter.Value' --output text > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+          ssh_opts=(-i "${RUNNER_TEMP}/deploy_key" -p "${DEPLOY_PORT:-22}"
+                    -o StrictHostKeyChecking=yes
+                    -o UserKnownHostsFile="${HOME}/.ssh/known_hosts")
+
+          scp "${ssh_opts[@]}" "${RUNNER_TEMP}/gogo.env" \
             "${DEPLOY_USER}@${DEPLOY_HOST}:/etc/gogo/gogo.env.new"
-          ssh -i "${RUNNER_TEMP}/deploy_key" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+
+          # Atomic replace: install(1) renames into place, so a reader never
+          # sees a half-written env file.
+          ssh "${ssh_opts[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
             'sudo install -m 600 -o gogo -g gogo /etc/gogo/gogo.env.new /etc/gogo/gogo.env && rm -f /etc/gogo/gogo.env.new'
+
           shred -u "${RUNNER_TEMP}/gogo.env" "${RUNNER_TEMP}/deploy_key"
 
       - name: deploy artifact

@@ -33,30 +33,43 @@ jobs:
         with:
           terraform_version_file: .terraform-version
 
-      # Read-only role. There is no apply in this workflow, by design:
-      # a pull request must never be able to change production infrastructure.
+      # This job runs on pull_request, so treat everything it can read as
+      # readable by anyone who can open a pull request. The plan role therefore
+      # reads only /gogo/ci/terraform/plan/*, which holds read-only Cloudflare
+      # and R2 credentials. The write-capable pair lives under .../apply/* and
+      # this role has no permission on that path (INF-026, docs/adr/0001).
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_INFRA_PLAN_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
+      - name: fetch backend credentials from SSM
+        run: |
+          source scripts/lib/r2-profile.sh
+          write_r2_profile /gogo/ci/terraform/plan
+
+      - name: fetch Cloudflare read-only token
+        id: cf
+        run: |
+          set -euo pipefail
+          token="$(aws ssm get-parameter \
+            --name /gogo/ci/terraform/plan/cloudflare-api-token-ro \
+            --with-decryption --query 'Parameter.Value' --output text)"
+          # Mask before the value can reach any later log line.
+          echo "::add-mask::${token}"
+          echo "CLOUDFLARE_API_TOKEN=${token}" >> "$GITHUB_ENV"
+
       - name: terraform init
         working-directory: terraform/environments/${{ matrix.environment }}
         env:
           CF_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          AWS_ACCESS_KEY_ID_R2: ${{ secrets.R2_STATE_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY_R2: ${{ secrets.R2_STATE_SECRET_ACCESS_KEY }}
         run: |
           terraform init -input=false \
-            -backend-config="endpoints={s3=\"https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com\"}" \
-            -backend-config="access_key=${AWS_ACCESS_KEY_ID_R2}" \
-            -backend-config="secret_key=${AWS_SECRET_ACCESS_KEY_R2}"
+            -backend-config="endpoints={s3=\"https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com\"}"
 
       - name: terraform plan
-        id: plan
         working-directory: terraform/environments/${{ matrix.environment }}
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           TF_VAR_cloudflare_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           TF_VAR_cloudflare_zone_id: ${{ vars.CLOUDFLARE_ZONE_ID }}
         run: |
@@ -71,9 +84,9 @@ jobs:
           script: |
             const fs = require('fs');
             const dir = `terraform/environments/${process.env.ENVIRONMENT}`;
-            let plan = fs.readFileSync(`${dir}/plan.txt`, 'utf8');
-            // Terraform redacts sensitive values itself, but keep the comment
-            // small so nothing unexpected ends up in a public-facing surface.
+            const plan = fs.readFileSync(`${dir}/plan.txt`, 'utf8');
+            // Only the counts. The full plan stays in the job log, where the
+            // repository's log-visibility settings apply.
             const summary = plan.split('\n').filter(l => /^(Plan:|No changes|Error)/.test(l)).join('\n');
             const body = [
               `### terraform plan — \`${process.env.ENVIRONMENT}\``,

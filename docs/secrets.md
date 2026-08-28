@@ -3,6 +3,34 @@
 AWS SSM Parameter Store is the source of truth. Not `terraform.tfstate`, not the repository,
 not a committed `.env`.
 
+## Two namespaces
+
+`/gogo/ci/*` holds the credentials that drive the pipeline. `/gogo/<env>/backend/*` holds what
+the application reads at runtime. A role with access to one has no access to the other unless
+an ADR says why.
+
+```
+/gogo/ci/terraform/plan/          read-only  — assumable from a pull request
+├── cloudflare-api-token-ro
+├── r2-state-access-key-id-ro
+└── r2-state-secret-access-key-ro
+
+/gogo/ci/terraform/apply/         read-write — environment approval required
+├── cloudflare-api-token
+├── r2-state-access-key-id
+└── r2-state-secret-access-key
+
+/gogo/ci/deploy/
+├── ssh-private-key
+└── known-hosts                   pinned host key, String
+
+/gogo/ci/sentry/
+└── auth-token                    release / source-map upload
+```
+
+The plan/apply split is not tidiness. The plan workflow runs on `pull_request`, so anything it
+can read is readable by anyone who can open a pull request — see `docs/adr/0001`.
+
 ## Layout
 
 ```
