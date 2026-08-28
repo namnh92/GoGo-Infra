@@ -5,6 +5,9 @@
 #
 #   NEON_API_KEY=... ./scripts/bootstrap/neon.sh dev
 #
+# The Neon console is signed in with GitHub OAuth; NEON_API_KEY is created by
+# hand in the console. Automation never uses OAuth (docs/accounts.md).
+#
 # Neon is bootstrap-managed rather than Terraform-managed on purpose: the
 # provisioning call returns a connection string containing a password, and a
 # Terraform-managed Neon resource would write that password into state

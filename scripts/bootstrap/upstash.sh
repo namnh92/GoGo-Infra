@@ -5,6 +5,11 @@
 #
 #   UPSTASH_EMAIL=... UPSTASH_API_KEY=... ./scripts/bootstrap/upstash.sh dev
 #
+# The Upstash console is signed in with GitHub OAuth, but the Management API
+# still authenticates with email + API key. UPSTASH_EMAIL is the GitHub
+# account's primary email; UPSTASH_API_KEY is created by hand in the console.
+# No script here logs in through OAuth — see docs/accounts.md.
+#
 # IMPORTANT — read before adopting this for the worker:
 #
 # BullMQ needs a real TCP Redis connection and blocking commands (BRPOPLPUSH /

@@ -30,7 +30,7 @@ scripts/secrets/             put / pull / list / delete / validate against SSM
 scripts/bootstrap/           Neon, Upstash, R2 lifecycle, service smoke checks
 scripts/deploy/              render-env.sh, used by the deploy workflow
 secrets.manifest.yaml        The names of every parameter — never the values
-docs/                        Architecture, environments, secrets, DR, onboarding
+docs/                        Architecture, environments, secrets, accounts, DR, onboarding
 ```
 
 ## Quick start
@@ -64,6 +64,9 @@ Free tiers are a development convenience, never a production SLA.
 - SSM read permission is scoped per environment path, never `/gogo/*`.
 - A pull request can plan. Only an approved environment can apply.
 - A credential that was ever committed gets rotated, not deleted.
+- Provider consoles are GitHub OAuth logins, so the GitHub account is the root of trust for the
+  database, queue, storage, push and attribution providers. MFA is mandatory; automation uses
+  scoped API tokens, never OAuth. See [`docs/accounts.md`](docs/accounts.md).
 
 ## Git flow
 

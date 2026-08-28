@@ -10,6 +10,13 @@ Ask an infrastructure owner for:
 - Cloudflare account membership
 - GitHub access to `namnh92/GoGo-Infra`
 
+Every SaaS provider console (Neon, Upstash, Cloudflare, OneSignal, Tenjin) is signed in with
+**GitHub OAuth**, which makes the GitHub account the root of trust for all of them. Hardware or
+TOTP MFA on GitHub is mandatory before you are given access, and recovery codes must be stored
+off the laptop holding the session. Read [`accounts.md`](accounts.md) before touching a console.
+
+Automation never uses OAuth. Scripts and workflows use scoped API tokens stored in SSM.
+
 ## 2. Tools
 
 ```bash
