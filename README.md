@@ -30,7 +30,7 @@ scripts/secrets/             put / pull / list / delete / validate against SSM
 scripts/bootstrap/           Neon, Upstash, R2 lifecycle, service smoke checks
 scripts/deploy/              render-env.sh, used by the deploy workflow
 config/                      Committed non-secret tfvars, pinned host keys, secret manifest
-docs/                        Architecture, environments, secrets, accounts, bootstrap, rollback, DR, ADRs
+docs/                        Architecture, environments, secrets, accounts, bootstrap, rollback, DR, lessons, ADRs
 ```
 
 ## Quick start
@@ -43,6 +43,10 @@ make secrets-validate ENV=dev # diff SSM against secrets.manifest.yaml
 ```
 
 First-time setup is in [`docs/onboarding.md`](docs/onboarding.md).
+
+Before debugging anything that looks like a credential problem, read
+[`docs/lessons.md`](docs/lessons.md). Five times during the dev bootstrap, a broken check blamed
+a correct credential; that file lists each one as symptom, cause and fix.
 
 ## Environments
 
