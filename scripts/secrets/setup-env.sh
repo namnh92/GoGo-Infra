@@ -198,12 +198,20 @@ env_value() {
   fi
 }
 
-# Which keys are environment-specific. A shared value here is a bug, not a
-# convenience.
-ENV_SCOPED_KEYS="ONESIGNAL_APP_ID FIREBASE_PROJECT_ID IOS_BUNDLE_ID ANDROID_PACKAGE_NAME TENJIN_IOS_SDK_KEY TENJIN_ANDROID_SDK_KEY CLOUDFLARE_ZONE_ID"
+# Two different things, worth keeping apart.
+#
+# MUST differ per environment — one value across both is a defect. A shared
+# OneSignal App ID means a development device receives production pushes; a
+# shared Cloudflare zone means a dev apply can rewrite production DNS.
+ENV_MUST_DIFFER="ONESIGNAL_APP_ID FIREBASE_PROJECT_ID CLOUDFLARE_ZONE_ID"
+
+# MAY differ — the suffix works if wanted, but one value is a legitimate choice.
+# GoGo ships a single app identity: IOS_BUNDLE_ID and ANDROID_PACKAGE_NAME are
+# max.gogo.dev in every environment, and Tenjin issues one SDK key per app.
+ENV_MAY_DIFFER="IOS_BUNDLE_ID ANDROID_PACKAGE_NAME TENJIN_IOS_SDK_KEY TENJIN_ANDROID_SDK_KEY"
 
 is_env_scoped() {
-  [[ " ${ENV_SCOPED_KEYS} " == *" $1 "* ]]
+  [[ " ${ENV_MUST_DIFFER} " == *" $1 "* ]]
 }
 
 param_exists() {

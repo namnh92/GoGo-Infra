@@ -71,6 +71,26 @@ Fill in as accounts are created. "Owner" is a person; "backup" must not be the s
 | Google Cloud | | Google | | | | |
 | AWS | | IAM / SSO | | | | |
 
+## App identity
+
+Decided 29/08/2026, and permanent:
+
+| | Value |
+| --- | --- |
+| iOS bundle id | `max.gogo.dev` |
+| Android package name | `max.gogo.dev` |
+
+One identity across every environment. Neither can be changed after the first store submission,
+and both are baked into `apple-app-site-association`, `assetlinks.json` and the APNs
+configuration in OneSignal.
+
+Two consequences to plan around rather than rediscover:
+
+- A development build and a production build cannot coexist on one device. Push separation comes
+  from having separate OneSignal App IDs, not from the bundle id.
+- The dev OneSignal app must be configured with this same bundle id, so its APNs certificate
+  covers the same identity.
+
 ## Offboarding
 
 When someone with provider access leaves:
