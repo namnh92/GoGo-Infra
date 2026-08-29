@@ -374,14 +374,9 @@ while IFS=$'\t' read -r path env_var type required; do
 
   echo
   echo "  → ${env_var}  (${PREFIX}/${path})"
-  case "$path" in
-    database/url)  echo "     Neon pooled connection string — the host must contain -pooler" ;;
-    redis/url)     echo "     Upstash TCP URL, rediss://default:...  — not the REST URL" ;;
-    r2/*)          echo "     From the R2 API token scoped to $(env_value R2_BUCKET)" ;;
-    onesignal/*)   echo "     OneSignal → Settings → Keys & IDs" ;;
-    google/*)      echo "     Google Cloud → APIs & Services → Credentials (server key)" ;;
-    auth/*)        echo "     Leave blank to generate one with openssl rand -base64 48" ;;
-  esac
+  hint="$(param_hint "$path")"
+  [[ -n "$hint" ]] && echo "     ${hint}"
+  [[ "$path" == auth/* ]] && echo "     Leave blank to generate one with openssl rand -base64 48"
 
   read -r -s -p "     value (blank to skip): " value
   echo

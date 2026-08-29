@@ -40,6 +40,9 @@ confirm_prod "$ENVIRONMENT" "write ${PARAM_PATH}"
 
 full_path="$(ssm_prefix "$ENVIRONMENT")/${PARAM_PATH}"
 
+hint="$(param_hint "$PARAM_PATH")"
+[[ -n "$hint" ]] && echo "       ${hint}"
+
 if [[ -t 0 ]]; then
   read -r -s -p "Value for ${full_path}: " value
   echo

@@ -38,6 +38,36 @@ ssm_prefix() {
   fi
 }
 
+# Where a value comes from. Defined once: put.sh and setup-env.sh both prompt
+# for the same parameters, and two copies of this drift until one of them is
+# telling people to look on the wrong console page.
+param_hint() {
+  case "$1" in
+    database/url)
+      echo "Neon → project → Connection string. Take the POOLED one: the host contains -pooler." ;;
+    redis/url)
+      echo "Upstash → database → Connect → TCP. rediss://default:...:6379 — not the REST URL." ;;
+    r2/access-key-id | r2/secret-access-key)
+      echo "Cloudflare → R2 → Manage R2 API Tokens. Use the Access Key ID (32 hex) and Secret (64 hex), not the token value." ;;
+    onesignal/app-id)
+      echo "OneSignal → Settings → Keys & IDs → App ID. A UUID. Client config, not a secret." ;;
+    onesignal/rest-api-key)
+      echo "OneSignal → Settings → Keys & IDs → REST API Key (newer accounts: App API Key, os_v2_app_...).
+       NOT the App ID, and NOT the Organization API Key — the organization key is
+       account-wide and cannot send for a single app." ;;
+    onesignal/identity-verification-key)
+      echo "OneSignal → Settings → Keys & IDs → Identity Verification. Used to sign the ES256 JWT." ;;
+    google/server-api-key | google/routes-api-key)
+      echo "Google Cloud → APIs & Services → Credentials → API keys. 39 characters starting AIza.
+       Not an OAuth client id and not a service-account field. One key per API." ;;
+    auth/jwt-secret | auth/refresh-secret)
+      echo "Generate: openssl rand -base64 48 | ./scripts/secrets/put.sh <env> $1" ;;
+    observability/sentry-dsn)
+      echo "Sentry → project → Settings → Client Keys (DSN)." ;;
+    *) echo "" ;;
+  esac
+}
+
 confirm_prod() {
   local env="$1" action="$2"
   if [[ "$env" == "prod" && "${GOGO_ASSUME_YES:-}" != "1" ]]; then
