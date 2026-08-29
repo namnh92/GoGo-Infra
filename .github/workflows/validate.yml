@@ -70,6 +70,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # A comment starting with "# shellcheck" is parsed as a directive whatever
+      # follows, so a sentence beginning with that word becomes SC1072 and turns
+      # a warning-level run into a hard error. Caught here because the message
+      # points at the comment, not at what it was explaining.
+      - name: no prose masquerading as a shellcheck directive
+        run: |
+          if grep -rnE '^[[:space:]]*# shellcheck ' scripts/ \
+             | grep -vE '# shellcheck (disable|source|shell|enable)='; then
+            echo "Comment above starts with '# shellcheck' but is not a directive." >&2
+            exit 1
+          fi
+          echo "ok"
+
       - name: shellcheck
         run: |
           sudo apt-get update -qq && sudo apt-get install -y shellcheck

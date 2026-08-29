@@ -322,8 +322,11 @@ echo "==> Derived non-secret values"
 # and a hand-typed endpoint is one typo away from an error that surfaces as a
 # storage failure at runtime.
 account_id="$(env_value CLOUDFLARE_ACCOUNT_ID)"
-# Assigned by name and read back through indirect expansion in env_value, which
-# shellcheck cannot follow — hence the directives.
+# Assigned by name and read back through indirect expansion in env_value.
+# The linter cannot follow that, hence the directives below.
+#
+# Note the wrapping: a comment line beginning with "# shellcheck" is parsed as a
+# directive whatever follows it, so prose must not start with that word.
 # shellcheck disable=SC2034
 ENVCFG_R2_ENDPOINT="$(env_value R2_ENDPOINT)"
 if [[ -z "$ENVCFG_R2_ENDPOINT" ]]; then
