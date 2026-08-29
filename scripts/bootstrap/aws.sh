@@ -25,13 +25,15 @@ source "${REPO_ROOT}/scripts/lib/cloudflare.sh"
 # discovering it is missing after the IAM apply has run reads like an IAM
 # failure and sends the operator looking in the wrong place.
 require_cloudflare_token
-verify_cloudflare_token
 
 command -v terraform >/dev/null || { echo "terraform required" >&2; exit 1; }
 aws sts get-caller-identity >/dev/null || { echo "not authenticated to AWS" >&2; exit 1; }
 
 account_id="$(require_tfvar_string cloudflare_account_id \
   "${REPO_ROOT}/config/global.tfvars" "$CLOUDFLARE_ID_PATTERN")"
+
+verify_cloudflare_token "$account_id"
+verify_cloudflare_r2_access "$account_id"
 
 # Extends the existing handler rather than registering a second trap: a second
 # `trap ... EXIT` replaces the first, and the override file would then be left

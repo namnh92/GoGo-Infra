@@ -53,10 +53,23 @@ letting the mismatch happen silently.
 
 ### Fail fast, not halfway
 
-`terraform-state.sh` and `aws.sh` verify the token against `/user/tokens/verify` before starting
-an apply. Without that, a wrong or expired token first shows up as an authentication error raised
-after the IAM resources are already created, which reads like an IAM problem and sends you
-looking in the wrong place.
+`terraform-state.sh` and `aws.sh` run two checks before starting an apply.
+
+**Is the token valid?** Cloudflare has two verify endpoints and they are not interchangeable:
+`/accounts/{id}/tokens/verify` for account-owned tokens (Manage Account → Account API Tokens) and
+`/user/tokens/verify` for user-owned ones (My Profile → API Tokens). Checking only the user
+endpoint reports a perfectly good account-owned token as invalid, so the scripts try the account
+endpoint first and fall back.
+
+**Can the token do the job?** An active token is not necessarily one with R2 permission, so the
+scripts also list R2 buckets for the account. A token created without `Account → R2 → Edit`, or
+scoped to a different account, fails here with that message rather than surfacing mid-apply as a
+permission error on a resource. The listing also shows whether the state bucket already exists
+before an apply claims to create it.
+
+Without these, a wrong token first shows up as an authentication error raised after the IAM
+resources are already created, which reads like an IAM problem and sends you looking in the wrong
+place.
 
 ## Why Terraform owns bootstrap resources from the start
 

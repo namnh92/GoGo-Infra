@@ -14,13 +14,14 @@ source "${REPO_ROOT}/scripts/lib/config.sh"
 source "${REPO_ROOT}/scripts/lib/cloudflare.sh"
 
 require_cloudflare_token
-verify_cloudflare_token
 
 account_id="$(require_tfvar_string cloudflare_account_id \
   "${REPO_ROOT}/config/global.tfvars" "$CLOUDFLARE_ID_PATTERN")"
 export TF_VAR_cloudflare_account_id="$account_id"
 
 echo "==> Cloudflare account: ${account_id}"
+verify_cloudflare_token "$account_id"
+verify_cloudflare_r2_access "$account_id"
 
 echo "==> Applying bootstrap/terraform-state with local state"
 terraform -chdir="$BOOTSTRAP_DIR" init -input=false
