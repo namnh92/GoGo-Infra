@@ -1,0 +1,10 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["HLSABWU9U8.max.gogo.dev"],
+        "components": [{"/": "/l/*", "comment": "GoGo share link"},{"/": "/r/*", "comment": "GoGo share link"},{"/": "/plans/*", "comment": "GoGo share link"},{"/": "/places/*", "comment": "GoGo share link"},{"/": "/room/*", "comment": "GoGo share link"}]
+      }
+    ]
+  }
+}

@@ -12,10 +12,16 @@ environment = "dev"
 cloudflare_zone_id = "84bece58fc6f0065213f682cbd9741c2"
 dns_record_suffix  = "dev.gogo.id.vn"
 
-# Nothing is served on a dev hostname yet. When the share-link Worker lands
-# (INF-012), the dev host is go.dev.gogo.id.vn.
+# Decided 29/08/2026: dev claims web links too, on its own host, so deep links
+# can be tested without a store build. That is only safe because the host names
+# the dev app: config/well-known/dev/ carries max.gogo.dev and the debug
+# keystore fingerprint. A build claiming a domain that does not name it ships a
+# claim that cannot verify — Android then offers an unverified handler and iOS
+# ignores it, which is worse than not claiming.
+#
+# Waiting on the Worker (INF-012) to have something to point at.
 # dns_records = {
-#   share = { name = "go.dev.gogo.id.vn", type = "A", content = "..." }
+#   share = { name = "go.dev.gogo.id.vn", type = "CNAME", content = "<worker route>" }
 # }
 
 cors_allowed_origins = [
