@@ -200,6 +200,23 @@ Recovered with `git show <commit>:<path>`, which is only possible because the pr
 committed. An edit script that truncates on failure is one uncommitted change away from losing
 work outright.
 
+### A bootstrap script run twice is not idempotent, it is amnesiac
+
+**Symptom** — re-running `aws.sh dev` on a working environment: a `409 Conflict` creating an R2
+bucket that already existed, and a real IAM policy left recorded only in a local state file that
+the environment does not own.
+
+**Cause** — the script starts from an empty local state on purpose; that is what makes a first
+bootstrap possible before the remote backend is reachable. Run again after migration, it does not
+read the remote state at all. It plans as if nothing exists.
+
+"Idempotent" was the wrong word for it. Each individual step was idempotent; the script as a
+whole was reading from the wrong place, so it could not know what already existed.
+
+**Fix** — refuse when `.terraform/terraform.tfstate` reports the `s3` backend, and print the
+`terraform apply` invocation to use instead. Recovery for the damage already done was
+`terraform import` of the orphaned policy, after copying the stray state file somewhere safe.
+
 ### GitHub OIDC subjects
 
 - A pull request's subject is `repo:<owner>/<repo>:pull_request` and **does not encode the base

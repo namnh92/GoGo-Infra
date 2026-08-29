@@ -13,14 +13,34 @@ set -euo pipefail
 #
 # Accepts the legacy TF_VAR_cloudflare_api_token as a bridge so an operator
 # mid-bootstrap does not have to re-enter the token, and says so.
+# require_cloudflare_token [ssm-path]
+#
+# Order: the environment, then the legacy variable name, then SSM. The SSM step
+# matters — the token is stored there precisely so it does not have to live in
+# somebody's shell, and asking an operator to export it by hand defeats the
+# reason for centralising it. A new terminal should not be a blocker.
 require_cloudflare_token() {
+  local ssm_path="${1:-}"
+
   if [[ -z "${CLOUDFLARE_API_TOKEN:-}" && -n "${TF_VAR_cloudflare_api_token:-}" ]]; then
     export CLOUDFLARE_API_TOKEN="$TF_VAR_cloudflare_api_token"
     echo "note: using TF_VAR_cloudflare_api_token. CLOUDFLARE_API_TOKEN is the name" >&2
     echo "      this repository uses everywhere; export that one instead." >&2
   fi
 
-  : "${CLOUDFLARE_API_TOKEN:?set CLOUDFLARE_API_TOKEN (the Cloudflare provider reads it natively)}"
+  if [[ -z "${CLOUDFLARE_API_TOKEN:-}" && -n "$ssm_path" ]] \
+     && command -v aws >/dev/null 2>&1 \
+     && aws sts get-caller-identity >/dev/null 2>&1; then
+    local value
+    if value="$(aws ssm get-parameter --name "$ssm_path" --with-decryption \
+        --query 'Parameter.Value' --output text 2>/dev/null)"; then
+      export CLOUDFLARE_API_TOKEN="$value"
+      unset value
+      echo "read the Cloudflare token from ${ssm_path}"
+    fi
+  fi
+
+  : "${CLOUDFLARE_API_TOKEN:?set CLOUDFLARE_API_TOKEN, or authenticate to AWS so it can be read from SSM}"
 }
 
 # verify_cloudflare_token [account_id]

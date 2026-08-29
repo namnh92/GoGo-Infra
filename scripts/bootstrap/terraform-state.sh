@@ -13,6 +13,8 @@ BOOTSTRAP_DIR="${REPO_ROOT}/bootstrap/terraform-state"
 source "${REPO_ROOT}/scripts/lib/config.sh"
 source "${REPO_ROOT}/scripts/lib/cloudflare.sh"
 
+# No SSM fallback here: on a fresh account the parameter does not exist yet,
+# and this script is what creates the bucket those credentials will point at.
 require_cloudflare_token
 
 account_id="$(require_tfvar_string cloudflare_account_id \

@@ -24,7 +24,7 @@ source "${REPO_ROOT}/scripts/lib/cloudflare.sh"
 # needs the provider token even though the visible work is IAM. Check it here:
 # discovering it is missing after the IAM apply has run reads like an IAM
 # failure and sends the operator looking in the wrong place.
-require_cloudflare_token
+require_cloudflare_token "/gogo/ci/${ENVIRONMENT}/terraform/write/cloudflare-token"
 
 command -v terraform >/dev/null || { echo "terraform required" >&2; exit 1; }
 aws sts get-caller-identity >/dev/null || { echo "not authenticated to AWS" >&2; exit 1; }
@@ -47,6 +47,41 @@ require_ci_credentials "$ENVIRONMENT"
 # uses a local backend.
 cleanup() { rm -f "$OVERRIDE"; }
 trap cleanup EXIT
+
+# Refuse to run against an environment whose state is already remote.
+#
+# This script starts from an empty local state by design — that is what makes a
+# first bootstrap possible. Run a second time on a migrated environment, it does
+# not read the remote state at all: it plans as if nothing exists and tries to
+# create everything again. That produced a 409 on an R2 bucket that already
+# existed, and left a real IAM policy recorded only in a throwaway local state
+# file, invisible to the environment that owns it.
+#
+# For an environment that is already bootstrapped, use terraform directly or the
+# CI workflow.
+if [[ "$(jq -r '.backend.type // "none"' "${TF_DIR}/.terraform/terraform.tfstate" 2>/dev/null)" == "s3" ]] \
+   && [[ "${GOGO_REBOOTSTRAP:-}" != "1" ]]; then
+  cat >&2 <<MSG
+error: ${ENVIRONMENT} already uses the remote backend.
+
+  This script bootstraps from empty local state. Running it now would plan as if
+  nothing exists and try to create resources that are already there.
+
+  To apply a change to an existing environment:
+
+    source scripts/lib/r2-profile.sh
+    write_r2_profile /gogo/ci/${ENVIRONMENT}/terraform/write
+    export CLOUDFLARE_API_TOKEN="\$(aws ssm get-parameter \\
+      --name /gogo/ci/${ENVIRONMENT}/terraform/write/cloudflare-token \\
+      --with-decryption --query 'Parameter.Value' --output text)"
+    terraform -chdir=${TF_DIR} apply \\
+      -var-file=../../../config/global.tfvars \\
+      -var-file=../../../config/${ENVIRONMENT}.tfvars
+
+  Or run the terraform-apply-${ENVIRONMENT} workflow.
+MSG
+  exit 1
+fi
 
 # The remote backend cannot be used yet: reaching it needs the R2 credentials
 # that the roles created here will eventually grant access to. Start local,
