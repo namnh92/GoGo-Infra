@@ -60,6 +60,7 @@ jobs:
           DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
           DEPLOY_USER: ${{ vars.DEPLOY_USER }}
           DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+          COMPOSE_EDGE: docker/docker-compose.edge-tunnel.yml
           REMOTE_ENV_FILE: .env.dev
           KNOWN_HOSTS_FILE: config/known_hosts.dev
           SSH_KEY_FILE: ${{ runner.temp }}/deploy_key

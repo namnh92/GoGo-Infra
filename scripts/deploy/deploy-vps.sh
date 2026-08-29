@@ -27,14 +27,39 @@ ENV_FILE="${2:?usage: deploy-vps.sh <ref> <env-file>}"
 : "${KNOWN_HOSTS_FILE:?}" "${SSH_KEY_FILE:?}"
 DEPLOY_PORT="${DEPLOY_PORT:-22}"
 REMOTE_ENV_FILE="${REMOTE_ENV_FILE:?set REMOTE_ENV_FILE, e.g. .env.dev or .env.prod}"
-COMPOSE="docker compose -f docker/docker-compose.prod.yml --env-file ${REMOTE_ENV_FILE}"
+# Derived from the env file name so the two cannot disagree: .env.dev -> dev.
+ENVIRONMENT_NAME="${REMOTE_ENV_FILE#.env.}"
+# ENV_FILE and --env-file both, because they do different jobs: the flag gives
+# compose the variables it needs to interpolate the file, and ENV_FILE tells the
+# services which file to load into the containers. Passing only the flag builds
+# the images and then fails at the first container with "env file .env.prod not
+# found", which reads like a missing file rather than a naming mismatch.
+# COMPOSE_PROJECT_NAME, because the default is the directory name — "docker" —
+# which says nothing about what is running and collides with any other checkout
+# deployed the same way on the same host. The first DEV deploy landed beside an
+# unrelated `gogo-prod` stack on this machine, and both answered to names nobody
+# had chosen deliberately.
+# The edge is chosen per host, not assumed. A host that accepts inbound
+# connections runs Caddy with its own certificate; one that does not runs
+# cloudflared, which dials out. Getting this wrong is not a missing certificate
+# but a retry loop into a Let's Encrypt rate limit.
+COMPOSE_EDGE="${COMPOSE_EDGE:?set COMPOSE_EDGE, e.g. docker/docker-compose.edge-caddy.yml or docker/docker-compose.edge-tunnel.yml}"
+
+COMPOSE="COMPOSE_PROJECT_NAME=gogo-${ENVIRONMENT_NAME:-dev} ENV_FILE=${REMOTE_ENV_FILE} docker compose -f docker/docker-compose.prod.yml -f ${COMPOSE_EDGE} --env-file ${REMOTE_ENV_FILE}"
 
 # StrictHostKeyChecking with a pinned file: an unknown or changed host key
 # aborts rather than being accepted the way ssh-keyscan would.
-ssh_opts=(-i "$SSH_KEY_FILE" -p "$DEPLOY_PORT"
-          -o StrictHostKeyChecking=yes
-          -o UserKnownHostsFile="$KNOWN_HOSTS_FILE"
-          -o IdentitiesOnly=yes)
+# Shared options, then the port flag each tool actually wants. scp reads -p as
+# "preserve modification times" and -P as the port; passing ssh's array to scp
+# made it treat 22 as a filename and fail with
+#   scp: stat local "22": No such file or directory
+# which reads like a missing file rather than a wrong flag.
+common_opts=(-i "$SSH_KEY_FILE"
+             -o StrictHostKeyChecking=yes
+             -o UserKnownHostsFile="$KNOWN_HOSTS_FILE"
+             -o IdentitiesOnly=yes)
+ssh_opts=("${common_opts[@]}" -p "$DEPLOY_PORT")
+scp_opts=("${common_opts[@]}" -P "$DEPLOY_PORT")
 
 # bash -lc, not a bare command.
 #
@@ -63,10 +88,29 @@ else
 fi
 
 echo "==> Fetching ${RELEASE_REF}"
-remote "cd '${DEPLOY_PATH}' && git fetch --prune origin && git checkout --detach '${RELEASE_REF}'"
+# The ref is resolved to a commit before checkout.
+#
+# `git checkout --detach develop` fails on a fresh clone with
+# "'--detach' cannot be used with '-b/-B/--orphan'": the branch does not exist
+# locally, so git tries to create it from the remote — an implicit -b — which
+# contradicts --detach. Resolving first also makes a branch name, a tag and a
+# SHA behave identically, and records what actually shipped rather than what a
+# moving branch pointed at when the deploy started.
+remote "cd '${DEPLOY_PATH}' && git fetch --prune --tags origin"
+
+target="$(remote "cd '${DEPLOY_PATH}' && git rev-parse --verify --quiet 'refs/remotes/origin/${RELEASE_REF}^{commit}' || git rev-parse --verify --quiet '${RELEASE_REF}^{commit}'" || true)"
+target="$(printf '%s' "$target" | tr -d '[:space:]')"
+
+if [[ -z "$target" ]]; then
+  echo "cannot resolve '${RELEASE_REF}' in ${DEPLOY_PATH} — not a branch, tag or commit on origin" >&2
+  exit 1
+fi
+
+echo "    ${RELEASE_REF} -> ${target}"
+remote "cd '${DEPLOY_PATH}' && git checkout --detach '${target}'"
 
 echo "==> Shipping the environment file"
-scp "${ssh_opts[@]}" "$ENV_FILE" "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/${REMOTE_ENV_FILE}.new"
+scp "${scp_opts[@]}" "$ENV_FILE" "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/${REMOTE_ENV_FILE}.new"
 # install(1) renames into place: a process restarting mid-copy would otherwise
 # read half a file and fail on a config error that looks like a code bug.
 remote "cd '${DEPLOY_PATH}' && install -m 600 '${REMOTE_ENV_FILE}.new' '${REMOTE_ENV_FILE}' && rm -f '${REMOTE_ENV_FILE}.new'"
@@ -85,4 +129,4 @@ remote "cd '${DEPLOY_PATH}' && ${COMPOSE} up -d --remove-orphans"
 echo "==> Pruning dangling images"
 remote "docker image prune -f >/dev/null"
 
-echo "deployed ${RELEASE_REF}"
+echo "deployed ${RELEASE_REF} (${target})"

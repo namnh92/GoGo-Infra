@@ -153,3 +153,15 @@ variable "cms_access_emails" {
   type        = list(string)
   default     = []
 }
+
+variable "tunnel_ingress" {
+  description = "Hostname to origin mapping served through a Cloudflare tunnel. null disables the tunnel entirely."
+  type        = map(string)
+  default     = null
+}
+
+variable "tunnel_read_connector_token" {
+  description = "Fetch the tunnel connector credential during this run. Off except for the apply that stores or rotates it — see modules/cloudflare-tunnel."
+  type        = bool
+  default     = false
+}

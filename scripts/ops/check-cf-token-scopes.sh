@@ -87,11 +87,13 @@ CHECKS=(
   "read|dns records|zones/${ZONE_ID}/dns_records?per_page=1|Zone · DNS · Read"
   "read|r2 buckets|accounts/${ACCOUNT_ID}/r2/buckets|Account · Workers R2 Storage · Read"
   "read|access apps|accounts/${ACCOUNT_ID}/access/apps|Account · Access: Apps and Policies · Read"
+  "read|tunnels|accounts/${ACCOUNT_ID}/cfd_tunnel|Account · Cloudflare Tunnel · Read"
   "write|workers scripts|accounts/${ACCOUNT_ID}/workers/scripts|Account · Workers Scripts · Edit"
   "write|workers routes|zones/${ZONE_ID}/workers/routes|Zone · Workers Routes · Edit"
   "write|dns records|zones/${ZONE_ID}/dns_records?per_page=1|Zone · DNS · Edit"
   "write|r2 buckets|accounts/${ACCOUNT_ID}/r2/buckets|Account · Workers R2 Storage · Edit"
   "write|access apps|accounts/${ACCOUNT_ID}/access/apps|Account · Access: Apps and Policies · Edit"
+  "write|tunnels|accounts/${ACCOUNT_ID}/cfd_tunnel|Account · Cloudflare Tunnel · Edit"
 )
 
 missing=0
@@ -142,20 +144,21 @@ for row in "${CHECKS[@]}"; do
   fi
 done
 
-# Reading a *specific* Access policy, which is what `terraform plan` does when
-# it refreshes one.
+# Reading a *specific* object, which is what `terraform plan` does when it
+# refreshes one. This is the check that matters, and the list endpoints cannot
+# stand in for it.
 #
-# Status codes on the list endpoints cannot tell you this. A token without
-# `Access: Apps and Policies · Read` answers **200 with an empty list** on
-# GET /access/policies — success, no policies, nothing wrong as far as any
-# status-code check can see — and 403 on GET /access/policies/{id}. Probing only
-# the list said the read token was fine while plan failed on exactly this call.
+# A token without the read grant answers the collection with success and an
+# empty result — no error, nothing a status code can see — and 401 or 403 only
+# on the item. Twice in one session a green list check was followed by a plan
+# that failed on the item: first Access policies, then tunnels. Probing lists is
+# how a check reports healthy about the thing that is broken.
 #
-# So the id is resolved with the write token, which can see the policies, and
-# the read token is then asked for that one policy. Resolving is not the
-# assertion; the GET is.
+# The id is resolved with the write token, which can see the objects, and the
+# read token is then asked for that one. Resolving is not the assertion; the GET
+# is.
 echo
-echo "  read token can refresh an Access policy"
+echo "  read token can refresh what Terraform manages"
 
 read_probe="$(aws ssm get-parameter \
   --name "/gogo/ci/${ENVIRONMENT}/terraform/read/cloudflare-token" \
@@ -164,26 +167,40 @@ write_probe="$(aws ssm get-parameter \
   --name "/gogo/ci/${ENVIRONMENT}/terraform/write/cloudflare-token" \
   --with-decryption --query 'Parameter.Value' --output text 2>/dev/null)"
 
+# label|collection path|item path prefix|grant to add
+ITEM_PROBES=(
+  "access policy|accounts/${ACCOUNT_ID}/access/policies|accounts/${ACCOUNT_ID}/access/policies|Account · Access: Apps and Policies · Read"
+  "tunnel|accounts/${ACCOUNT_ID}/cfd_tunnel|accounts/${ACCOUNT_ID}/cfd_tunnel|Account · Cloudflare Tunnel · Read"
+)
+if [[ -n "$ZONE_ID" ]]; then
+  ITEM_PROBES+=("dns record|zones/${ZONE_ID}/dns_records|zones/${ZONE_ID}/dns_records|Zone · DNS · Read")
+fi
+
 if [[ -z "$read_probe" || "$read_probe" == "None" ]]; then
   echo "    read token not stored — skipping"
 elif [[ -z "$write_probe" || "$write_probe" == "None" ]]; then
-  printf '    %-16s ? needs the write token to find a policy to read\n' "access policy"
+  echo "    needs the write token to find objects to read — skipping"
 else
-  policy_id="$(curl -sS --max-time 20 -H "Authorization: Bearer ${write_probe}" \
-    "https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/access/policies" 2>/dev/null \
-    | python3 -c 'import json,sys; r=(json.load(sys.stdin).get("result") or []); print(r[0]["id"] if r else "")' 2>/dev/null || true)"
+  for row in "${ITEM_PROBES[@]}"; do
+    IFS='|' read -r label collection item_prefix grant <<< "$row"
 
-  if [[ -z "$policy_id" ]]; then
-    printf '    %-16s ? no Access policy exists yet to read\n' "access policy"
-  else
-    code="$(api "$read_probe" "accounts/${ACCOUNT_ID}/access/policies/${policy_id}")"
+    object_id="$(curl -sS --max-time 20 -H "Authorization: Bearer ${write_probe}" \
+      "https://api.cloudflare.com/client/v4/${collection}" 2>/dev/null \
+      | python3 -c 'import json,sys; r=(json.load(sys.stdin).get("result") or []); print(r[0]["id"] if r else "")' 2>/dev/null || true)"
+
+    if [[ -z "$object_id" ]]; then
+      printf '    %-16s ? none exists yet to read\n' "$label"
+      continue
+    fi
+
+    code="$(api "$read_probe" "${item_prefix}/${object_id}")"
     if [[ "$code" == "200" ]]; then
-      printf '    %-16s ok\n' "access policy"
+      printf '    %-16s ok\n' "$label"
     else
-      printf '    %-16s HTTP %s — add: Account · Access: Apps and Policies · Read\n' "access policy" "$code"
+      printf '    %-16s HTTP %s — add: %s\n' "$label" "$code" "$grant"
       missing=$(( missing + 1 ))
     fi
-  fi
+  done
 fi
 
 # The one write grant that can be established without writing: Access answers
@@ -191,20 +208,28 @@ fi
 # "grant, bad request". This is the grant blocking INF-037, so the check should
 # answer it rather than leave it under "not probed".
 echo
-echo "  write token can create Access policies"
+echo "  write token can create what Terraform creates"
 
 write_token="$(aws ssm get-parameter \
   --name "/gogo/ci/${ENVIRONMENT}/terraform/write/cloudflare-token" \
   --with-decryption --query 'Parameter.Value' --output text 2>/dev/null)"
 
 if [[ -n "$write_token" && "$write_token" != "None" ]]; then
-  code="$(api_post_empty "$write_token" "accounts/${ACCOUNT_ID}/access/policies")"
-  case "$code" in
-    403) printf '    %-16s HTTP 403 — add: Account · Access: Apps and Policies · Edit\n' "access policies"
-         missing=$(( missing + 1 )) ;;
-    000) printf '    %-16s ? probe did not complete\n' "access policies" ;;
-    *)   printf '    %-16s ok — grant present (HTTP %s on an empty body)\n' "access policies" "$code" ;;
-  esac
+  # write|label|path|grant to add
+  WRITE_PROBES=(
+    "access policies|accounts/${ACCOUNT_ID}/access/policies|Account · Access: Apps and Policies · Edit"
+    "tunnels|accounts/${ACCOUNT_ID}/cfd_tunnel|Account · Cloudflare Tunnel · Edit"
+  )
+  for row in "${WRITE_PROBES[@]}"; do
+    IFS='|' read -r label path grant <<< "$row"
+    code="$(api_post_empty "$write_token" "$path")"
+    case "$code" in
+      403) printf '    %-16s HTTP 403 — add: %s\n' "$label" "$grant"
+           missing=$(( missing + 1 )) ;;
+      000) printf '    %-16s ? probe did not complete\n' "$label" ;;
+      *)   printf '    %-16s ok — grant present (HTTP %s on an empty body)\n' "$label" "$code" ;;
+    esac
+  done
 else
   echo "    write token not stored — skipping"
 fi

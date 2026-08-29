@@ -497,3 +497,23 @@ results — while the write token sees two — and only returns 403 on `GET /acc
 `check-cf-token-scopes.sh` probed the list, reported the read token healthy, and `plan (dev)`
 failed on exactly the call it had not made. Probe the request the tool actually issues, and treat
 an empty collection as a question rather than an answer.
+
+**Test reachability from outside, or do not claim it.** `nc` and `ssh` from the same network
+reach a host through hairpin NAT and report the ports open. The DEV host accepts no inbound
+connections at all, and the thing that established it was Let's Encrypt failing an HTTP-01
+challenge — after the deploy had been built around Caddy obtaining a certificate. Every local
+probe in this session said the opposite.
+
+**A wrong edge is a rate limit, not a missing certificate.** Caddy retried Let's Encrypt and then
+ZeroSSL on every deploy. Failed validations are counted; enough of them and the hostname is
+locked out for a week. Stop the retry loop before diagnosing.
+
+**Read the response before deciding what failed.** `POST /cfd_tunnel` returned 403 while the
+empty-body probe returned 400, because that endpoint validates before it authorises — the reverse
+of the Access endpoints. There is no probe shape that is correct everywhere; the check can only
+say what it actually asked.
+
+**A failed apply may have succeeded.** The tunnel existed after an apply that ended in
+`failed to make http request`: the resource was created and the response was lost. Re-running
+would have created a second one. `terraform import` and a listing before assuming, every time an
+apply dies mid-resource.
