@@ -95,6 +95,14 @@ jobs:
       - name: tfvars parser tests
         run: ./scripts/lib/config.test.sh
 
+      # INF-024 acceptance is "no automation depends on OAuth". That was prose
+      # in docs/accounts.md until this step; prose does not survive the next
+      # person in a hurry.
+      - name: CI authenticates as a machine, not a person
+        run: |
+          ./scripts/ci/check-workflow-auth.test.sh
+          ./scripts/ci/check-workflow-auth.sh
+
       - name: manifest parses
         run: |
           for env in dev staging prod; do

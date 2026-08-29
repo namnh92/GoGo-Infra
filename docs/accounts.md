@@ -39,6 +39,29 @@ automation credential be rotated without touching anyone's login.
 Provider API keys are **not** created by Terraform. Creating them there would write the value
 into state (see [`secrets.md`](secrets.md)).
 
+### This is checked, not asserted
+
+`scripts/ci/check-workflow-auth.sh` runs in `validate.yml` and in `make check`. It fails the
+build if a workflow or composite action:
+
+- sets a static `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` — AWS access is OIDC only;
+- calls `gh auth login`, `aws sso login`, or a device-code flow;
+- references any secret outside an allowlist that currently holds exactly `GITHUB_TOKEN`;
+- uses `aws-actions/configure-aws-credentials` without `role-to-assume`.
+
+Audit at the time it was added, 29/08/2026: eight workflow and action files, `GITHUB_TOKEN` the
+only secret referenced anywhere, every AWS step assuming a role, no human login flow. The claim
+held — but it held by accident of nobody having broken it yet, and the check is what makes it
+hold tomorrow.
+
+The third rule is the one that matters most and looks the most annoying. A personal access token
+in CI carries one person's identity into every job that runs, which is the exact bus factor this
+document is about; adding one has to be a deliberate edit with a reason attached, not a
+convenience someone reaches for on a Friday.
+
+`scripts/ci/check-workflow-auth.test.sh` proves the checker fails on each of those four shapes.
+A checker nobody has watched turn red is a green light, not a check.
+
 ## 3. Personal identity is a bus factor, and it is currently unresolved
 
 The accounts hang off one personal GitHub identity. If that account is lost, disabled, or the
@@ -62,14 +85,21 @@ Fill in as accounts are created. "Owner" is a person; "backup" must not be the s
 
 | Provider | Account / project name | Login | Owner | Backup owner | Recovery path | Created |
 | --- | --- | --- | --- | --- | --- | --- |
-| Neon | `gogo-dev` | GitHub OAuth | | | | |
-| Upstash | `gogo-dev-redis` | GitHub OAuth | | | | |
-| Cloudflare | | GitHub OAuth | | | | |
-| OneSignal | `GoGo Development` | GitHub OAuth | | | | |
-| OneSignal | `GoGo Production` | GitHub OAuth | | | | |
-| Tenjin | | GitHub OAuth | | | | |
-| Google Cloud | | Google | | | | |
-| AWS | | IAM / SSO | | | | |
+| Neon | `gogo-dev` | GitHub OAuth | | **none** | | |
+| Upstash | `gogo-dev-redis` | GitHub OAuth | | **none** | | |
+| Cloudflare | account `0c279927…e570b7b`, zone `gogo.id.vn` | GitHub OAuth | | **none** | | |
+| OneSignal | `GoGo Development` | GitHub OAuth | | **none** | | |
+| OneSignal | `GoGo Production` | GitHub OAuth | | **none** | | |
+| Tenjin | | GitHub OAuth | | **none** | | |
+| Google Cloud | | Google | | **none** | | |
+| AWS | account `477020169756` | IAM / SSO | | **none** | | |
+
+The account identifiers are filled from `config/global.tfvars` and `config/dev.tfvars`. The
+owner columns are deliberately not filled in from the git author: who holds an account is a fact
+about people, and guessing it produces a register that reads as complete while being wrong —
+worse than the blank it replaced.
+
+Every row has one owner and no backup. That is the finding, not an omission in the table.
 
 ## App identity
 
@@ -103,10 +133,32 @@ work; the infrastructure side is `go.gogo.id.vn` throughout.
 
 ## Offboarding
 
-When someone with provider access leaves:
+```
+./scripts/ops/offboard-checklist.sh          # dev staging prod
+```
 
-1. Remove them from the GitHub organisation and from every provider account.
-2. Rotate every credential they could have read — see the rotation procedure in
-   [`disaster-recovery.md`](disaster-recovery.md). Removing access does not invalidate a token
-   they already copied.
-3. Record the rotations in the register in [`secrets.md`](secrets.md).
+Prints the rotation list as tickable markdown, derived from
+`config/secrets.manifest.yml` — so it covers parameters added after this
+document was written, without anyone remembering to update it. It reads no
+values and is safe to paste into a ticket.
+
+The order is not decorative. Revoking access stops new reads; rotation stops
+the copies already taken, and removing someone from a console does nothing to a
+token they exported months ago.
+
+Four things the script flags that no script can rotate:
+
+- The Terraform state bucket tokens — recreated by hand in the Cloudflare
+  console, both the read-only and the read/write/delete pair.
+- The APNs key and Firebase service account, which exist only in the OneSignal
+  console.
+- The Tenjin SDK Key, baked into shipped mobile binaries. Rotating it breaks
+  attribution for every installed build, so it is a decision, not a reflex.
+- Any hand-made AWS access key. There should be none — CI uses OIDC, humans use
+  SSO — but `aws iam list-access-keys --user-name <user>` is how you know,
+  rather than assuming.
+
+Record every rotation in the register in [`secrets.md`](secrets.md); the
+procedure for a single secret is in
+[`disaster-recovery.md`](disaster-recovery.md). Skipping the register means
+nobody can answer "was this ever rotated?".

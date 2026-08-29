@@ -47,9 +47,14 @@ apply: ## terraform apply for $(ENV) — prefer the CI workflow for prod
 .PHONY: test
 test: ## Run the shell unit tests
 	./scripts/lib/config.test.sh
+	./scripts/ci/check-workflow-auth.test.sh
+
+.PHONY: check-workflow-auth
+check-workflow-auth: ## Assert CI authenticates as a machine, never as a person (INF-024)
+	./scripts/ci/check-workflow-auth.sh
 
 .PHONY: check
-check: fmt-check validate lint scan test ## Everything CI runs before plan
+check: fmt-check validate lint scan test check-workflow-auth ## Everything CI runs before plan
 
 .PHONY: secrets-list
 secrets-list: ## List SSM parameter names for $(ENV) (names only, no values)
