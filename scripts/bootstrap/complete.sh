@@ -134,19 +134,33 @@ provider_for() {
 
 present=0
 total=0
-while IFS=$'\t' read -r path env_var _type _required; do
+
+# Every declared parameter, not only the required ones. Listing required-only
+# hides anything an environment does not demand yet — tenjin/server-api-key is
+# prod-only, so a dev run never mentioned it and it looked like an omission
+# rather than a deliberate scope decision.
+while IFS=$'\t' read -r path env_var _type required; do
   [[ -n "$path" ]] || continue
-  total=$((total + 1))
-  if aws ssm get-parameter --name "/gogo/${ENVIRONMENT}/backend/${path}" >/dev/null 2>&1; then
-    ok "${env_var}"
-    present=$((present + 1))
+
+  if [[ ",${required}," == *",${ENVIRONMENT},"* ]]; then
+    label="${env_var}"
+    total=$((total + 1))
   else
-    todo "${env_var} (${path})" "$(provider_for "$path")"
+    label="${env_var} [optional in ${ENVIRONMENT}]"
   fi
-done < <(python3 "${REPO_ROOT}/scripts/lib/manifest.py" "$ENVIRONMENT" --required)
+
+  if aws ssm get-parameter --name "/gogo/${ENVIRONMENT}/backend/${path}" >/dev/null 2>&1; then
+    ok "$label"
+    [[ ",${required}," == *",${ENVIRONMENT},"* ]] && present=$((present + 1))
+  elif [[ ",${required}," == *",${ENVIRONMENT},"* ]]; then
+    todo "${label} (${path})" "$(provider_for "$path")"
+  else
+    printf '  ○ %s — required in: %s\n' "$label" "${required:-none}"
+  fi
+done < <(python3 "${REPO_ROOT}/scripts/lib/manifest.py" "$ENVIRONMENT")
 
 echo
-echo "  ${present}/${total} runtime parameters present."
+echo "  ${present}/${total} required runtime parameters present."
 
 echo
 if [[ "$failures" -gt 0 ]]; then
