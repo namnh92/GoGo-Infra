@@ -19,11 +19,13 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 ENVIRONMENT=""
 FORCE="no"
 DRY_RUN="no"
+CHECK_ONLY="no"
 
 for arg in "$@"; do
   case "$arg" in
     --force)   FORCE="yes" ;;
     --dry-run) DRY_RUN="yes" ;;
+    --check)   CHECK_ONLY="yes"; DRY_RUN="yes" ;;
     *)         ENVIRONMENT="$arg" ;;
   esac
 done
@@ -50,10 +52,64 @@ DEPLOY_HOST DEPLOY_PORT DEPLOY_USER DEPLOY_PATH HEALTH_URL
 DEVELOPER_SSO_PRINCIPAL_ARN
 "
 
+# Shape of each value, and what an empty one blocks. Names alone are not enough:
+# a mistyped ANDROID_SIGNING_SHA256 is accepted by every check we have and then
+# fails on a device, months later, as "the link opens the browser instead of the
+# app" — with nothing anywhere pointing at this file.
+key_pattern() {
+  case "$1" in
+    CLOUDFLARE_ACCOUNT_ID)       echo '^[0-9a-f]{32}$' ;;
+    CLOUDFLARE_ZONE_ID)          echo '^[0-9a-f]{32}$' ;;
+    ROOT_DOMAIN|API_DOMAIN|CMS_DOMAIN|SHARE_DOMAIN)
+                                 echo '^[a-z0-9.-]+\.[a-z]{2,}$' ;;
+    R2_ENDPOINT)                 echo '^https://[0-9a-f]{32}\.r2\.cloudflarestorage\.com$' ;;
+    R2_BUCKET)                   echo '^gogo-(dev|staging|prod)-[a-z0-9-]+$' ;;
+    ONESIGNAL_APP_ID)            echo '^[0-9a-f-]{36}$' ;;
+    APPLE_TEAM_ID)               echo '^[A-Z0-9]{10}$' ;;
+    APNS_KEY_ID)                 echo '^[A-Z0-9]{10}$' ;;
+    IOS_BUNDLE_ID|ANDROID_PACKAGE_NAME)
+                                 echo '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)+$' ;;
+    ANDROID_SIGNING_SHA256)      echo '^([0-9A-F]{2}:){31}[0-9A-F]{2}$' ;;
+    DEPLOY_PORT)                 echo '^[0-9]{1,5}$' ;;
+    DEPLOY_HOST)                 echo '^[a-zA-Z0-9.-]+$' ;;
+    HEALTH_URL|IOS_STORE_URL|ANDROID_STORE_URL)
+                                 echo '^https://' ;;
+    DEVELOPER_SSO_PRINCIPAL_ARN) echo '^arn:aws:iam::[0-9]{12}:role/' ;;
+    *)                           echo '.' ;;
+  esac
+}
+
+key_blocks() {
+  case "$1" in
+    CLOUDFLARE_ZONE_ID)          echo "INF-011 DNS, INF-012 share-link Worker" ;;
+    SHARE_DOMAIN)                echo "INF-012, LNK-* canonical share links" ;;
+    ONESIGNAL_APP_ID)            echo "INF-013, NTF-APP-001 mobile SDK init" ;;
+    APPLE_TEAM_ID|APNS_KEY_ID|IOS_BUNDLE_ID)
+                                 echo "INF-013 APNs, INF-012 apple-app-site-association" ;;
+    ANDROID_PACKAGE_NAME|ANDROID_SIGNING_SHA256)
+                                 echo "INF-012 assetlinks.json — App Links verification" ;;
+    FIREBASE_PROJECT_ID)         echo "INF-013 FCM V1" ;;
+    GCP_PROJECT_ID)              echo "INF-015 Google server keys" ;;
+    TENJIN_*|IOS_STORE_URL|ANDROID_STORE_URL)
+                                 echo "INF-014, LNK-APP-001 deferred deep link" ;;
+    DEPLOY_*|HEALTH_URL)         echo "INF-017 production deploy" ;;
+    DEVELOPER_SSO_PRINCIPAL_ARN) echo "INF-033 developer role" ;;
+    *)                           echo "" ;;
+  esac
+}
+
 load_env_file() {
   [[ -f "$ENV_FILE" ]] || die "missing ${ENV_FILE}
        cp config/bootstrap.env.example config/bootstrap.env, then fill in the
        non-secret values."
+
+  # Non-secret by design, but an allowlist is a guard and not a guarantee: if
+  # someone does paste a credential in here, 644 means every local account can
+  # read it.
+  if [[ "$(stat -f '%Lp' "$ENV_FILE" 2>/dev/null || stat -c '%a' "$ENV_FILE")" != "600" ]]; then
+    chmod 600 "$ENV_FILE"
+    echo "    tightened ${ENV_FILE#"$REPO_ROOT/"} to mode 0600"
+  fi
 
   local line key value rejected=0
   while IFS= read -r line; do
@@ -67,7 +123,11 @@ load_env_file() {
     value="${value%\"}"
     value="${value#\"}"
 
-    if [[ " ${ALLOWED_KEYS//$'\n'/ } " != *" ${key} "* ]]; then
+    base_key="${key%_DEV}"
+    base_key="${base_key%_STAGING}"
+    base_key="${base_key%_PROD}"
+
+    if [[ " ${ALLOWED_KEYS//$'\n'/ } " != *" ${base_key} "* ]]; then
       echo "error: ${key} is not an allowed key in config/bootstrap.env" >&2
       echo "       That file is for non-secret values only. If this is a secret," >&2
       echo "       remove it and let this script prompt for it instead." >&2
@@ -81,9 +141,29 @@ load_env_file() {
   [[ "$rejected" -eq 0 ]] || die "${rejected} disallowed key(s) in ${ENV_FILE}"
 }
 
+# Environment-specific values take a suffix. Without this, running
+# `setup-env.sh prod` would write the dev OneSignal App ID into the prod
+# namespace — one app serving both, which is exactly what the spec forbids:
+# a development device would receive production pushes, and the two would share
+# APNs and FCM configuration.
 env_value() {
-  local name="ENVCFG_$1"
-  printf '%s' "${!name:-}"
+  local key="$1"
+  local suffixed="ENVCFG_${key}_$(printf '%s' "$ENVIRONMENT" | tr '[:lower:]' '[:upper:]')"
+  local plain="ENVCFG_${key}"
+
+  if [[ -n "${!suffixed:-}" ]]; then
+    printf '%s' "${!suffixed}"
+  else
+    printf '%s' "${!plain:-}"
+  fi
+}
+
+# Which keys are environment-specific. A shared value here is a bug, not a
+# convenience.
+ENV_SCOPED_KEYS="ONESIGNAL_APP_ID FIREBASE_PROJECT_ID IOS_BUNDLE_ID ANDROID_PACKAGE_NAME TENJIN_IOS_SDK_KEY TENJIN_ANDROID_SDK_KEY CLOUDFLARE_ZONE_ID"
+
+is_env_scoped() {
+  [[ " ${ENV_SCOPED_KEYS} " == *" $1 "* ]]
 }
 
 param_exists() {
@@ -111,6 +191,49 @@ missing_config=()
 echo "==> Reading config/bootstrap.env"
 load_env_file
 echo "    ok"
+
+if [[ "$CHECK_ONLY" == "yes" ]]; then
+  echo
+  echo "==> config/bootstrap.env"
+  filled=0
+  malformed=0
+  blank=0
+
+  for key in ${ALLOWED_KEYS}; do
+    value="$(env_value "$key")"
+    pattern="$(key_pattern "$key")"
+    blocks="$(key_blocks "$key")"
+
+    scope=""
+    is_env_scoped "$key" && scope="  [per-environment: set ${key}_$(printf '%s' "$ENVIRONMENT" | tr '[:lower:]' '[:upper:]')]"
+
+    if [[ -z "$value" ]]; then
+      case "$key" in
+        R2_ENDPOINT|R2_BUCKET)
+          printf '  · %-28s derived at run time\n' "$key"
+          continue
+          ;;
+      esac
+      if [[ -n "$blocks" ]]; then
+        printf '  ○ %-28s empty — blocks %s\n' "$key" "$blocks"
+      else
+        printf '  ○ %-28s empty\n' "$key"
+      fi
+      blank=$((blank + 1))
+    elif [[ "$value" =~ $pattern ]]; then
+      printf '  ✓ %-28s %s%s\n' "$key" "$value" "$scope"
+      filled=$((filled + 1))
+    else
+      printf '  ✗ %-28s %s\n    unexpected shape, want %s\n' "$key" "$value" "$pattern"
+      malformed=$((malformed + 1))
+    fi
+  done
+
+  echo
+  echo "  ${filled} filled, ${blank} empty, ${malformed} malformed."
+  [[ "$malformed" -eq 0 ]] || exit 1
+  exit 0
+fi
 
 echo
 echo "==> Derived non-secret values"
