@@ -92,7 +92,7 @@ jobs:
       - name: no committed secret values in config
         run: |
           set -euo pipefail
-          if grep -rnE '(secret|token|password|key)\s*=\s*"[^"]{12,}"' config/*.tfvars; then
+          if grep -rnE '(secret|token|password|key)[[:space:]]*=[[:space:]]*"[^"]{12,}"' config/*.tfvars; then
             echo "config/*.tfvars must contain only non-secret values" >&2
             exit 1
           fi

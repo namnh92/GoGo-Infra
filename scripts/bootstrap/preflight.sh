@@ -7,6 +7,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "${REPO_ROOT}/scripts/lib/config.sh"
 failures=0
 
 ok()   { printf '  ok    %s\n' "$1"; }
@@ -40,13 +41,26 @@ echo "==> Configuration"
 global="${REPO_ROOT}/config/global.tfvars"
 if [[ -f "$global" ]]; then
   ok "config/global.tfvars exists"
-  while read -r key; do
-    value="$(grep -E "^${key}\s*=" "$global" | sed -E 's/.*=\s*"?([^"]*)"?\s*$/\1/')"
-    [[ -n "$value" ]] && ok "${key}=${value}" || fail "${key}" "(empty)"
-  done <<<'aws_account_id
-aws_region
-github_owner
-cloudflare_account_id'
+
+  # Shape is checked, not just presence. A malformed identifier that parses
+  # fine here fails later inside a provider call, where the error says nothing
+  # useful about which config value was wrong.
+  check_tfvar() {
+    local key="$1" pattern="$2" value
+    value="$(get_tfvar_string "$key" "$global")"
+    if [[ -z "$value" ]]; then
+      fail "$key" "(empty or not a quoted string)"
+    elif [[ ! "$value" =~ $pattern ]]; then
+      fail "$key" "(malformed: ${value})"
+    else
+      ok "${key}=${value}"
+    fi
+  }
+
+  check_tfvar aws_account_id "$AWS_ACCOUNT_ID_PATTERN"
+  check_tfvar aws_region "$AWS_REGION_PATTERN"
+  check_tfvar github_owner '^[A-Za-z0-9][A-Za-z0-9-]*$'
+  check_tfvar cloudflare_account_id "$CLOUDFLARE_ID_PATTERN"
 else
   fail "config/global.tfvars" "(missing — copy the committed template and fill it in)"
 fi

@@ -1,5 +1,9 @@
 # Terraform
 **/.terraform/*
+# Lock files are committed for root configurations (environments, bootstrap) so
+# CI resolves the same provider versions. Modules are only ever initialised as
+# part of a root config, so their locks are noise.
+terraform/modules/*/.terraform.lock.hcl
 *.tfstate
 *.tfstate.*
 *.tfstate.backup
@@ -32,6 +36,10 @@ secrets.auto.tfvars
 *.pem
 *.key
 !**/*.pub
+
+# Node — wrangler is used for R2 bucket operations the Terraform provider
+# does not cover. The manifest and lock are committed; the tree is not.
+node_modules/
 
 # Local
 .DS_Store

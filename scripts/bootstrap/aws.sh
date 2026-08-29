@@ -17,10 +17,13 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TF_DIR="${REPO_ROOT}/terraform/environments/${ENVIRONMENT}"
 OVERRIDE="${TF_DIR}/backend_override.tf"
 
+source "${REPO_ROOT}/scripts/lib/config.sh"
+
 command -v terraform >/dev/null || { echo "terraform required" >&2; exit 1; }
 aws sts get-caller-identity >/dev/null || { echo "not authenticated to AWS" >&2; exit 1; }
 
-account_id="$(grep -E '^cloudflare_account_id' "${REPO_ROOT}/config/global.tfvars" | sed -E 's/.*=\s*"?([^"]*)"?\s*$/\1/')"
+account_id="$(require_tfvar_string cloudflare_account_id \
+  "${REPO_ROOT}/config/global.tfvars" "$CLOUDFLARE_ID_PATTERN")"
 
 cleanup() { rm -f "$OVERRIDE"; }
 trap cleanup EXIT

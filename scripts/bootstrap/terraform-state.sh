@@ -10,11 +10,15 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BOOTSTRAP_DIR="${REPO_ROOT}/bootstrap/terraform-state"
 
+source "${REPO_ROOT}/scripts/lib/config.sh"
+
 : "${TF_VAR_cloudflare_api_token:?set TF_VAR_cloudflare_api_token (R2 admin token; not committed anywhere)}"
 
-account_id="$(grep -E '^cloudflare_account_id' "${REPO_ROOT}/config/global.tfvars" | sed -E 's/.*=\s*"?([^"]*)"?\s*$/\1/')"
-[[ -n "$account_id" ]] || { echo "cloudflare_account_id empty in config/global.tfvars" >&2; exit 1; }
+account_id="$(require_tfvar_string cloudflare_account_id \
+  "${REPO_ROOT}/config/global.tfvars" "$CLOUDFLARE_ID_PATTERN")"
 export TF_VAR_cloudflare_account_id="$account_id"
+
+echo "==> Cloudflare account: ${account_id}"
 
 echo "==> Applying bootstrap/terraform-state with local state"
 terraform -chdir="$BOOTSTRAP_DIR" init -input=false

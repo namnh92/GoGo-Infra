@@ -17,4 +17,4 @@ mobile_repository  = "GoGo-MobileApp"
 production_branch = "master"
 develop_branch    = "develop"
 
-cloudflare_account_id = ""
+cloudflare_account_id = "0c279927ff26d9f743923d532e570b7b"
