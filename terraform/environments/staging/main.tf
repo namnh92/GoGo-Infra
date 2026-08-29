@@ -1,6 +1,31 @@
+# GitHub issues OIDC subjects in an immutable, id-based form —
+#   repo:namnh92@23242146/GoGo-Infra@1349240763:environment:dev
+# — not the name-based form nearly every example shows. A trust policy written
+# against the name form never matches, and the failure is a bare
+# "Not authorized to perform sts:AssumeRoleWithWebIdentity" that says nothing
+# about why. Verified by reading the token: see docs/lessons.md.
+#
+# Both forms are listed. The id form is what is issued today and is the stronger
+# pin — ids survive a rename and a recreated repository of the same name cannot
+# inherit them. The name form costs nothing and keeps this working if the
+# account setting is ever switched back.
 locals {
-  repo = "${var.github_owner}/${var.infra_repository}"
+  repo_ids = var.repository_ids
+
+  oidc_subject = {
+    for key, cfg in {
+      infra   = { owner = var.github_owner, repo = var.infra_repository }
+      backend = { owner = var.github_owner, repo = var.backend_repository }
+      mobile  = { owner = var.github_owner, repo = var.mobile_repository }
+      cms     = { owner = var.github_owner, repo = var.cms_repository }
+      } : key => {
+      name_form = "repo:${cfg.owner}/${cfg.repo}"
+      id_form   = "repo:${cfg.owner}@${var.github_owner_id}/${cfg.repo}@${local.repo_ids[cfg.repo]}"
+    }
+  }
 }
+
+# subjects_for("infra", "environment:dev") -> both forms of that subject
 
 module "tags" {
   source = "../../modules/common-tags"
@@ -266,7 +291,7 @@ module "github_oidc" {
   roles = {
     plan = {
       description = "terraform plan for staging from pull requests"
-      subjects    = ["repo:${local.repo}:pull_request"]
+      subjects    = [for f in values(local.oidc_subject.infra) : "${f}:pull_request"]
 
       policy_arns = {
         aws_readonly = "arn:aws:iam::aws:policy/ReadOnlyAccess"
@@ -276,7 +301,7 @@ module "github_oidc" {
 
     apply = {
       description = "terraform apply for staging, through the staging GitHub Environment"
-      subjects    = ["repo:${local.repo}:environment:staging"]
+      subjects    = [for f in values(local.oidc_subject.infra) : "${f}:environment:staging"]
 
       policy_arns = {
         infra     = aws_iam_policy.infra_apply.arn

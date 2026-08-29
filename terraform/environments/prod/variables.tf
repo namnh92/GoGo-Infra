@@ -125,3 +125,13 @@ variable "cors_allowed_origins" {
   type        = list(string)
   default     = []
 }
+
+variable "github_owner_id" {
+  description = "Numeric GitHub account id, used in the immutable OIDC subject form."
+  type        = string
+}
+
+variable "repository_ids" {
+  description = "Numeric repository ids keyed by repository name, for OIDC subjects."
+  type        = map(string)
+}

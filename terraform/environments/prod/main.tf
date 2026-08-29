@@ -1,6 +1,31 @@
+# GitHub issues OIDC subjects in an immutable, id-based form —
+#   repo:namnh92@23242146/GoGo-Infra@1349240763:environment:dev
+# — not the name-based form nearly every example shows. A trust policy written
+# against the name form never matches, and the failure is a bare
+# "Not authorized to perform sts:AssumeRoleWithWebIdentity" that says nothing
+# about why. Verified by reading the token: see docs/lessons.md.
+#
+# Both forms are listed. The id form is what is issued today and is the stronger
+# pin — ids survive a rename and a recreated repository of the same name cannot
+# inherit them. The name form costs nothing and keeps this working if the
+# account setting is ever switched back.
 locals {
-  repo = "${var.github_owner}/${var.infra_repository}"
+  repo_ids = var.repository_ids
+
+  oidc_subject = {
+    for key, cfg in {
+      infra   = { owner = var.github_owner, repo = var.infra_repository }
+      backend = { owner = var.github_owner, repo = var.backend_repository }
+      mobile  = { owner = var.github_owner, repo = var.mobile_repository }
+      cms     = { owner = var.github_owner, repo = var.cms_repository }
+      } : key => {
+      name_form = "repo:${cfg.owner}/${cfg.repo}"
+      id_form   = "repo:${cfg.owner}@${var.github_owner_id}/${cfg.repo}@${local.repo_ids[cfg.repo]}"
+    }
+  }
 }
+
+# subjects_for("infra", "environment:dev") -> both forms of that subject
 
 module "tags" {
   source = "../../modules/common-tags"
@@ -295,7 +320,7 @@ module "github_oidc" {
   roles = {
     plan = {
       description = "terraform plan for prod from pull requests into ${var.production_branch}"
-      subjects    = ["repo:${local.repo}:pull_request"]
+      subjects    = [for f in values(local.oidc_subject.infra) : "${f}:pull_request"]
 
       policy_arns = {
         aws_readonly = "arn:aws:iam::aws:policy/ReadOnlyAccess"
@@ -305,7 +330,7 @@ module "github_oidc" {
 
     apply = {
       description = "terraform apply for prod, production environment approval required"
-      subjects    = ["repo:${local.repo}:environment:production"]
+      subjects    = [for f in values(local.oidc_subject.infra) : "${f}:environment:production"]
 
       policy_arns = {
         infra     = aws_iam_policy.infra_apply.arn
@@ -315,7 +340,7 @@ module "github_oidc" {
 
     deploy = {
       description = "Backend deploy: read prod runtime secrets and the deploy key"
-      subjects    = ["repo:${var.github_owner}/${var.backend_repository}:environment:production"]
+      subjects    = [for f in values(local.oidc_subject.backend) : "${f}:environment:production"]
 
       policy_arns = {
         ssm_read = module.policy_deploy.policy_arn
@@ -324,7 +349,7 @@ module "github_oidc" {
 
     mobile-release = {
       description = "Mobile release: upload source maps to Sentry. Never the backend deploy policy."
-      subjects    = ["repo:${var.github_owner}/${var.mobile_repository}:environment:production"]
+      subjects    = [for f in values(local.oidc_subject.mobile) : "${f}:environment:production"]
 
       policy_arns = {
         ssm_read = module.policy_mobile_release.policy_arn

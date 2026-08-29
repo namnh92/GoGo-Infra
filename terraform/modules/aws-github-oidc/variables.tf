@@ -41,6 +41,8 @@ variable "roles" {
   validation {
     condition = alltrue(flatten([
       for role in var.roles : [
+        # Accepts both the name form and the immutable id form
+        # (repo:owner@id/name@id:...). Still rejects any wildcard.
         for subject in role.subjects : can(regex("^repo:[^*]+:(ref|environment|pull_request)", subject))
       ]
     ]))
