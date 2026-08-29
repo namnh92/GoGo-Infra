@@ -127,6 +127,25 @@ Stored as:
 Read and write live in separate sub-paths so that a prefix grant — and
 `GetParametersByPath` — cannot hand a pull-request plan job a write-capable token.
 
+## What `complete.sh` does and does not gate
+
+Two sections, and only the first decides the exit code.
+
+**Stage 0** is what the bootstrap creates: OIDC provider, IAM roles, the permissions boundary
+and that it is actually attached, remote state, CI credentials, and the read/write separation.
+A failure here means the bootstrap is not finished.
+
+**Runtime readiness** is informational. `DATABASE_URL` cannot exist before there is a Neon
+project and `ONESIGNAL_REST_API_KEY` cannot exist before someone creates the OneSignal app, so
+those parameters are missing by definition at the end of bootstrap. Each one is listed with the
+task that provides it.
+
+The split matters because a check that reports a finished bootstrap as broken gets ignored — and
+then the check that would have caught a real problem gets ignored with it.
+
+Pass `--strict` to make runtime readiness fail too. That is the right form for a pre-deploy gate,
+not for the end of bootstrap.
+
 ## After bootstrap
 
 | Trigger | Role | Credentials |
