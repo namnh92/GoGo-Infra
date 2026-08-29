@@ -26,12 +26,22 @@ share_host = "go.dev.gogo.id.vn"
 # which is the honest failure — better than redirecting to nothing.
 api_origin = ""
 
-# A DNS record is still needed for the hostname to exist. Cloudflare workers
-# routes attach to a zone, but the name has to resolve: proxied A/AAAA or CNAME
-# to any origin works, since the worker answers before the origin is reached.
-# dns_records = {
-#   share = { name = "go.dev.gogo.id.vn", type = "A", content = "192.0.2.1", proxied = true }
-# }
+# The hostname has to exist in DNS for the worker routes to be reachable —
+# routes attach to a zone, but a name that does not resolve is never asked for.
+#
+# 192.0.2.1 is TEST-NET-1 from RFC 5737, reserved for documentation and
+# guaranteed to route nowhere. With proxied = true the worker answers before
+# Cloudflare ever tries the origin, so the address is a placeholder that exists
+# only to make the record valid. A real address here would be a lie about where
+# the traffic goes, and one day someone would follow it.
+dns_records = {
+  share = {
+    name    = "go.dev.gogo.id.vn"
+    type    = "A"
+    content = "192.0.2.1"
+    proxied = true
+  }
+}
 
 cors_allowed_origins = [
   "http://localhost:3000",
