@@ -60,6 +60,23 @@ module "policy_apply" {
   tags            = module.tags.tags
 }
 
+# The VPS serves dev, so dev is the environment that deploys. GoGo-BE assumes
+# this role to read the runtime secrets and the deploy key.
+module "policy_deploy" {
+  source = "../../modules/aws-ssm-iam"
+
+  name        = "${module.tags.name_prefix}-deploy"
+  description = "Runtime secrets and the deploy key for the dev application deploy"
+
+  parameter_paths = [
+    "${var.environment}/backend/*",
+    "ci/${var.environment}/deploy/*",
+  ]
+
+  kms_key_arn = data.aws_kms_key.ssm.arn
+  tags        = module.tags.tags
+}
+
 module "policy_developer" {
   source = "../../modules/aws-ssm-iam"
 
@@ -323,6 +340,15 @@ module "github_oidc" {
       policy_arns = {
         infra     = aws_iam_policy.infra_apply.arn
         ssm_write = module.policy_apply.policy_arn
+      }
+    }
+
+    deploy = {
+      description = "Backend deploy to the dev VPS: read dev runtime secrets and the deploy key"
+      subjects    = ["repo:${var.github_owner}/${var.backend_repository}:environment:dev"]
+
+      policy_arns = {
+        ssm_read = module.policy_deploy.policy_arn
       }
     }
   }

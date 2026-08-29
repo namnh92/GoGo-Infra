@@ -1,6 +1,17 @@
-# Production host
+# The VPS
 
-**GoGo-BE owns the production stack. This repository owns the secrets that reach it.**
+**Decided 29/08/2026: the current VPS serves dev only.** Production gets its own, larger host
+later. Until then `deploy-dev.yml` is the deploy that runs, and `deploy-production.yml` is the
+shape it will take when that host exists.
+
+One consequence worth stating: the dev host holds **real** credentials for Neon, Upstash, R2 and
+OneSignal, even though the data behind them is throwaway. That is survivable only because those
+are dev-scoped resources — a separate Neon project, a separate Upstash database, a separate
+bucket, a separate OneSignal app. Nothing in `/gogo/dev/backend/*` reaches production. That
+isolation is what makes "security is not a concern on dev" a safe position rather than a
+hopeful one, and it is why the separation should not be relaxed for convenience later.
+
+**GoGo-BE owns the stack. This repository owns the secrets that reach it.**
 
 That split is the whole content of this file, and it exists because the boundary was briefly
 crossed: an earlier commit here added a Caddyfile and systemd units describing a second,
