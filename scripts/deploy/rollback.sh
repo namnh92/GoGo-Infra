@@ -18,7 +18,8 @@ TARGET_REF="${1:-}"
 : "${DEPLOY_HOST:?}" "${DEPLOY_USER:?}" "${DEPLOY_PATH:?}"
 : "${KNOWN_HOSTS_FILE:?}" "${SSH_KEY_FILE:?}"
 DEPLOY_PORT="${DEPLOY_PORT:-22}"
-COMPOSE="docker compose -f docker/docker-compose.prod.yml --env-file .env.prod"
+REMOTE_ENV_FILE="${REMOTE_ENV_FILE:?set REMOTE_ENV_FILE, e.g. .env.dev or .env.prod}"
+COMPOSE="docker compose -f docker/docker-compose.prod.yml --env-file ${REMOTE_ENV_FILE}"
 
 ssh_opts=(-i "$SSH_KEY_FILE" -p "$DEPLOY_PORT"
           -o StrictHostKeyChecking=yes
@@ -47,6 +48,6 @@ cat <<EOM
 
 Rolled back to ${TARGET_REF}.
 
-The database was NOT rolled back, and .env.prod was left as it is. Confirm the
+The database was NOT rolled back, and ${REMOTE_ENV_FILE} was left as it is. Confirm the
 schema is compatible with this revision before declaring the incident closed.
 EOM
