@@ -36,7 +36,20 @@ ssh_opts=(-i "$SSH_KEY_FILE" -p "$DEPLOY_PORT"
           -o UserKnownHostsFile="$KNOWN_HOSTS_FILE"
           -o IdentitiesOnly=yes)
 
-remote() { ssh "${ssh_opts[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "$@"; }
+# bash -lc, not a bare command.
+#
+# ssh runs a non-interactive, non-login shell, whose PATH is the system default.
+# Docker installed by Homebrew lives in /opt/homebrew/bin and by rancher/colima
+# elsewhere; none of them are on that PATH. The deploy would fail on
+# `docker: command not found` while `docker --version` works perfectly for
+# anyone who logs in to check.
+#
+# A login shell reads the host's own profile, so the host decides where its
+# tools are. Naming a path here would put "Docker is at /opt/homebrew/bin" into
+# a deploy contract that ADR-0004 says must not know what the host is.
+remote() {
+  ssh "${ssh_opts[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "bash -lc $(printf '%q' "$*")"
+}
 
 echo "==> Recording the running revision for rollback"
 # Captured before anything changes. Without it a rollback has to guess, and
