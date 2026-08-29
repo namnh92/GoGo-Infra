@@ -93,6 +93,14 @@ Deciding after production records exist means deciding during an incident.
 
 ## Watching the free tiers
 
+`scripts/ops/check-cf-token-scopes.sh <env>` (or `make cf-scopes`) probes one endpoint per thing
+Terraform touches and prints the Cloudflare permission to add for each failure. Run it when a
+plan or apply returns 403: the provider names the URL, not the missing scope, so a permission gap
+reads as an authentication failure and sends you to look at the wrong thing.
+
+It probes reads only. A token that reads an API can still be refused on write, so an apply can
+fail where a plan passes — which is why the write column says "reachable", not "ok".
+
 `scripts/ops/check-quotas.sh <env>` reports how close each service is to its limit, and exits
 non-zero when something is over.
 
