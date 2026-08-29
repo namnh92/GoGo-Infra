@@ -115,6 +115,36 @@ r2_endpoint="$(get r2/endpoint)"
 
 r2_key="$(get r2/access-key-id)"
 r2_secret="$(get r2/secret-access-key)"
+
+# Shape first, before spending a network call. Creating an R2 API token shows
+# three values, and only two of them belong here:
+#
+#   Token value          a long mixed-case string — for the Cloudflare REST API
+#                        as a Bearer token. NOT an S3 credential.
+#   Access Key ID        32 hex characters
+#   Secret Access Key    64 hex characters
+#
+# Storing the token value in access-key-id is the usual mistake and produces
+# InvalidAccessKeyId, which reads like a permissions problem. Lengths and
+# charset say which value was stored without printing any of it.
+if [[ -n "$r2_key" ]]; then
+  if [[ "$r2_key" =~ ^[0-9a-f]{32}$ ]]; then
+    check "r2/access-key-id has the shape of an S3 Access Key ID" 1
+  else
+    check "r2/access-key-id has the shape of an S3 Access Key ID" 0 \
+      "(found ${#r2_key} chars; expected 32 hex — is this the token value rather than the Access Key ID?)"
+  fi
+fi
+
+if [[ -n "$r2_secret" ]]; then
+  if [[ "$r2_secret" =~ ^[0-9a-f]{64}$ ]]; then
+    check "r2/secret-access-key has the shape of an S3 secret" 1
+  else
+    check "r2/secret-access-key has the shape of an S3 secret" 0 \
+      "(found ${#r2_secret} chars; expected 64 hex)"
+  fi
+fi
+
 if [[ -n "$r2_key" && -n "$r2_secret" && -n "$r2_bucket" && -n "$r2_endpoint" ]]; then
   # In a subshell with its own credentials: exporting these into the current
   # shell would replace the AWS session everything else here depends on.

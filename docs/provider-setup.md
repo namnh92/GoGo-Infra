@@ -57,6 +57,20 @@ Console → **R2** and **Manage Account → Account ID**.
 Scope each R2 token to one bucket. The state-bucket token must not reach the asset bucket and
 vice versa: a leaked asset token should not expose Terraform state.
 
+**Create these under R2 → Manage R2 API Tokens, not under My Profile → API Tokens.** Only the R2
+page issues S3-compatible credentials. Creating a token there shows three values:
+
+| Shown | What it is | Goes to |
+| --- | --- | --- |
+| Token value | Bearer token for the Cloudflare REST API | not an S3 credential — not used here |
+| Access Key ID | 32 hex characters | `r2/access-key-id` |
+| Secret Access Key | 64 hex characters | `r2/secret-access-key` |
+
+Storing the token value in `r2/access-key-id` is the common mistake. It fails as
+`InvalidAccessKeyId`, which reads like a permissions problem and sends you to edit the token
+scope instead of the value. `validate-services.sh` checks the lengths, so it names the mistake
+without printing anything.
+
 Then: `bootstrap/terraform-state` → `terraform/environments/dev`.
 
 ## 3. Neon (INF-008)
