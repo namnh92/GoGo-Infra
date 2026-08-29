@@ -100,3 +100,22 @@ declared in `secrets.manifest.yaml`.
 
 `ap-southeast-1` for AWS, APAC location hint for R2, Singapore for managed services — close to
 the initial user base. Regions stay configurable through variables.
+
+## Runtime boundary
+
+GoGo-BE is a container-based Node.js runtime — API, background workers and
+migrations — in every environment. Cloudflare Workers carries only edge-native
+work: the share-link redirect, `/.well-known/*`, and CMS front-end hosting.
+
+The test is not preference. A workload that needs a long-lived connection, a
+blocking Redis command, a Node runtime API, or a transaction spanning several
+calls is not edge-native. `apps/worker` is three BullMQ consumers blocking on
+Redis; a Worker is invoked per request and holds nothing open between
+invocations. Moving them is a rewrite onto Queues and Cron Triggers — a future
+migration, not part of this rollout.
+
+The compute provider is an implementation detail. The GoGo-BE contract is the
+container image, the environment variables, the migration command and the health
+endpoint; nothing in it names a host, and no deploy step may require it to.
+
+See [`adr/0004-be-runtime-and-edge-boundary.md`](adr/0004-be-runtime-and-edge-boundary.md).
