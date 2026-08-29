@@ -78,7 +78,10 @@ key_pattern() {
     DEPLOY_HOST)                 echo '^[a-zA-Z0-9.-]+$' ;;
     HEALTH_URL|IOS_STORE_URL|ANDROID_STORE_URL)
                                  echo '^https://' ;;
-    DEVELOPER_SSO_PRINCIPAL_ARN) echo '^arn:aws:iam::[0-9]{12}:role/' ;;
+    # The IAM role Identity Center provisions in this account for the permission
+    # set — arn:aws:iam::<acct>:role/AWSReservedSSO_<PermissionSet>_<hash> — not
+    # the sso:::instance/ ARN, which identifies the directory and grants nothing.
+    DEVELOPER_SSO_PRINCIPAL_ARN) echo '^arn:aws:iam::[0-9]{12}:role/AWSReservedSSO_' ;;
     *)                           echo '.' ;;
   esac
 }
@@ -92,9 +95,11 @@ key_destination() {
     R2_ENDPOINT|R2_BUCKET|ONESIGNAL_APP_ID)
       echo "→ SSM" ;;
     TENJIN_IOS_SDK_KEY|TENJIN_ANDROID_SDK_KEY)
-      echo "→ mobile build (client config — NOT the server API key)" ;;
-    APPLE_TEAM_ID|IOS_BUNDLE_ID|APNS_KEY_ID|FIREBASE_PROJECT_ID)
-      echo "→ OneSignal console + apple-app-site-association" ;;
+      echo "→ mobile build (client config; nothing Tenjin goes to SSM)" ;;
+    APPLE_TEAM_ID|IOS_BUNDLE_ID|APNS_KEY_ID)
+      echo "→ OneSignal APNs config + apple-app-site-association" ;;
+    FIREBASE_PROJECT_ID)
+      echo "→ OneSignal FCM V1 config" ;;
     ANDROID_PACKAGE_NAME|ANDROID_SIGNING_SHA256)
       echo "→ assetlinks.json" ;;
     IOS_STORE_URL|ANDROID_STORE_URL)
@@ -346,7 +351,6 @@ while IFS=$'\t' read -r path env_var type required; do
     r2/*)          echo "     From the R2 API token scoped to $(env_value R2_BUCKET)" ;;
     onesignal/*)   echo "     OneSignal → Settings → Keys & IDs" ;;
     google/*)      echo "     Google Cloud → APIs & Services → Credentials (server key)" ;;
-    tenjin/*)      echo "     Tenjin → server API key. The SDK key is client config, not this." ;;
     auth/*)        echo "     Leave blank to generate one with openssl rand -base64 48" ;;
   esac
 

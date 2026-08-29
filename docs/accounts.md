@@ -32,7 +32,7 @@ automation credential be rotated without touching anyone's login.
 | Upstash | GitHub OAuth | Management API key + the **account email**, which for an OAuth login is the GitHub account's primary email | script input only; the resulting `REDIS_URL` goes to `/gogo/<env>/backend/redis/url` |
 | Cloudflare | GitHub OAuth | scoped API token (R2 admin for bootstrap; per-bucket token for the app) | `CLOUDFLARE_API_TOKEN` in GitHub secrets; bucket token in `/gogo/<env>/backend/r2/*` |
 | OneSignal | GitHub OAuth | REST API key + identity verification key, per app | `/gogo/<env>/backend/onesignal/*` |
-| Tenjin | GitHub OAuth | API key | `/gogo/<env>/backend/tenjin/api-key` |
+| Tenjin | GitHub OAuth | SDK Key per app | mobile build config — nothing in SSM |
 | Google Cloud | Google account | server API keys, split per API | `/gogo/<env>/backend/google/*` |
 | AWS | IAM / SSO | GitHub OIDC, no static keys | n/a — roles are assumed, nothing is stored |
 

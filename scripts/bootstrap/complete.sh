@@ -126,7 +126,6 @@ provider_for() {
     auth/*)                   echo "scripts/secrets/generate-auth.sh ${ENVIRONMENT} — can be done now" ;;
     onesignal/*)              echo "INF-013 · OneSignal console" ;;
     google/*)                 echo "INF-015 · Google Cloud console, one key per API" ;;
-    tenjin/*)                 echo "INF-014 · Tenjin console" ;;
     observability/sentry-dsn) echo "Sentry project settings" ;;
     *)                        echo "./scripts/secrets/put.sh ${ENVIRONMENT} $1" ;;
   esac
@@ -136,9 +135,9 @@ present=0
 total=0
 
 # Every declared parameter, not only the required ones. Listing required-only
-# hides anything an environment does not demand yet — tenjin/server-api-key is
-# prod-only, so a dev run never mentioned it and it looked like an omission
-# rather than a deliberate scope decision.
+# hides anything an environment does not demand yet — a prod-only parameter
+# never appears in a dev run, which makes it look like an omission rather than a
+# deliberate scope decision.
 while IFS=$'\t' read -r path env_var _type required; do
   [[ -n "$path" ]] || continue
 

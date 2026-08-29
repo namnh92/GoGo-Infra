@@ -125,8 +125,14 @@ Enable Token Identity Verification **after** a mobile build that sends the ident
 
 | Kind | Value | Where it goes |
 | --- | --- | --- |
-| non-secret | app names, SDK app ids | mobile config + register |
-| secret | API key | `./scripts/secrets/put.sh <env> tenjin/api-key` |
+| non-secret | one SDK Key per app, from Apps → <app> → SDK Key | mobile build config; it ships in the binary, so treat it as public |
+| — | nothing in SSM | GoGo-BE composes tracking URLs from a template and calls no authenticated Tenjin API |
+
+Tenjin has no credential called a "server API key". There is the per-app **SDK Key**, which is
+also what server-to-server event posting authenticates with, and an **API Access Token** from
+AUTOMATE → API Access Tokens for the Automation, Reporting and Raw Data Export APIs. GoGo-BE
+uses neither today. Creating a token so a checklist turns green would mean a real credential,
+with a real blast radius, guarding nothing.
 
 The tracking URL is built server-side and is never the public share URL
 (`GOGO_SRS.md` FR-LINK-001).

@@ -48,7 +48,6 @@ open a pull request — see `docs/adr/0001`.
 /gogo/<env>/backend/r2/{endpoint,bucket,access-key-id,secret-access-key}
 /gogo/<env>/backend/auth/{jwt-secret,refresh-secret}
 /gogo/<env>/backend/onesignal/{app-id,rest-api-key,identity-verification-key}
-/gogo/<env>/backend/tenjin/api-key
 /gogo/<env>/backend/google/{server-api-key,routes-api-key}
 /gogo/<env>/backend/observability/sentry-dsn
 ```
