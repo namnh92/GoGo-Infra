@@ -59,10 +59,47 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: gitleaks/gitleaks-action@v2
+      # Not gitleaks/gitleaks-action. On a pull_request event that action calls
+      # GET /repos/{o}/{r}/pulls/{n}/commits, which this workflow's token cannot
+      # do under `permissions: contents: read`; it crashed with 403 "Resource
+      # not accessible by integration" on every PR while passing on pushes to
+      # develop, so the scan looked healthy and covered nothing on the branch
+      # where it matters.
+      #
+      # Widening the token to pull-requests: read would fix the symptom and buy
+      # the API call, the rate limit and the deprecated runtime with it. The
+      # binary needs no token at all, and runs the identical command to
+      # `make scan`, so a clean local run means a clean CI run.
+      - name: install gitleaks
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_CONFIG: .gitleaks.toml
+          GITLEAKS_VERSION: 8.18.4
+          # Verified, not trusted. Pinning a version without checking the bytes
+          # means CI runs whatever arrives at that URL.
+          GITLEAKS_SHA256: ba6dbb656933921c775ee5a2d1c13a91046e7952e9d919f9bac4cec61d628e7d
+        run: |
+          set -euo pipefail
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+
+          # The first run of this step died on `curl: (35) Recv failure:
+          # Connection reset by peer` against a URL that was correct and
+          # reachable — a transient reset on the release-asset redirect. Without
+          # retries that is a red build on an unrelated PR, and the habit of
+          # re-running until green is how a real failure gets waved through.
+          curl -sSfL --connect-timeout 10 --retry 5 --retry-delay 3 \
+            --retry-all-errors -o /tmp/gitleaks.tar.gz "$url"
+
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo install /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      # Runs before the scan: an allowlist edit that quietly disables a rule
+      # would otherwise show up as a clean scan.
+      - name: gitleaks rules still catch real credentials
+        run: ./scripts/ci/gitleaks-rules.test.sh
+
+      - name: gitleaks
+        run: make scan
 
   scripts:
     name: shellcheck
@@ -94,6 +131,14 @@ jobs:
       # an empty required field look populated.
       - name: tfvars parser tests
         run: ./scripts/lib/config.test.sh
+
+      # INF-024 acceptance is "no automation depends on OAuth". That was prose
+      # in docs/accounts.md until this step; prose does not survive the next
+      # person in a hurry.
+      - name: CI authenticates as a machine, not a person
+        run: |
+          ./scripts/ci/check-workflow-auth.test.sh
+          ./scripts/ci/check-workflow-auth.sh
 
       - name: manifest parses
         run: |

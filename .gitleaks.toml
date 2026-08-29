@@ -24,7 +24,12 @@ tags = ["onesignal"]
 [[rules]]
 id = "gogo-postgres-url"
 description = "PostgreSQL connection string with credentials"
-regex = '''postgres(ql)?://[^:\s]+:[^@\s]+@'''
+# (?:ql) is non-capturing on purpose. With a capturing group, gitleaks reports
+# group 1 as the Secret — this rule used to report `ql` — and allowlist regexes
+# are matched against the Secret, so no allowlist entry could ever apply to it.
+# It also made a genuine finding useless: the report named `ql` instead of the
+# password that leaked.
+regex = '''postgres(?:ql)?://[^:\s]+:[^@\s]+@'''
 tags = ["database"]
 
 [[rules]]
@@ -37,11 +42,22 @@ tags = ["redis"]
 description = "Placeholders and documentation examples"
 regexes = [
   '''<[A-Z_]+>''',
-  '''postgres(ql)?://USER:PASSWORD@''',
+  '''postgres(?:ql)?://USER:PASSWORD@''',
   '''rediss?://default:PASSWORD@''',
+  # A shell variable in the credential position is code that builds a URL, not
+  # a URL. scripts/bootstrap/upstash.sh assembles REDIS_URL this way and pipes
+  # it straight into SSM without ever printing it.
+  #
+  # Deliberately narrow: the variable must sit exactly where the password goes.
+  # A literal password still trips the rule, which is the whole point — the
+  # alternative on offer was a per-commit fingerprint ignore, which stops
+  # matching the moment the line moves and silently protects nothing.
+  '''(?:rediss?|postgres(?:ql)?)://[^:@\s]*:\$\{?[A-Za-z_][A-Za-z0-9_]*\}?@''',
   '''EXAMPLE|PLACEHOLDER|CHANGEME|xxxxx''',
 ]
 paths = [
   '''\.env\.example$''',
-  '''secrets\.manifest\.yaml$''',
+  # .yml, not .yaml. The file has always been secrets.manifest.yml, so this
+  # entry matched nothing from the day it was written.
+  '''secrets\.manifest\.ya?ml$''',
 ]
