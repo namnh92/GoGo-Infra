@@ -303,6 +303,7 @@ module "dns" {
   source = "../../modules/cloudflare-dns"
   count  = var.cloudflare_zone_id == "" ? 0 : 1
 
-  zone_id = var.cloudflare_zone_id
-  records = var.dns_records
+  zone_id         = var.cloudflare_zone_id
+  records         = var.dns_records
+  required_suffix = var.dns_record_suffix
 }

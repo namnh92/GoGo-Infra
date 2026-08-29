@@ -71,6 +71,26 @@ blocking consumer turns out to burn the free tier, the fallback is Upstash for c
 limiting with a local Redis container for the worker — the connection string is the only thing
 that changes. Wire the quota alert as part of INF-019 either way.
 
+## One Cloudflare zone, two environments
+
+`gogo.id.vn` is a single zone and both environments point at it. A Cloudflare token scoped to a
+zone can edit **every** record in that zone, so separating dev from prod in SSM and in IAM does
+not separate them at the provider — a dev apply can move a production hostname.
+
+What contains it today is `dns_record_suffix`: the dev configuration rejects any record that does
+not end in `dev.gogo.id.vn`, and the check runs at plan time. That is a guardrail in this
+repository, not a permission. It stops a mistake; it would not stop someone who edits the
+configuration.
+
+Before the first production DNS record exists, pick one:
+
+1. Delegate `dev.gogo.id.vn` as its own zone and give the dev token only that zone.
+2. Remove DNS write permission from the dev token; production records change from the prod
+   workflow only.
+3. Accept it in writing, with the reasoning, in an ADR.
+
+Deciding after production records exist means deciding during an incident.
+
 ## Terraform state
 
 One bucket, one key per environment:

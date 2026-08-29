@@ -9,6 +9,24 @@ terraform {
   }
 }
 
+locals {
+  misplaced_records = var.required_suffix == "" ? [] : [
+    for key, record in var.records : key
+    if !endswith(record.name, var.required_suffix)
+  ]
+}
+
+resource "terraform_data" "record_names_are_in_scope" {
+  count = length(local.misplaced_records) > 0 ? 1 : 0
+
+  lifecycle {
+    precondition {
+      condition     = length(local.misplaced_records) == 0
+      error_message = "Records outside ${var.required_suffix}: ${join(", ", local.misplaced_records)}"
+    }
+  }
+}
+
 resource "cloudflare_dns_record" "this" {
   for_each = var.records
 

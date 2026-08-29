@@ -84,6 +84,12 @@ variable "cloudflare_zone_id" {
   default     = ""
 }
 
+variable "dns_record_suffix" {
+  description = "Every DNS record in this environment must end with this hostname. Empty disables the check."
+  type        = string
+  default     = ""
+}
+
 variable "dns_records" {
   description = "DNS records for this environment."
   type = map(object({
