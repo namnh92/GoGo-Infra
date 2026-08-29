@@ -1,31 +1,20 @@
 # Rollback
 
-## Release layout
+## How a release is deployed
+
+The stack is GoGo-BE's `docker/docker-compose.prod.yml`. A deploy checks out a revision on the
+host, renders `.env.prod` from SSM, builds the images, migrates, and brings the stack up.
 
 ```
-/opt/gogo/
-├── releases/
-│   ├── <sha-1>/
-│   ├── <sha-2>/
-│   └── <sha-3>/
-├── shared/
-│   ├── .env.prod        mode 0600, replaced atomically
-│   └── previous         path of the release that was live before this deploy
-└── current -> releases/<sha-3>
+record current revision → checkout ref → render env → build → migrate → up -d → health check
 ```
 
-Releases are immutable directories. A deploy writes a new one and moves the symlink; a rollback
-moves the symlink back. Nothing is rebuilt or re-downloaded under pressure.
+The current revision is recorded **before** anything changes. Without that a rollback has to
+guess what was running, and guessing during an incident is how the wrong revision goes back out.
 
-## Deploy order
-
-```
-upload release  →  render env  →  migrate  →  switch symlink  →  restart  →  health check
-```
-
-Migrations run **before** the switch. If the health check then fails, the previous release must
-still work against the migrated schema — which is why migrations are expand-then-contract and
-never destructive in the same release that starts using the new shape.
+Migrations run before the new containers take traffic and are expand-only, so the previous
+revision still works against the migrated schema if the health check fails. That is the whole
+reason for expand-then-contract: it is what makes rollback a real option rather than a wish.
 
 ## Rolling back
 
@@ -42,7 +31,7 @@ The deploy workflow runs this automatically when the health check fails.
 
 | Situation | Action |
 | --- | --- |
-| New code is broken, schema unchanged or backward compatible | Code rollback. Move the symlink. |
+| New code is broken, schema unchanged or backward compatible | Code rollback: check out the previous revision and rebuild. |
 | New code is broken **and** the migration was destructive | Do **not** roll back code. Forward-fix: the old code cannot read the new schema. |
 | Data is wrong, code is fine | Database restore (`docs/disaster-recovery.md`), not a rollback. |
 

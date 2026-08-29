@@ -24,21 +24,26 @@ integration tests.
                        │
                   Cloudflare (DNS / CDN / WAF)
                        │
-                 ┌─────┴─────┐
-                 │   Caddy   │  (existing VPS)
-                 └─────┬─────┘
-             ┌─────────┴──────────┐
-             ▼                    ▼
-      GoGo-BE api+worker       CMS FE
-             │
-   ┌─────────┼──────────┬─────────────┐
-   ▼         ▼          ▼             ▼
-PostgreSQL  Redis      R2         OneSignal
- + PostGIS                          │
-                              ┌─────┴─────┐
-                              ▼           ▼
-                             APNs        FCM
+        ┌──────────────┴───────────────┐
+        │   VPS: docker compose stack  │  GoGo-BE/docker/docker-compose.prod.yml
+        │   caddy ─┬─ api              │
+        │          └─ worker           │
+        │   postgres · redis · backup  │
+        └──────────────┬───────────────┘
+                       │
+              ┌────────┴────────┐
+              ▼                 ▼
+             R2             OneSignal
+                                │
+                          ┌─────┴─────┐
+                          ▼           ▼
+                         APNs        FCM
 ```
+
+The stack is defined in GoGo-BE; this repository injects `.env.prod` from SSM and drives the
+deploy. See [`vps/README.md`](../vps/README.md) for the boundary, and for the open conflict: that
+stack runs PostgreSQL and Redis on the VPS with a 24-hour RPO, while `GOGO_SRS.md` §6.3 and §10.1
+describe managed services with PITR and RPO under 15 minutes.
 
 ## Control plane
 
