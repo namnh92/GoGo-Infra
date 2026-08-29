@@ -192,9 +192,25 @@ the Upstash REST endpoint cannot serve BullMQ.
 ## 10. Verify
 
 ```bash
-./scripts/secrets/validate.sh dev            # SSM matches secrets.manifest.yaml
-./scripts/bootstrap/validate-services.sh dev # services reachable and correctly shaped
+./scripts/secrets/validate.sh dev            # names and types match the manifest
+./scripts/bootstrap/validate-services.sh dev # the values actually work
 ```
+
+The two answer different questions, and only the second one is evidence.
+
+`validate.sh` compares SSM against the manifest: nothing required is missing, nothing
+undeclared is present, every type is right. A `DATABASE_URL` pointing at a deleted branch, a
+`REDIS_URL` holding the REST endpoint, and a revoked OneSignal key all pass it.
+
+`validate-services.sh` uses the values. It connects to PostgreSQL and checks `postgis`,
+`pg_trgm` and `btree_gist` are installed; it sends Redis a `PING` and then a `BLPOP`, because
+BullMQ needs blocking commands and a plan can allow the first while refusing the second; it
+calls `head-bucket` with the R2 application credentials, in a subshell so they cannot replace
+the AWS session; and it fetches the OneSignal app with the REST key, which distinguishes a
+rejected key from a missing app.
+
+Google keys are checked for shape only. Every Places or Routes request is billable, so a
+liveness check would charge the project on each run.
 
 ## Intake checklist
 
