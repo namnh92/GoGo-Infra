@@ -4,8 +4,8 @@ output "tunnel_id" {
 }
 
 output "tunnel_token" {
-  description = "Token the connector authenticates with. Sensitive: it is enough to run a connector for this tunnel."
-  value       = data.cloudflare_zero_trust_tunnel_cloudflared_token.this.token
+  description = "Token the connector authenticates with, empty unless read_connector_token is on. Sensitive: it is enough to run a connector for this tunnel."
+  value       = try(data.cloudflare_zero_trust_tunnel_cloudflared_token.this[0].token, "")
   sensitive   = true
 }
 

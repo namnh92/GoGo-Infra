@@ -22,3 +22,9 @@ variable "ingress" {
     error_message = "At least one hostname is required; a tunnel with no ingress routes nothing."
   }
 }
+
+variable "read_connector_token" {
+  description = "Fetch the connector credential. Off by default: every plan would otherwise call GET /cfd_tunnel/{id}/token, so the read-only plan token would need permission to read a credential that is enough to run a connector for this tunnel. Turn it on for the one apply that stores or rotates the token."
+  type        = bool
+  default     = false
+}

@@ -441,10 +441,11 @@ module "tunnel" {
   source = "../../modules/cloudflare-tunnel"
   count  = var.tunnel_ingress == null ? 0 : 1
 
-  account_id  = var.cloudflare_account_id
-  zone_id     = var.cloudflare_zone_id
-  environment = var.environment
-  ingress     = var.tunnel_ingress
+  account_id           = var.cloudflare_account_id
+  zone_id              = var.cloudflare_zone_id
+  environment          = var.environment
+  ingress              = var.tunnel_ingress
+  read_connector_token = var.tunnel_read_connector_token
 }
 
 module "dns" {

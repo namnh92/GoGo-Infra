@@ -68,10 +68,20 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "this" {
 }
 
 # The connector's credential is not an attribute of the resource in provider v5;
-# it is fetched separately. Reading it here keeps it out of anyone's shell
-# history — the alternative is `cloudflared tunnel token` on a workstation,
-# which puts it in a terminal buffer and often a log.
+# it is fetched separately, and fetching it is a privileged read.
+#
+# count = 0 by default, because a data source with no condition is read on every
+# plan — including the plan that runs on pull requests as the read-only token.
+# That token would then need permission to read a credential which is, on its
+# own, enough to run a connector for this tunnel. `terraform plan` failed with
+# 401 on exactly this call, and the fix is not to grant it: read-only should
+# stay unable to read credentials.
+#
+# Turn it on for the single apply that stores or rotates the token, with the
+# write credentials, then turn it off again.
 data "cloudflare_zero_trust_tunnel_cloudflared_token" "this" {
+  count = var.read_connector_token ? 1 : 0
+
   account_id = var.account_id
   tunnel_id  = cloudflare_zero_trust_tunnel_cloudflared.this.id
 }
