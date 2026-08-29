@@ -59,10 +59,30 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: gitleaks/gitleaks-action@v2
+      # Not gitleaks/gitleaks-action. On a pull_request event that action calls
+      # GET /repos/{o}/{r}/pulls/{n}/commits, which this workflow's token cannot
+      # do under `permissions: contents: read`; it crashed with 403 "Resource
+      # not accessible by integration" on every PR while passing on pushes to
+      # develop, so the scan looked healthy and covered nothing on the branch
+      # where it matters.
+      #
+      # Widening the token to pull-requests: read would fix the symptom and buy
+      # the API call, the rate limit and the deprecated runtime with it. The
+      # binary needs no token at all, and runs the identical command to
+      # `make scan`, so a clean local run means a clean CI run.
+      - name: install gitleaks
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_CONFIG: .gitleaks.toml
+          GITLEAKS_VERSION: 8.18.4
+        run: |
+          set -euo pipefail
+          curl -sSfL -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo install /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: gitleaks
+        run: make scan
 
   scripts:
     name: shellcheck
