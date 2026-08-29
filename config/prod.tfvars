@@ -1,14 +1,18 @@
 environment        = "prod"
-cloudflare_zone_id = "" # gogo.vn zone
+cloudflare_zone_id = "" # gogo.id.vn zone
 
+# Fill in once the VPS address is known. go.gogo.id.vn is the canonical
+# share-link host (GOGO_SRS.md §8.11) and must also serve
+# /.well-known/apple-app-site-association and /.well-known/assetlinks.json.
 # dns_records = {
-#   api   = { name = "api.gogo.vn", type = "A", content = "203.0.113.10" }
-#   share = { name = "go.gogo.vn",  type = "A", content = "203.0.113.10" }
+#   api   = { name = "api.gogo.id.vn", type = "A", content = "203.0.113.10" }
+#   cms   = { name = "cms.gogo.id.vn", type = "A", content = "203.0.113.10" }
+#   share = { name = "go.gogo.id.vn",  type = "A", content = "203.0.113.10" }
 # }
 
 cors_allowed_origins = [
-  "https://gogo.vn",
-  "https://www.gogo.vn",
+  "https://gogo.id.vn",
+  "https://www.gogo.id.vn",
 ]
 
 deploy_host = ""

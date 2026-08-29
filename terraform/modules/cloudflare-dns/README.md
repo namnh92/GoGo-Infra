@@ -6,7 +6,7 @@ DNS drift is a deployment hazard: a record edited in the dashboard disappears on
 apply, or worse, silently keeps traffic pointed at a decommissioned host. Every record lives
 here and changes through a pull request.
 
-`go.gogo.vn` is the canonical share-link host (`GOGO_SRS.md` §8.11). The Worker route that
+`go.gogo.id.vn` is the canonical share-link host (`GOGO_SRS.md` §8.11). The Worker route that
 serves `/l/{slug}` and the `.well-known` association files is INF-012 and is added on top of
 this record once `LNK-BE-002` exposes the resolve API.
 
@@ -19,12 +19,12 @@ module "dns" {
 
   records = {
     api = {
-      name    = "api.gogo.vn"
+      name    = "api.gogo.id.vn"
       type    = "A"
       content = var.vps_ipv4
     }
     share = {
-      name    = "go.gogo.vn"
+      name    = "go.gogo.id.vn"
       type    = "A"
       content = var.vps_ipv4
     }

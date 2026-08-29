@@ -53,10 +53,14 @@ BullMQ needs a TCP connection and blocking commands. The Upstash REST API cannot
 Even on TCP, a blocking consumer polls continuously, so the command budget — not the storage
 limit — is what runs out first.
 
-Before treating Upstash as the dev queue backend, run the worker under normal dev load for a
-day, read the command count from the console, and record the decision here: either Upstash for
-everything, or Upstash for cache and rate limiting with a local Redis container for the worker.
-Wire the quota alert as part of INF-019 either way.
+**Decided (29/08/2026): Upstash stays.** Postgres does not substitute for it — Redis carries
+BullMQ, rate limiting, caching and idempotency, and Neon covers none of those.
+
+The command budget is still the open part, not the choice of provider. Run the worker under
+normal dev load for a day, read the command count from the console, and record it here. If a
+blocking consumer turns out to burn the free tier, the fallback is Upstash for cache and rate
+limiting with a local Redis container for the worker — the connection string is the only thing
+that changes. Wire the quota alert as part of INF-019 either way.
 
 ## Terraform state
 

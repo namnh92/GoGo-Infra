@@ -49,3 +49,6 @@ node_modules/
 
 # Generated during bootstrap
 backend_override.tf
+
+# Operator inputs — the .example is committed, the filled copy is not
+config/bootstrap.env

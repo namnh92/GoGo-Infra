@@ -155,7 +155,33 @@ The SSH key is itself a long-lived credential, which sits uneasily next to the
 no-static-credentials rule. Choosing between a scoped deploy key, a Cloudflare Tunnel and a
 pull-based agent is open work on INF-017.
 
-## 9. Verify
+## 9. Guided entry
+
+Rather than running `put.sh` fifteen times:
+
+```bash
+cp config/bootstrap.env.example config/bootstrap.env
+$EDITOR config/bootstrap.env          # non-secret identifiers only
+./scripts/secrets/setup-env.sh dev --dry-run
+./scripts/secrets/setup-env.sh dev
+```
+
+Non-secret values come from `config/bootstrap.env`, so they are edited once, reviewed, and
+reused. Secrets are prompted for without echo and written straight to SSM — they never touch
+that file.
+
+The file's keys are on an allowlist and anything else is refused. A token pasted onto the wrong
+line would otherwise be written to SSM as a `String`, unencrypted, and nothing downstream would
+notice.
+
+Parameters that already exist are skipped; `--force` re-enters them. Overwriting is deliberate:
+rotating `JWT_SECRET` invalidates every issued token.
+
+Two checks worth knowing about, because both mistakes are silent until much later: the script
+warns if `DATABASE_URL` has no `-pooler` in the host, and if `REDIS_URL` is not a `redis://` URL —
+the Upstash REST endpoint cannot serve BullMQ.
+
+## 10. Verify
 
 ```bash
 ./scripts/secrets/validate.sh dev            # SSM matches secrets.manifest.yaml
@@ -170,7 +196,7 @@ planned; secrets are entered separately by whoever holds the console.
 - [ ] AWS account id, region
 - [ ] Cloudflare account id
 - [ ] Production domain and its Cloudflare zone id
-- [ ] Host for canonical share links (the spec assumes `go.gogo.vn`)
+- [x] Root domain `gogo.id.vn`; canonical share-link host `go.gogo.id.vn`
 - [ ] VPS hostname/IP, deploy user, health endpoint path
 - [ ] Apple Team ID, iOS Bundle ID
 - [ ] Android package name, Firebase project id
