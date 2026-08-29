@@ -91,6 +91,39 @@ Before the first production DNS record exists, pick one:
 
 Deciding after production records exist means deciding during an incident.
 
+## Watching the free tiers
+
+`scripts/ops/check-quotas.sh <env>` reports how close each service is to its limit, and exits
+non-zero when something is over.
+
+Free tiers do not degrade, they stop. Upstash stops accepting commands and the queue goes quiet —
+no error, no log, jobs that never run. The first thing that notices is a person asking why they
+got no notification.
+
+The Redis line is an estimate, not a meter, and the script says so. The command counter Upstash
+exposes over the Redis protocol is per connection, not per month, so it cannot answer the question
+that matters. The estimate is arithmetic on the configured poll intervals, which is both the thing
+under our control and the thing that spends the budget.
+
+Two checks report `unknown` on purpose: Neon compute hours and Google quota need API keys this
+repository does not store. Reporting a reassuring `ok` for a check that never ran is worse than
+having no check.
+
+### Running it on a schedule needs a decision first
+
+The script reads runtime secrets (`/gogo/<env>/backend/*`) **and** a CI credential (the Cloudflare
+token, for R2 usage). No current role holds both, deliberately: ADR 0001 separates pipeline
+credentials from application credentials, and a role that reads both would undo that separation
+for the sake of a cron job.
+
+Options, none taken yet:
+
+1. Two jobs, two roles — the runtime half under the deploy role, the R2 half under the apply role.
+2. A read-only monitoring role scoped to exactly the parameters this script reads.
+3. Keep it manual until there is a reason to automate.
+
+Widening an existing role is the one option to avoid, because it is invisible afterwards.
+
 ## Terraform state
 
 One bucket, one key per environment:
