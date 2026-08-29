@@ -57,3 +57,20 @@ cors_allowed_origins = [
   "http://localhost:3000",
   "http://localhost:5173",
 ]
+
+# CMS front end.
+#
+# cms_script_name must match `name` in GoGo-CMS/wrangler.jsonc. It is the
+# dashboard-created Worker that issue #25 is bringing under IaC; the name is
+# kept rather than renamed so the existing script is adopted instead of a second
+# one appearing beside it.
+#
+# Both addresses are on the access list because the Cloudflare account signs in
+# through GitHub OAuth and either may be the primary address that receives the
+# one-time PIN. Locking to the wrong one locks out the only operator.
+cms_host        = "cms-dev.gogo.id.vn"
+cms_script_name = "gogo-cms-dev"
+cms_access_emails = [
+  "namnhse02061@gmail.com",
+  "namnh.code4fun@gmail.com",
+]

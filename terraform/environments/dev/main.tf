@@ -406,6 +406,29 @@ module "share_link_worker" {
   tenjin_tracking_template = var.tenjin_tracking_template
 }
 
+# CMS front end — hostname and access control only. GoGo-CMS deploys the Worker
+# itself (modules/cloudflare-cms-hosting/README.md).
+#
+# Off unless all three inputs are set. The access list is part of that check on
+# purpose: publishing an admin hostname and adding the guard in a follow-up
+# leaves a window, and windows like that stay open.
+module "cms_hosting" {
+  source = "../../modules/cloudflare-cms-hosting"
+  count = (
+    var.cms_host == "" ||
+    var.cms_script_name == "" ||
+    var.cloudflare_zone_id == "" ||
+    length(var.cms_access_emails) == 0
+  ) ? 0 : 1
+
+  account_id    = var.cloudflare_account_id
+  zone_id       = var.cloudflare_zone_id
+  environment   = var.environment
+  hostname      = var.cms_host
+  script_name   = var.cms_script_name
+  access_emails = var.cms_access_emails
+}
+
 module "dns" {
   source = "../../modules/cloudflare-dns"
   count  = var.cloudflare_zone_id == "" ? 0 : 1

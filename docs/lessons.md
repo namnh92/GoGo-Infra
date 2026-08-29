@@ -439,3 +439,36 @@ wrong, which is worse than the blank. Every row having one owner and no backup i
 is unactionable at the moment it is needed. `scripts/ops/offboard-checklist.sh` generates the
 paths from `secrets.manifest.yml`, so parameters added later appear without anyone remembering —
 and it says *regenerate* for the auth signing secrets, which have no provider console to visit.
+
+**Read access proves nothing about write access.** The Cloudflare token answered
+`GET /accounts/{id}/access/apps` with 200, which was taken as "the token can do Access". The
+apply then failed on `POST /accounts/{id}/access/policies` with `403 auth.forbidden`. Probe the
+verb the work actually needs.
+
+**A partial apply leaves the half that succeeded.** The failed CMS apply created
+`cms-dev.gogo.id.vn` bound to the Worker and then failed on the Access policy — the hostname
+without the guard, which is the ordering the module explicitly refuses. It was destroyed rather
+than left "until the token is fixed". Check what landed after every failed apply; Terraform does
+not roll back.
+
+**"Input missing" must not compute to "delete the resource".** The CMS build artifact is
+gitignored, so a runner without it would plan an empty deploy — and on an environment that
+already has the Worker in state, an empty deploy is a destroy. `terraform-apply-dev` runs
+automatically on pushes to `develop`, so that plan would have executed. A resource precondition
+now fails the plan with the command to run. Verified by moving the build aside: `0 to destroy`,
+then a readable error. Whenever a `count` or a `for_each` depends on something that can simply be
+absent, work out what absence plans as before trusting it.
+
+**`content_sha256` is what makes a code change a diff.** Without it Terraform compares the
+`content_file` path, which never changes between builds, so a rebuilt bundle deploys nothing and
+reports success — the deploy equivalent of a green check that checked nothing.
+
+**Set the workers.dev subdomain, do not inherit it.** Cloudflare Access binds to a custom domain.
+A Worker that also answers on `*.workers.dev` serves the same admin console on a hostname Access
+never sees, and nothing in the Terraform files says so. `cloudflare_workers_script_subdomain`
+with `enabled = false` is the difference between "guarded" and "guarded at one of its two doors".
+
+**Read the runtime date from the source that owns it.** `compatibility_date`,
+`not_found_handling` and `run_worker_first` live in GoGo-CMS's `wrangler.jsonc`. Copying them into
+tfvars makes two truths that drift, and the symptom of that drift is a Workers runtime behaviour
+change nobody traces back to a config file.
