@@ -439,3 +439,14 @@ wrong, which is worse than the blank. Every row having one owner and no backup i
 is unactionable at the moment it is needed. `scripts/ops/offboard-checklist.sh` generates the
 paths from `secrets.manifest.yml`, so parameters added later appear without anyone remembering —
 and it says *regenerate* for the auth signing secrets, which have no provider console to visit.
+
+**Read access proves nothing about write access.** The Cloudflare token answered
+`GET /accounts/{id}/access/apps` with 200, which was taken as "the token can do Access". The
+apply then failed on `POST /accounts/{id}/access/policies` with `403 auth.forbidden`. Probe the
+verb the work actually needs.
+
+**A partial apply leaves the half that succeeded.** The failed CMS apply created
+`cms-dev.gogo.id.vn` bound to the Worker and then failed on the Access policy — the hostname
+without the guard, which is the ordering the module explicitly refuses. It was destroyed rather
+than left "until the token is fixed". Check what landed after every failed apply; Terraform does
+not roll back.

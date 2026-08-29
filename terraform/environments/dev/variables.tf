@@ -135,3 +135,21 @@ variable "repository_ids" {
   description = "Numeric repository ids keyed by repository name, for OIDC subjects."
   type        = map(string)
 }
+
+variable "cms_host" {
+  description = "Hostname serving the CMS front end. Empty disables CMS hosting entirely, so an environment that has not decided plans clean."
+  type        = string
+  default     = ""
+}
+
+variable "cms_script_name" {
+  description = "Worker script name that GoGo-CMS deploys with wrangler. Must match the `name` in that repo's wrangler.jsonc; a mismatch binds the hostname to a script nobody deploys."
+  type        = string
+  default     = ""
+}
+
+variable "cms_access_emails" {
+  description = "Emails allowed through Cloudflare Access to the CMS hostname. One-time PIN, no identity provider needed."
+  type        = list(string)
+  default     = []
+}
