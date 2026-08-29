@@ -177,6 +177,14 @@ notice.
 Parameters that already exist are skipped; `--force` re-enters them. Overwriting is deliberate:
 rotating `JWT_SECRET` invalidates every issued token.
 
+`--check` audits `config/bootstrap.env` without touching SSM: each key filled, malformed or
+empty, and for empty ones which task it blocks.
+
+`--optional` also offers the parameters an environment does not require. Optional does not mean
+unwanted — `TENJIN_SERVER_API_KEY` is required only in prod, so a plain dev run skips it and
+there is otherwise no way to set one for testing deep links. Same for the OneSignal identity key
+and the Sentry DSN.
+
 Two checks worth knowing about, because both mistakes are silent until much later: the script
 warns if `DATABASE_URL` has no `-pooler` in the host, and if `REDIS_URL` is not a `redis://` URL —
 the Upstash REST endpoint cannot serve BullMQ.

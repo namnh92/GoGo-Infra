@@ -5,6 +5,8 @@
 #   ./scripts/secrets/setup-env.sh dev
 #   ./scripts/secrets/setup-env.sh dev --force        # re-enter values that exist
 #   ./scripts/secrets/setup-env.sh dev --dry-run      # show what would be asked
+#   ./scripts/secrets/setup-env.sh dev --check        # audit config/bootstrap.env
+#   ./scripts/secrets/setup-env.sh dev --optional     # also offer optional params
 #
 # Non-secret values come from config/bootstrap.env, so they are edited in one
 # place, reviewed, and reused. Secrets are never in that file: they are prompted
@@ -20,12 +22,14 @@ ENVIRONMENT=""
 FORCE="no"
 DRY_RUN="no"
 CHECK_ONLY="no"
+INCLUDE_OPTIONAL="no"
 
 for arg in "$@"; do
   case "$arg" in
     --force)   FORCE="yes" ;;
     --dry-run) DRY_RUN="yes" ;;
     --check)   CHECK_ONLY="yes"; DRY_RUN="yes" ;;
+    --optional) INCLUDE_OPTIONAL="yes" ;;
     *)         ENVIRONMENT="$arg" ;;
   esac
 done
@@ -265,17 +269,27 @@ while IFS=$'\t' read -r path env_var type required; do
     continue
   fi
 
+  # Optional here does not mean unwanted. TENJIN_SERVER_API_KEY is required only
+  # in prod, so a dev run skipped it outright and there was no way to enter one
+  # for testing deep links — the parameter was unreachable through this script.
   if [[ "$is_required" != "yes" ]]; then
-    echo "  ○ ${env_var} — not required in ${ENVIRONMENT}, skipping"
-    continue
+    if [[ "$INCLUDE_OPTIONAL" != "yes" ]]; then
+      echo "  ○ ${env_var} — optional in ${ENVIRONMENT} (required in: ${required:-none}); --optional to set it"
+      continue
+    fi
+    echo "  ? ${env_var} — optional in ${ENVIRONMENT}"
   fi
 
   # Non-secret parameters are filled from the env file without prompting.
   if [[ "$type" == "String" ]]; then
     value="$(env_value "$env_var")"
     if [[ -z "$value" ]]; then
-      echo "  ✗ ${env_var} — set it in config/bootstrap.env"
-      missing_config+=("$env_var")
+      if [[ "$is_required" == "yes" ]]; then
+        echo "  ✗ ${env_var} — set it in config/bootstrap.env"
+        missing_config+=("$env_var")
+      else
+        echo "    not in config/bootstrap.env, skipping"
+      fi
       continue
     fi
     echo "  → ${env_var}"
@@ -345,6 +359,13 @@ if [[ "${#missing_config[@]}" -gt 0 ]]; then
   echo
   echo "Fill these in config/bootstrap.env and run again:"
   printf '  - %s\n' "${missing_config[@]}"
+fi
+
+if [[ "$INCLUDE_OPTIONAL" != "yes" ]]; then
+  echo
+  echo "Optional parameters for ${ENVIRONMENT} were skipped."
+  echo "Re-run with --optional to set them — Tenjin, the OneSignal identity key"
+  echo "and the Sentry DSN are prod-required but useful to have in dev too."
 fi
 
 echo
