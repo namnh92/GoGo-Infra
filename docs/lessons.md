@@ -490,3 +490,10 @@ a guard.
 an Access list, which is right and was not enough: the tfvars supplied one. `config/dev.tfvars`
 now carries the settings commented out with the reason, so turning it on is one deliberate edit
 after `make cf-scopes` says the token can create the policy.
+
+**`200` with an empty list can be a permission denial.** A Cloudflare token without
+`Access: Apps and Policies · Read` answers `GET /access/policies` with `success: true` and zero
+results — while the write token sees two — and only returns 403 on `GET /access/policies/{id}`.
+`check-cf-token-scopes.sh` probed the list, reported the read token healthy, and `plan (dev)`
+failed on exactly the call it had not made. Probe the request the tool actually issues, and treat
+an empty collection as a question rather than an answer.
