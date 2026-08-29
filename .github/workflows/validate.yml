@@ -71,6 +71,12 @@ jobs:
           # info-level notes (SC1091 on sourced files) must not fail CI
           shellcheck -x --severity=warning scripts/*/*.sh
 
+      # The tfvars parser is regression-tested because its previous version
+      # failed silently on BSD userlands and returned the whole line, which made
+      # an empty required field look populated.
+      - name: tfvars parser tests
+        run: ./scripts/lib/config.test.sh
+
       - name: manifest parses
         run: |
           for env in dev staging prod; do

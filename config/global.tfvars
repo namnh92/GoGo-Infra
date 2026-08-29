@@ -4,7 +4,7 @@
 
 project_name = "gogo"
 
-aws_account_id = "" # fill before the first bootstrap
+aws_account_id = "477020169756"
 aws_region     = "ap-southeast-1"
 
 github_owner       = "namnh92"

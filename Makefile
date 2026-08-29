@@ -44,8 +44,12 @@ plan: ## terraform plan for $(ENV)
 apply: ## terraform apply for $(ENV) — prefer the CI workflow for prod
 	terraform -chdir=$(TF_DIR) apply -input=false $(TF_VARS)
 
+.PHONY: test
+test: ## Run the shell unit tests
+	./scripts/lib/config.test.sh
+
 .PHONY: check
-check: fmt-check validate lint scan ## Everything CI runs before plan
+check: fmt-check validate lint scan test ## Everything CI runs before plan
 
 .PHONY: secrets-list
 secrets-list: ## List SSM parameter names for $(ENV) (names only, no values)
