@@ -24,19 +24,8 @@ variable "hostname" {
 }
 
 variable "script_name" {
-  description = "Name of the Worker script that serves the CMS."
+  description = "Worker script this hostname points at. GoGo-CMS deploys it; the name must match `name` in that repo's wrangler.jsonc, or the hostname binds to a script nobody deploys."
   type        = string
-}
-
-variable "build_dir" {
-  description = "Directory produced by scripts/build-cms.sh: worker/index.js, assets/, metadata.json. Gitignored — build output does not belong in a repository."
-  type        = string
-}
-
-variable "be_origin" {
-  description = "Origin the Worker proxies /v1/* to. Empty until the environment has a hosted API (INF-038); the Worker answers 502 rather than pretending, which is the honest failure."
-  type        = string
-  default     = ""
 }
 
 variable "access_emails" {

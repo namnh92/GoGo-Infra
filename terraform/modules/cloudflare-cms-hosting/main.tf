@@ -9,105 +9,28 @@ terraform {
   }
 }
 
-# Terraform deploys the CMS. wrangler is used only as a bundler — the Worker
-# entry is TypeScript and something has to turn it into a module Cloudflare
-# accepts — and `scripts/build-cms.sh` runs it with `--dry-run`, which uploads
-# nothing. The upload is this resource, so one place decides what is live, and
-# `terraform plan` shows a code change as a diff like any other.
+# Infrastructure only. This module does not deploy the CMS.
 #
-# The alternative that was rejected: let wrangler deploy and have Terraform own
-# only the hostname. It splits "what is running" across two tools and two repos,
-# and the dashboard build connection that started this task is exactly what that
-# arrangement decays into.
-
-locals {
-  metadata_path = "${var.build_dir}/metadata.json"
-  has_build     = fileexists(local.metadata_path)
-
-  # Guarded so a missing artifact reaches the precondition below with a sentence
-  # someone can act on, instead of Terraform failing inside file() with a path
-  # and no explanation.
-  metadata = local.has_build ? jsondecode(file(local.metadata_path)) : {
-    main_module        = "index.js"
-    compatibility_date = "1970-01-01"
-    not_found_handling = "none"
-    run_worker_first   = []
-    assets_binding     = "ASSETS"
-  }
-
-  worker_file = "${var.build_dir}/worker/${local.metadata.main_module}"
-  assets_dir  = "${var.build_dir}/assets"
-}
-
-resource "cloudflare_workers_script" "cms" {
-  account_id  = var.account_id
-  script_name = var.script_name
-
-  # content_sha256 is what makes a rebuilt bundle show up as a plan diff.
-  # Without it Terraform compares the path, which never changes, and a code
-  # change deploys nothing while reporting success.
-  content_file       = local.worker_file
-  content_sha256     = filesha256(local.worker_file)
-  main_module        = local.metadata.main_module
-  compatibility_date = local.metadata.compatibility_date
-
-  assets = {
-    directory = local.assets_dir
-
-    config = {
-      # React Router owns the URL space: /audit and /places/:id must serve the
-      # app shell on a direct load, not a 404.
-      not_found_handling = local.metadata.not_found_handling
-
-      # Without this the SPA fallback answers /v1/* with index.html before the
-      # Worker sees the request, and every API call "succeeds" with HTML.
-      run_worker_first = local.metadata.run_worker_first
-    }
-  }
-
-  bindings = [
-    {
-      name = local.metadata.assets_binding
-      type = "assets"
-    },
-    {
-      name = "BE_ORIGIN"
-      type = "plain_text"
-      text = var.be_origin
-    },
-  ]
-
-  # Fails the plan rather than planning a destroy.
-  #
-  # build/cms is gitignored, so a runner without it would otherwise compute an
-  # empty deploy — and on an environment that already has the Worker in state,
-  # "no artifact" would read as "remove the Worker". A red plan is recoverable;
-  # an automatic apply that deletes the deployed CMS is not.
-  lifecycle {
-    precondition {
-      condition     = local.has_build
-      error_message = "No build at ${var.build_dir}. Run ./scripts/build-cms.sh first (see modules/cloudflare-cms-hosting/README.md). CI does not build this yet — INF-044 (#46)."
-    }
-  }
-}
-
-# Explicitly off, not left to the default.
+# Terraform runs when infrastructure changes — a hostname, an Access policy, a
+# bucket, an IAM role. Application code ships on its own cadence, from the
+# repository that owns it: GoGo-CMS builds and runs `wrangler deploy`. Making
+# Terraform the deployer means every CMS change becomes an infrastructure
+# change, reviewed by infrastructure people, gated behind an infrastructure
+# apply — and a plan that touches IAM and DNS is a bad place to find out that a
+# button moved.
 #
-# A workers.dev subdomain would serve the whole CMS on a hostname that Access
-# does not guard, because the Access application is bound to the custom domain.
-# The admin console would be reachable by anyone who guessed the subdomain, and
-# nothing in the Terraform files would say so.
-resource "cloudflare_workers_script_subdomain" "cms" {
-  account_id  = var.account_id
-  script_name = cloudflare_workers_script.cms.script_name
-  enabled     = false
-}
+# An earlier version of this module did own the script. It worked, and it was
+# the wrong shape.
+#
+# What that costs: a rebuild from nothing has an order. A custom domain cannot
+# bind to a script that does not exist, so GoGo-CMS deploys before this applies.
+# That is an order, not a manual step.
 
 resource "cloudflare_workers_custom_domain" "cms" {
   account_id = var.account_id
   zone_id    = var.zone_id
   hostname   = var.hostname
-  service    = cloudflare_workers_script.cms.script_name
+  service    = var.script_name
 }
 
 # One-time PIN by default: Cloudflare mails a code to an address on the list, so

@@ -1,59 +1,46 @@
 # cloudflare-cms-hosting
 
-Deploys the CMS front end: the Worker, its assets, the hostname, and who may
-reach it.
+Hostname and access control for the CMS. **Not** the deploy.
 
-## Build first
+## What owns what
 
-```
-./scripts/build-cms.sh            # ../GoGo-CMS, or pass a path / set GOGO_CMS_DIR
-make plan ENV=dev
-```
+| Thing | Owner | Trigger |
+| --- | --- | --- |
+| Worker script, assets, `vars` | GoGo-CMS | push to `main` → Cloudflare Workers Build |
+| Hostname, TLS, binding | this module | `terraform apply` |
+| Who may reach it | this module | `terraform apply` |
 
-`build/cms/` holds `worker/index.js`, `assets/`, `metadata.json` and `SOURCE`.
-It is gitignored: build output reviewed by nobody rots against the source it
-came from. A plan without it fails on the missing `metadata.json` rather than
-quietly planning an empty deploy.
+Terraform runs when infrastructure changes. Application code ships on its own
+cadence from the repository that owns it. Making Terraform the deployer turns
+every CMS change into an infrastructure change — reviewed by infrastructure
+people, gated behind an apply, shown as a plan that also touches IAM and DNS.
 
-## wrangler bundles, Terraform deploys
+## Ordering
 
-The Worker entry is TypeScript, so something has to bundle it.
-`wrangler deploy --dry-run --outdir` does that and uploads nothing;
-`cloudflare_workers_script` does the upload, along with the asset directory, the
-bindings and the asset config.
+A custom domain cannot bind to a script that does not exist. GoGo-CMS deploys
+first, then this applies. An order, not a manual step.
 
-One place decides what is live, and a code change shows up as a plan diff.
-`content_sha256` is what makes that true — without it Terraform compares a file
-path that never changes, so a rebuilt bundle deploys nothing and reports
-success.
+`script_name` must match `name` in GoGo-CMS's `wrangler.jsonc`. Nothing enforces
+that across repositories, and a mismatch binds the hostname to a script nobody
+deploys — which shows up as a 404 that looks like DNS.
 
-`compatibility_date`, `not_found_handling` and `run_worker_first` come from
-GoGo-CMS's `wrangler.jsonc` through `metadata.json`. Repeating a Workers runtime
-date in tfvars drifts, and the symptom is a behaviour change nobody connects to
-a config file.
+## The second door
 
-## Reachability is explicit
-
-| Path in | State |
-| --- | --- |
-| custom domain | created only together with the Access policy |
-| `workers.dev` subdomain | explicitly disabled |
-| zone route | none |
-
-The subdomain is set rather than left to the default. Access binds to the custom
-domain, so a workers.dev URL would serve the whole admin console beside it,
-unguarded, with nothing in the Terraform files admitting it.
+Access binds to the custom domain. A Worker that also answers on
+`*.workers.dev` serves the same admin console at a hostname Access never sees.
+Set `workers_dev: false` in GoGo-CMS's `wrangler.jsonc` — it is a property of
+the deploy, and this module cannot set it without owning the script.
 
 ## Access is not authentication
 
-Access decides who reaches the hostname and nothing about what they may do:
-GoGo-BE remains the only authority on permissions, and a request that gets past
+Access decides who reaches the hostname and nothing about what they may do.
+GoGo-BE remains the only authority on permissions; a request that gets past
 Access carries no privilege by itself.
 
 What it buys is that an admin login page is not on the open internet being
 credential-stuffed. One-time PIN needs no identity provider, which is why it is
-here now; the workspace rule is SSO/MFA for production CMS, and that arrives
-with GoGo-BE#62.
+here now; the workspace rule is SSO/MFA for production CMS, arriving with
+GoGo-BE#62.
 
 ## The bit that will bite
 

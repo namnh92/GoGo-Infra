@@ -53,5 +53,3 @@ backend_override.tf
 # Operator inputs — the .example is committed, the filled copy is not
 config/bootstrap.env
 
-# Build artifacts pulled in from other repos for deployment.
-build/
