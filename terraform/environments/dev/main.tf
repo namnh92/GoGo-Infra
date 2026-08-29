@@ -85,8 +85,8 @@ module "policy_apply" {
   tags            = module.tags.tags
 }
 
-# The VPS serves dev, so dev is the environment that deploys. GoGo-BE assumes
-# this role to read the runtime secrets and the deploy key.
+# The VPS serves dev, so dev is the environment that deploys. GoGo-Infra
+# assumes this role to read the runtime secrets and the deploy key.
 module "policy_deploy" {
   source = "../../modules/aws-ssm-iam"
 
@@ -369,8 +369,23 @@ module "github_oidc" {
     }
 
     deploy = {
+      # GoGo-Infra, not GoGo-BE.
+      #
+      # This trusted GoGo-BE while deploy-dev.yml lived here, so the assume
+      # failed with "Not authorized to perform sts:AssumeRoleWithWebIdentity"
+      # and the mismatch stayed invisible until a dispatch actually ran.
+      #
+      # GoGo-Infra owns deployment orchestration (SRS §163): the SSM
+      # parameters, the SSH key, the pinned host key, the environment
+      # configuration, the deploy and rollback scripts, migration ordering
+      # and the health check. GoGo-BE owns build and release artifacts and
+      # hands over a ref or an immutable image reference.
+      #
+      # Trusting GoGo-BE would mean copying all of that into the application
+      # repository — the second copy of a responsibility that the same SRS
+      # paragraph forbids.
       description = "Backend deploy to the dev VPS: read dev runtime secrets and the deploy key"
-      subjects    = [for f in values(local.oidc_subject.backend) : "${f}:environment:dev"]
+      subjects    = [for f in values(local.oidc_subject.infra) : "${f}:environment:dev"]
 
       policy_arns = {
         ssm_read = module.policy_deploy.policy_arn

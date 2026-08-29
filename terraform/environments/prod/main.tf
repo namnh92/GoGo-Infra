@@ -339,8 +339,10 @@ module "github_oidc" {
     }
 
     deploy = {
+      # GoGo-Infra, matching dev: deployment orchestration lives here, and the
+      # application repository hands over a ref rather than credentials.
       description = "Backend deploy: read prod runtime secrets and the deploy key"
-      subjects    = [for f in values(local.oidc_subject.backend) : "${f}:environment:production"]
+      subjects    = [for f in values(local.oidc_subject.infra) : "${f}:environment:production"]
 
       policy_arns = {
         ssm_read = module.policy_deploy.policy_arn
