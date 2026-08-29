@@ -20,3 +20,8 @@ output "tags" {
   description = "Standard tags applied in this environment."
   value       = module.tags.tags
 }
+
+output "tunnel_hostnames" {
+  description = "Hostnames served through the tunnel, if one is configured."
+  value       = try(module.tunnel[0].hostnames, [])
+}

@@ -74,21 +74,6 @@ dns_records = {
     proxied = false
   }
 
-  # The dev API. Grey cloud, and this one is not negotiable either: Caddy on the
-  # host obtains its own Let's Encrypt certificate over HTTP-01, which requires
-  # the challenge to reach port 80 on the origin. An orange record terminates
-  # TLS at Cloudflare and answers the challenge itself, so issuance never
-  # completes and Caddy retries until it is rate-limited.
-  #
-  # Same address as vps — one host serves SSH and the API — so the origin is
-  # already published either way.
-  api = {
-    name    = "api-dev.gogo.id.vn"
-    type    = "A"
-    content = "14.226.6.188"
-    ttl     = 300
-    proxied = false
-  }
 }
 
 cors_allowed_origins = [
@@ -121,3 +106,14 @@ cms_access_emails = [
   "namnhse02061@gmail.com",
   "namnh.code4fun@gmail.com",
 ]
+
+# api-dev is served through the tunnel, so it has no A record: the module
+# creates a CNAME to <tunnel-id>.cfargotunnel.com. Nothing here names the
+# host's address, which is the point — a consumer line changing address breaks
+# nothing, and the address is no longer published.
+#
+# The origin is the container name: cloudflared runs inside the same compose
+# network, so the API port is published nowhere at all.
+tunnel_ingress = {
+  "api-dev.gogo.id.vn" = "http://api:3000"
+}

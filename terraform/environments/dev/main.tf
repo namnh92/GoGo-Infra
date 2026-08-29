@@ -429,6 +429,24 @@ module "cms_hosting" {
   access_emails = var.cms_access_emails
 }
 
+# The dev API reaches the internet through a tunnel, not an open port.
+#
+# The host is behind a consumer line that accepts no inbound connections — Let's
+# Encrypt proved it from outside after every local probe said the ports were
+# open, because a probe from the same network arrives through hairpin NAT.
+#
+# The origin is the api container by name: cloudflared runs inside the same
+# compose network, so nothing is published on the host at all.
+module "tunnel" {
+  source = "../../modules/cloudflare-tunnel"
+  count  = var.tunnel_ingress == null ? 0 : 1
+
+  account_id  = var.cloudflare_account_id
+  zone_id     = var.cloudflare_zone_id
+  environment = var.environment
+  ingress     = var.tunnel_ingress
+}
+
 module "dns" {
   source = "../../modules/cloudflare-dns"
   count  = var.cloudflare_zone_id == "" ? 0 : 1

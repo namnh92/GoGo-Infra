@@ -87,11 +87,13 @@ CHECKS=(
   "read|dns records|zones/${ZONE_ID}/dns_records?per_page=1|Zone · DNS · Read"
   "read|r2 buckets|accounts/${ACCOUNT_ID}/r2/buckets|Account · Workers R2 Storage · Read"
   "read|access apps|accounts/${ACCOUNT_ID}/access/apps|Account · Access: Apps and Policies · Read"
+  "read|tunnels|accounts/${ACCOUNT_ID}/cfd_tunnel|Account · Cloudflare Tunnel · Read"
   "write|workers scripts|accounts/${ACCOUNT_ID}/workers/scripts|Account · Workers Scripts · Edit"
   "write|workers routes|zones/${ZONE_ID}/workers/routes|Zone · Workers Routes · Edit"
   "write|dns records|zones/${ZONE_ID}/dns_records?per_page=1|Zone · DNS · Edit"
   "write|r2 buckets|accounts/${ACCOUNT_ID}/r2/buckets|Account · Workers R2 Storage · Edit"
   "write|access apps|accounts/${ACCOUNT_ID}/access/apps|Account · Access: Apps and Policies · Edit"
+  "write|tunnels|accounts/${ACCOUNT_ID}/cfd_tunnel|Account · Cloudflare Tunnel · Edit"
 )
 
 missing=0
@@ -191,20 +193,28 @@ fi
 # "grant, bad request". This is the grant blocking INF-037, so the check should
 # answer it rather than leave it under "not probed".
 echo
-echo "  write token can create Access policies"
+echo "  write token can create what Terraform creates"
 
 write_token="$(aws ssm get-parameter \
   --name "/gogo/ci/${ENVIRONMENT}/terraform/write/cloudflare-token" \
   --with-decryption --query 'Parameter.Value' --output text 2>/dev/null)"
 
 if [[ -n "$write_token" && "$write_token" != "None" ]]; then
-  code="$(api_post_empty "$write_token" "accounts/${ACCOUNT_ID}/access/policies")"
-  case "$code" in
-    403) printf '    %-16s HTTP 403 — add: Account · Access: Apps and Policies · Edit\n' "access policies"
-         missing=$(( missing + 1 )) ;;
-    000) printf '    %-16s ? probe did not complete\n' "access policies" ;;
-    *)   printf '    %-16s ok — grant present (HTTP %s on an empty body)\n' "access policies" "$code" ;;
-  esac
+  # write|label|path|grant to add
+  WRITE_PROBES=(
+    "access policies|accounts/${ACCOUNT_ID}/access/policies|Account · Access: Apps and Policies · Edit"
+    "tunnels|accounts/${ACCOUNT_ID}/cfd_tunnel|Account · Cloudflare Tunnel · Edit"
+  )
+  for row in "${WRITE_PROBES[@]}"; do
+    IFS='|' read -r label path grant <<< "$row"
+    code="$(api_post_empty "$write_token" "$path")"
+    case "$code" in
+      403) printf '    %-16s HTTP 403 — add: %s\n' "$label" "$grant"
+           missing=$(( missing + 1 )) ;;
+      000) printf '    %-16s ? probe did not complete\n' "$label" ;;
+      *)   printf '    %-16s ok — grant present (HTTP %s on an empty body)\n' "$label" "$code" ;;
+    esac
+  done
 else
   echo "    write token not stored — skipping"
 fi
