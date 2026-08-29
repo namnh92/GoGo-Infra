@@ -57,6 +57,10 @@ check-workflow-auth: ## Assert CI authenticates as a machine, never as a person 
 .PHONY: check
 check: fmt-check validate lint scan test check-workflow-auth ## Everything CI runs before plan
 
+.PHONY: cf-scopes
+cf-scopes: ## Probe what the Cloudflare CI tokens can reach for $(ENV)
+	./scripts/ops/check-cf-token-scopes.sh $(ENV)
+
 .PHONY: secrets-list
 secrets-list: ## List SSM parameter names for $(ENV) (names only, no values)
 	./scripts/secrets/list.sh $(ENV)
