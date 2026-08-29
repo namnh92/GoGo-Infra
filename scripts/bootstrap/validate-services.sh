@@ -172,7 +172,11 @@ if [[ -n "$r2_key" && -n "$r2_secret" && -n "$r2_bucket" && -n "$r2_endpoint" ]]
       *AccessDenied*)
         detail="(token has no permission on this bucket — scope it to ${r2_bucket})" ;;
       *)
-        detail="($(printf '%s' "$r2_error" | head -1 | cut -c1-120))" ;;
+        # First NON-EMPTY line: the CLI can lead with a blank line, and taking
+        # line one then produced "FAIL ... ()" — a failure with no reason, which
+        # is worse than no check at all.
+        detail="$(printf '%s' "$r2_error" | grep -v '^[[:space:]]*$' | head -1 | cut -c1-140)"
+        detail="(${detail:-no error text; re-run with: aws s3api list-objects-v2 --endpoint-url \$R2_ENDPOINT --bucket ${r2_bucket}})" ;;
     esac
     check "R2 credentials can reach ${r2_bucket}" 0 "$detail"
   fi
@@ -191,13 +195,31 @@ if [[ -n "$onesignal_app" && -n "$onesignal_key" ]]; then
   #
   # The notifications list is app-scoped and is what the REST key actually
   # authorizes, so it tests the credential the backend will really use.
-  code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
-    -H "Authorization: Key ${onesignal_key}" \
-    "https://api.onesignal.com/notifications?app_id=${onesignal_app}&limit=1" 2>/dev/null || echo 000)"
+  # OneSignal has two generations of auth and both are live. Keys issued before
+  # the 2024 API use `Authorization: Basic <key>` against onesignal.com/api/v1;
+  # newer ones use `Authorization: Key <key>` against api.onesignal.com. Testing
+  # only one scheme reports a perfectly good key from the other generation as
+  # rejected — which is what the previous version of this check did.
+  code=000
+  scheme=""
+  for attempt in "Key|https://api.onesignal.com/notifications" \
+                 "Basic|https://onesignal.com/api/v1/notifications"; do
+    this_scheme="${attempt%%|*}"
+    url="${attempt#*|}"
+    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+      -H "Authorization: ${this_scheme} ${onesignal_key}" \
+      "${url}?app_id=${onesignal_app}&limit=1" 2>/dev/null || echo 000)"
+    if [[ "$code" == "200" ]]; then
+      scheme="$this_scheme"
+      break
+    fi
+  done
+
   case "$code" in
-    200) check "OneSignal REST key authorizes app ${onesignal_app:0:8}…" 1 ;;
-    400) check "OneSignal REST key authorizes the app" 0 "(app id malformed or unknown)" ;;
-    401 | 403) check "OneSignal REST key authorizes the app" 0 "(key rejected — rotated, or it belongs to another app)" ;;
+    200) check "OneSignal REST key authorizes the app (${scheme} scheme)" 1 ;;
+    400) check "OneSignal REST key authorizes the app" 0 "(app id malformed or unknown for this key)" ;;
+    401 | 403) check "OneSignal REST key authorizes the app" 0 \
+      "(rejected by both auth schemes — wrong key, rotated, or it belongs to another app)" ;;
     000) echo "  skip  OneSignal (no network)" ;;
     *) check "OneSignal REST key authorizes the app" 0 "(http ${code})" ;;
   esac
