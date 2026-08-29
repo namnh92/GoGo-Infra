@@ -1,6 +1,6 @@
 # ADR 0002 — The approval gate does not exist on this plan
 
-**Status:** accepted, with a review trigger
+**Status:** partially resolved 29/08/2026 — see "After the plan upgrade"
 **Date:** 2026-08-29
 **Issues:** INF-016, INF-027
 
@@ -51,6 +51,36 @@ role cannot escalate through IAM — but the human control is missing.
 
 That is acceptable while the repository has one committer. It stops being acceptable the moment a
 second person has push access, which is the trigger to revisit this.
+
+## After the plan upgrade
+
+The account moved to a paid plan the same day. Half the gap closed.
+
+**Branch protection now works**, and is configured:
+
+| | `develop` | `master` |
+| --- | --- | --- |
+| Required status checks | shellcheck, gitleaks, terraform fmt/validate/tflint | same |
+| Strict (branch must be current) | yes | yes |
+| Pull request required | no | yes |
+| CODEOWNER review | — | yes |
+| Force push / deletion | blocked | blocked |
+| Linear history | — | required |
+
+So `.github/CODEOWNERS` stops being advisory for `master`, which is what ADR 0001 needs: with
+OIDC-to-SSM the workflow file is the authorization boundary, and review on it is a security
+control.
+
+**Required reviewers on environments still fails**, with the same 422. That protection rule is a
+Team feature, not a Pro one. So the production approval gate does not exist yet and
+`terraform-apply-prod` stays dispatch-only.
+
+`enforce_admins` is **false** on both branches, deliberately. With one committer, a rule that
+admins cannot bypass and a review requirement nobody can satisfy — GitHub does not let an author
+approve their own pull request — would mean nothing can ever merge. The rules are real for
+anyone who is not an admin, and honest about being bypassable by the one person who is. That
+stops being an acceptable shape the moment a second person has push access, which is already the
+revisit trigger below.
 
 ## Options to close it
 
