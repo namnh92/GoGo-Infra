@@ -229,7 +229,7 @@ env_value() {
 # flavours from max.gogo.{flavor}, so prod is max.gogo.prod, not the dev value.
 # An earlier version of this list had them as may-differ, from a misreading of
 # the mobile config rather than from the config.
-ENV_MUST_DIFFER="ONESIGNAL_APP_ID FIREBASE_PROJECT_ID CLOUDFLARE_ZONE_ID IOS_BUNDLE_ID ANDROID_PACKAGE_NAME"
+ENV_MUST_DIFFER="ONESIGNAL_APP_ID FIREBASE_PROJECT_ID CLOUDFLARE_ZONE_ID IOS_BUNDLE_ID ANDROID_PACKAGE_NAME ANDROID_SIGNING_SHA256"
 
 # MAY differ — the suffix works if wanted, but one value is a legitimate choice.
 ENV_MAY_DIFFER="TENJIN_IOS_SDK_KEY TENJIN_ANDROID_SDK_KEY"
