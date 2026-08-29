@@ -1,0 +1,5 @@
+# dev deploy target host key. Public — pinned, not secret.
+# SHA256:ZbQ/hxxRx3LZUose3wqoRi+aQNQx/ohMPoBAFHf2uRo
+# Verified out of band against the host, 2026-08-29. INF-034.
+# vps-dev.gogo.id.vn:22 SSH-2.0-OpenSSH_10.2
+vps-dev.gogo.id.vn ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIArdTaRB2NkQ/qEcsl4JmvsMNAUWooqO4QewhoVf/JX1

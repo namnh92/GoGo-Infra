@@ -41,10 +41,13 @@ JSON
 # Deliberately absent: places/, users/, reviews/, rooms/. Those hold permanent
 # content the catalog references by object key and must never expire.
 
+# --region auto: R2 has no regions, and an AWS_REGION in the caller's
+# environment would otherwise be sent and rejected.
 aws s3api put-bucket-lifecycle-configuration \
+  --region auto \
   --endpoint-url "$ENDPOINT" \
   --bucket "$BUCKET" \
   --lifecycle-configuration "file://${config}"
 
 echo "lifecycle applied to ${BUCKET}"
-aws s3api get-bucket-lifecycle-configuration --endpoint-url "$ENDPOINT" --bucket "$BUCKET"
+aws s3api get-bucket-lifecycle-configuration --region auto --endpoint-url "$ENDPOINT" --bucket "$BUCKET"

@@ -1,30 +1,44 @@
 # Module: aws-ssm-iam
 
-Path-scoped IAM policies for AWS SSM Parameter Store. Implements INF-006.
+One scoped SSM read policy. Implements INF-006 and INF-028.
 
-## Why
+## Why paths, not names
 
-The deploy role only ever needs the parameters of the environment it is deploying.
-Granting `/gogo/*` means a compromised dev workflow can read production database
-credentials (`GoGo-Infrastructure-Plan-Spec.md` §17, `GOGO_SRS.md` §10.2).
+Granting `/gogo/*` means a compromised dev workflow reads production database credentials.
+Every policy names the exact paths it needs.
 
-## What it does not do
+## Why read and write credentials live in separate sub-paths
 
-It does **not** create parameters. Secret values are written by
-`scripts/secrets/put.sh`, never by Terraform, because Terraform would persist the
-plaintext value into state (spec §13).
+The security spec lists `cloudflare-read-token` and `cloudflare-write-token` as siblings under
+`/gogo/ci/<env>/terraform/`. That does not work: a prefix grant on `terraform/*` covers both,
+and `GetParametersByPath` on that prefix returns both — which is exactly what the pull-request
+threat model forbids.
+
+Enumerating exact parameter ARNs would work today and break quietly later: the next
+`*-write-*` parameter someone adds is covered by whatever wildcard is already in the policy.
+
+So the layout is:
+
+```
+/gogo/ci/<env>/terraform/read/{cloudflare-token,r2-state-access-key-id,r2-state-secret-access-key}
+/gogo/ci/<env>/terraform/write/{cloudflare-token,r2-state-access-key-id,r2-state-secret-access-key}
+/gogo/ci/<env>/deploy/{ssh-private-key}
+/gogo/ci/<env>/sentry/{auth-token,mobile-auth-token}
+```
+
+A plan role gets `ci/<env>/terraform/read/*` and nothing else. There is no wildcard under which a
+write credential can appear.
 
 ## Usage
 
 ```hcl
-module "ssm_prod" {
+module "plan_policy" {
   source = "../../modules/aws-ssm-iam"
 
-  name_prefix = "gogo-prod"
-  environment = "prod"
-  kms_key_arn = data.aws_kms_key.ssm.arn
-  tags        = local.tags
+  name            = "gogo-dev-plan"
+  description     = "Read-only Cloudflare and R2 state credentials for terraform plan"
+  parameter_paths = ["ci/dev/terraform/read/*"]
+  kms_key_arn     = data.aws_kms_key.ssm.arn
+  tags            = module.tags.tags
 }
 ```
-
-Attach `module.ssm_prod.read_policy_arn` to the deploy role, and only to the deploy role.

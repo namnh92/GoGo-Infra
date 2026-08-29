@@ -5,6 +5,9 @@
 #
 #   NEON_API_KEY=... ./scripts/bootstrap/neon.sh dev
 #
+# The Neon console is signed in with GitHub OAuth; NEON_API_KEY is created by
+# hand in the console. Automation never uses OAuth (docs/accounts.md).
+#
 # Neon is bootstrap-managed rather than Terraform-managed on purpose: the
 # provisioning call returns a connection string containing a password, and a
 # Terraform-managed Neon resource would write that password into state
@@ -20,7 +23,46 @@ REGION="${NEON_REGION:-aws-ap-southeast-1}"
 PROJECT_NAME="gogo-${ENVIRONMENT}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-: "${NEON_API_KEY:?set NEON_API_KEY}"
+
+# This script PROVISIONS. It creates a new Neon project and overwrites
+# database/url in SSM. If that parameter already holds a working value —
+# because the resource was created by hand in the console — running this leaves
+# an orphaned project still billing, and points the environment at an
+# empty one.
+#
+# So: refuse, and say which of the two situations the operator is in.
+guard_existing() {
+  local path="/gogo/${ENVIRONMENT}/backend/database/url"
+
+  command -v aws >/dev/null 2>&1 || return 0
+  aws sts get-caller-identity >/dev/null 2>&1 || return 0
+  aws ssm get-parameter --name "$path" >/dev/null 2>&1 || return 0
+
+  if [[ "${GOGO_PROVISION_ANYWAY:-}" == "1" ]]; then
+    echo "warning: ${path} already set; GOGO_PROVISION_ANYWAY=1 — creating a second Neon project anyway." >&2
+    return 0
+  fi
+
+  cat >&2 <<MSG
+error: ${path} is already set.
+
+  Nothing to do — the environment already points at a Neon project.
+
+  This script creates a NEW one and overwrites that parameter, which would
+  leave the existing project orphaned and still counting against the plan.
+
+  To change the value instead:
+    ./scripts/secrets/put.sh ${ENVIRONMENT} database/url
+
+  To provision a second one deliberately:
+    GOGO_PROVISION_ANYWAY=1 $0 ${ENVIRONMENT}
+MSG
+  return 1
+}
+
+guard_existing
+
+: "${NEON_API_KEY:?set NEON_API_KEY — create one at https://console.neon.tech under Account settings → API keys}"
 command -v jq >/dev/null || { echo "jq required" >&2; exit 1; }
 
 echo "==> Creating Neon project ${PROJECT_NAME} in ${REGION}"

@@ -1,0 +1,14 @@
+{
+  // Local development only. Deployment is Terraform's job
+  // (terraform/modules/cloudflare-worker) — a Worker wired up through the
+  // dashboard or a stray `wrangler deploy` is configuration that exists in one
+  // place and no repository, which is the drift this repo exists to prevent.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gogo-share-link-dev",
+  "main": "src/index.js",
+  "compatibility_date": "2026-01-01",
+  "vars": {
+    "API_ORIGIN": "http://localhost:3000",
+    "TENJIN_TRACKING_TEMPLATE": ""
+  }
+}

@@ -12,7 +12,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 ENVIRONMENT="${1:-}"
 PARAM_PATH="${2:-}"
 
-require_env_arg "$ENVIRONMENT"
+require_env_arg "$ENVIRONMENT" allow-ci
 [[ -n "$PARAM_PATH" ]] || die "usage: delete.sh <env> <path>"
 require_aws
 

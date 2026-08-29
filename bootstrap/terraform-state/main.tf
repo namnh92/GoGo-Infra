@@ -15,9 +15,13 @@ terraform {
   }
 }
 
-provider "cloudflare" {
-  api_token = var.cloudflare_api_token
-}
+# The token comes from CLOUDFLARE_API_TOKEN, which the provider reads natively.
+#
+# It used to be a TF_VAR_ variable here while terraform/environments/* relied on
+# the native variable. Two names for one credential is how a token gets loaded,
+# reported as loaded, and still produce unauthenticated requests — the provider
+# was simply reading a variable nothing set.
+provider "cloudflare" {}
 
 resource "cloudflare_r2_bucket" "terraform_state" {
   account_id = var.cloudflare_account_id

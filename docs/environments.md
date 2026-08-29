@@ -53,10 +53,114 @@ BullMQ needs a TCP connection and blocking commands. The Upstash REST API cannot
 Even on TCP, a blocking consumer polls continuously, so the command budget — not the storage
 limit — is what runs out first.
 
-Before treating Upstash as the dev queue backend, run the worker under normal dev load for a
-day, read the command count from the console, and record the decision here: either Upstash for
-everything, or Upstash for cache and rate limiting with a local Redis container for the worker.
-Wire the quota alert as part of INF-019 either way.
+**Verified (29/08/2026):** Upstash accepts blocking commands on the TCP endpoint. `PING` and
+`BLPOP` both succeed against the dev database with `rediss://`, which was the open question —
+a plan can allow `PING` while refusing `BLPOP`, and BullMQ needs the second. Checked by
+`scripts/bootstrap/validate-services.sh`, so it stays checked rather than being remembered.
+
+Still open: the command budget. A blocking consumer polls continuously, so what runs out first
+is commands per month, not storage. Run the worker under normal dev load for a day and record
+the number here.
+
+**Decided (29/08/2026): Upstash stays.** Postgres does not substitute for it — Redis carries
+BullMQ, rate limiting, caching and idempotency, and Neon covers none of those.
+
+The command budget is still the open part, not the choice of provider. Run the worker under
+normal dev load for a day, read the command count from the console, and record it here. If a
+blocking consumer turns out to burn the free tier, the fallback is Upstash for cache and rate
+limiting with a local Redis container for the worker — the connection string is the only thing
+that changes. Wire the quota alert as part of INF-019 either way.
+
+## One Cloudflare zone, two environments
+
+`gogo.id.vn` is a single zone and both environments point at it. A Cloudflare token scoped to a
+zone can edit **every** record in that zone, so separating dev from prod in SSM and in IAM does
+not separate them at the provider — a dev apply can move a production hostname.
+
+What contains it today is `dns_record_suffix`: the dev configuration rejects any record that does
+not end in `dev.gogo.id.vn`, and the check runs at plan time. That is a guardrail in this
+repository, not a permission. It stops a mistake; it would not stop someone who edits the
+configuration.
+
+Before the first production DNS record exists, pick one:
+
+1. Delegate `dev.gogo.id.vn` as its own zone and give the dev token only that zone.
+2. Remove DNS write permission from the dev token; production records change from the prod
+   workflow only.
+3. Accept it in writing, with the reasoning, in an ADR.
+
+Deciding after production records exist means deciding during an incident.
+
+## Watching the free tiers
+
+`scripts/ops/check-cf-token-scopes.sh <env>` (or `make cf-scopes`) probes one endpoint per thing
+Terraform touches and prints the Cloudflare permission to add for each failure. Run it when a
+plan or apply returns 403: the provider names the URL, not the missing scope, so a permission gap
+reads as an authentication failure and sends you to look at the wrong thing.
+
+It also asserts the read token holds **no** Edit grant. The read token is what `terraform plan`
+runs as, on pull requests, from branches nobody has reviewed yet. Read means read. A write grant
+added there because "plan needed to see the resource" turns every PR into a job that can change
+infrastructure, and a green plan would look exactly the same. `make cf-scopes` is the source of
+truth for what each token should hold.
+
+Write grants are established without writing anything, where the API allows it: a DELETE against
+a resource that does not exist, or a POST with a body that cannot describe anything. Both rely on
+Cloudflare answering 403 before it looks at what was asked for. Where neither works the column
+says "reachable", not "ok" — a token that reads an API can still be refused on write, so an apply
+can fail where a plan passes.
+
+`scripts/ops/check-quotas.sh <env>` reports how close each service is to its limit, and exits
+non-zero when something is over.
+
+Free tiers do not degrade, they stop. Upstash stops accepting commands and the queue goes quiet —
+no error, no log, jobs that never run. The first thing that notices is a person asking why they
+got no notification.
+
+The Redis line is an estimate, not a meter, and the script says so. The command counter Upstash
+exposes over the Redis protocol is per connection, not per month, so it cannot answer the question
+that matters. The estimate is arithmetic on the configured poll intervals, which is both the thing
+under our control and the thing that spends the budget.
+
+Two checks report `unknown` on purpose: Neon compute hours and Google quota need API keys this
+repository does not store. Reporting a reassuring `ok` for a check that never ran is worse than
+having no check — and an unknown does not set the exit code, because a job that fails every day
+over a missing API key is a job nobody reads by the end of the week, taking the breach it was
+meant to catch with it.
+
+### What it found on the first run
+
+At the shipped defaults — both schedulers at 5s — the estimate was **207,360 commands a day
+against a free tier of roughly 16,667**. Twelve times over, before a single job existed.
+
+DEV is now set to:
+
+| Parameter | Value | Effect |
+| --- | --- | --- |
+| `worker/outbox-poll-ms` | 60000 | notifications dispatch within a minute |
+| `worker/ingest-poll-ms` | 300000 | place-import chunks advance every five minutes |
+
+That lands at ~10,368 commands a day. Both schedulers at 60s would still be over, which is worth
+knowing before someone tightens the ingest interval for convenience: the budget only works because
+ingest is slow.
+
+Production leaves both unset and keeps the 5s default — it runs Redis with an SLA and is not
+metered this way.
+
+### Running it on a schedule needs a decision first
+
+The script reads runtime secrets (`/gogo/<env>/backend/*`) **and** a CI credential (the Cloudflare
+token, for R2 usage). No current role holds both, deliberately: ADR 0001 separates pipeline
+credentials from application credentials, and a role that reads both would undo that separation
+for the sake of a cron job.
+
+Options, none taken yet:
+
+1. Two jobs, two roles — the runtime half under the deploy role, the R2 half under the apply role.
+2. A read-only monitoring role scoped to exactly the parameters this script reads.
+3. Keep it manual until there is a reason to automate.
+
+Widening an existing role is the one option to avoid, because it is invisible afterwards.
 
 ## Terraform state
 

@@ -13,14 +13,17 @@ data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
 locals {
-  # Deliberately narrow: /gogo/<env>/backend/*, never /gogo/*.
-  # A deploy role for prod must not be able to read dev, and vice versa (INF-006).
-  parameter_path_arn = "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/gogo/${var.environment}/backend/*"
+  # Paths are given relative to /gogo/ and expanded to full ARNs here, so a
+  # caller cannot accidentally write a policy against a bare wildcard.
+  parameter_arns = [
+    for path in var.parameter_paths :
+    "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/gogo/${path}"
+  ]
 }
 
 data "aws_iam_policy_document" "read" {
   statement {
-    sid    = "ReadEnvironmentParameters"
+    sid    = "ReadScopedParameters"
     effect = "Allow"
 
     actions = [
@@ -29,15 +32,14 @@ data "aws_iam_policy_document" "read" {
       "ssm:GetParametersByPath",
     ]
 
-    resources = [local.parameter_path_arn]
+    resources = local.parameter_arns
   }
 
-  # SecureString values are encrypted with the account default SSM key unless a
-  # CMK is supplied; decrypt must be scoped to SSM usage only.
+  # SecureString decryption is scoped to SSM usage so the key cannot be used to
+  # decrypt anything else in the account.
   statement {
-    sid    = "DecryptSecureStrings"
-    effect = "Allow"
-
+    sid       = "DecryptSecureStrings"
+    effect    = "Allow"
     actions   = ["kms:Decrypt"]
     resources = [var.kms_key_arn]
 
@@ -49,49 +51,9 @@ data "aws_iam_policy_document" "read" {
   }
 }
 
-data "aws_iam_policy_document" "write" {
-  count = var.create_write_policy ? 1 : 0
-
-  statement {
-    sid    = "WriteEnvironmentParameters"
-    effect = "Allow"
-
-    actions = [
-      "ssm:PutParameter",
-      "ssm:DeleteParameter",
-      "ssm:AddTagsToResource",
-      "ssm:DescribeParameters",
-    ]
-
-    resources = [local.parameter_path_arn]
-  }
-
-  statement {
-    sid       = "EncryptSecureStrings"
-    effect    = "Allow"
-    actions   = ["kms:Encrypt", "kms:Decrypt", "kms:GenerateDataKey"]
-    resources = [var.kms_key_arn]
-
-    condition {
-      test     = "StringEquals"
-      variable = "kms:ViaService"
-      values   = ["ssm.${data.aws_region.current.name}.amazonaws.com"]
-    }
-  }
-}
-
 resource "aws_iam_policy" "read" {
-  name        = "${var.name_prefix}-ssm-read"
-  description = "Read /gogo/${var.environment}/backend/* parameters"
+  name        = "${var.name}-ssm-read"
+  description = var.description
   policy      = data.aws_iam_policy_document.read.json
-  tags        = var.tags
-}
-
-resource "aws_iam_policy" "write" {
-  count = var.create_write_policy ? 1 : 0
-
-  name        = "${var.name_prefix}-ssm-write"
-  description = "Write /gogo/${var.environment}/backend/* parameters (secret bootstrap operators only)"
-  policy      = data.aws_iam_policy_document.write[0].json
   tags        = var.tags
 }

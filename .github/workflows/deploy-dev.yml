@@ -1,0 +1,95 @@
+name: deploy-dev
+
+# Deploys GoGo-BE to the dev VPS.
+#
+# The VPS currently serves dev only; production will get its own, larger host
+# later. So this is the deploy that actually runs today, and
+# deploy-production.yml is the shape it will take when that host exists.
+#
+# Dispatch-only on purpose: a dev API that redeploys on every push to develop
+# would be unusable for the Mobile and CMS developers pointing at it, because it
+# would restart under them several times an hour.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_ref:
+        description: GoGo-BE ref to deploy
+        required: true
+        default: develop
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: gogo-deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy backend to the dev VPS
+    runs-on: ubuntu-latest
+    environment: dev
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_DEV_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: verify secrets match the manifest
+        run: ./scripts/secrets/validate.sh dev
+
+      - name: render env file
+        run: ./scripts/deploy/render-env.sh dev "${RUNNER_TEMP}/gogo.env"
+
+      - name: fetch deploy key
+        run: |
+          set -euo pipefail
+          install -m 600 /dev/null "${RUNNER_TEMP}/deploy_key"
+          aws ssm get-parameter --name /gogo/ci/dev/deploy/ssh-private-key \
+            --with-decryption --query 'Parameter.Value' --output text \
+            > "${RUNNER_TEMP}/deploy_key"
+
+      - name: deploy
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+          COMPOSE_EDGE: docker/docker-compose.edge-tunnel.yml
+          REMOTE_ENV_FILE: .env.dev
+          KNOWN_HOSTS_FILE: config/known_hosts.dev
+          SSH_KEY_FILE: ${{ runner.temp }}/deploy_key
+        run: ./scripts/deploy/deploy-vps.sh "${{ inputs.release_ref }}" "${RUNNER_TEMP}/gogo.env"
+
+      - name: health check
+        env:
+          HEALTH_URL: ${{ vars.HEALTH_URL_DEV }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 10); do
+            if curl -fsS --max-time 10 "$HEALTH_URL" >/dev/null; then
+              echo "healthy after ${attempt} attempt(s)"
+              exit 0
+            fi
+            sleep 6
+          done
+          echo "health check failed" >&2
+          exit 1
+
+      # No automatic rollback here. On dev, a broken deploy is information —
+      # rolling it back silently would hide the thing the developer is trying to
+      # see, and there is no traffic to protect.
+      - name: rollback hint
+        if: failure()
+        run: |
+          echo "Deploy failed. To go back:" >&2
+          echo "  ./scripts/deploy/rollback.sh" >&2
+
+      - name: shred temporary credentials
+        if: always()
+        run: shred -u "${RUNNER_TEMP}/gogo.env" "${RUNNER_TEMP}/deploy_key" 2>/dev/null || true

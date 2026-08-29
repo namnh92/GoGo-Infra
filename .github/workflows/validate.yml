@@ -42,6 +42,11 @@ jobs:
           tflint_version: latest
 
       - name: tflint
+        env:
+          # --recursive changes into each directory and looks for .tflint.hcl
+          # beside the files it is linting, so the root config was being ignored
+          # and its rule settings had no effect.
+          TFLINT_CONFIG_FILE: ${{ github.workspace }}/.tflint.hcl
         run: |
           tflint --init
           tflint --recursive
@@ -54,10 +59,52 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: gitleaks/gitleaks-action@v2
+      # Not gitleaks/gitleaks-action. On a pull_request event that action calls
+      # GET /repos/{o}/{r}/pulls/{n}/commits, which this workflow's token cannot
+      # do under `permissions: contents: read`; it crashed with 403 "Resource
+      # not accessible by integration" on every PR while passing on pushes to
+      # develop, so the scan looked healthy and covered nothing on the branch
+      # where it matters.
+      #
+      # Widening the token to pull-requests: read would fix the symptom and buy
+      # the API call, the rate limit and the deprecated runtime with it. The
+      # binary needs no token at all, and runs the identical command to
+      # `make scan`, so a clean local run means a clean CI run.
+      - name: install gitleaks
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_CONFIG: .gitleaks.toml
+          GITLEAKS_VERSION: 8.18.4
+          # Verified, not trusted. Pinning a version without checking the bytes
+          # means CI runs whatever arrives at that URL.
+          GITLEAKS_SHA256: ba6dbb656933921c775ee5a2d1c13a91046e7952e9d919f9bac4cec61d628e7d
+        run: |
+          set -euo pipefail
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+
+          # The first run of this step died on `curl: (35) Recv failure:
+          # Connection reset by peer` against a URL that was correct and
+          # reachable — a transient reset on the release-asset redirect. Without
+          # retries that is a red build on an unrelated PR, and the habit of
+          # re-running until green is how a real failure gets waved through.
+          # Six attempts over ~15s was not enough for a GitHub incident: the
+          # release endpoint returned 504 to every one of them, and the same
+          # outage was timing out API calls elsewhere at that minute. Two
+          # minutes of retries rides out a blip without pretending it can ride
+          # out an outage.
+          curl -sSfL --connect-timeout 10 --retry 8 --retry-delay 10 \
+            --retry-max-time 120 --retry-all-errors -o /tmp/gitleaks.tar.gz "$url"
+
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo install /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      # Runs before the scan: an allowlist edit that quietly disables a rule
+      # would otherwise show up as a clean scan.
+      - name: gitleaks rules still catch real credentials
+        run: ./scripts/ci/gitleaks-rules.test.sh
+
+      - name: gitleaks
+        run: make scan
 
   scripts:
     name: shellcheck
@@ -65,10 +112,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # A comment starting with "# shellcheck" is parsed as a directive whatever
+      # follows, so a sentence beginning with that word becomes SC1072 and turns
+      # a warning-level run into a hard error. Caught here because the message
+      # points at the comment, not at what it was explaining.
+      - name: no prose masquerading as a shellcheck directive
+        run: |
+          if grep -rnE '^[[:space:]]*# shellcheck ' scripts/ \
+             | grep -vE '# shellcheck (disable|source|shell|enable)='; then
+            echo "Comment above starts with '# shellcheck' but is not a directive." >&2
+            exit 1
+          fi
+          echo "ok"
+
       - name: shellcheck
         run: |
           sudo apt-get update -qq && sudo apt-get install -y shellcheck
-          shellcheck -x scripts/**/*.sh
+          # info-level notes (SC1091 on sourced files) must not fail CI
+          shellcheck -x --severity=warning scripts/*/*.sh
+
+      # The tfvars parser is regression-tested because its previous version
+      # failed silently on BSD userlands and returned the whole line, which made
+      # an empty required field look populated.
+      - name: tfvars parser tests
+        run: ./scripts/lib/config.test.sh
+
+      # INF-024 acceptance is "no automation depends on OAuth". That was prose
+      # in docs/accounts.md until this step; prose does not survive the next
+      # person in a hurry.
+      - name: CI authenticates as a machine, not a person
+        run: |
+          ./scripts/ci/check-workflow-auth.test.sh
+          ./scripts/ci/check-workflow-auth.sh
 
       - name: manifest parses
         run: |
@@ -76,3 +151,26 @@ jobs:
             python3 scripts/lib/manifest.py "$env" >/dev/null
             echo "${env}: $(python3 scripts/lib/manifest.py "$env" --required | wc -l) required parameters"
           done
+
+      # pull_request_target runs the base branch's workflow with full privileges
+      # against the pull request's code. With OIDC credentials in reach, that is
+      # a direct path from an unreviewed change to production secrets.
+      - name: no pull_request_target in privileged workflows
+        run: |
+          # Match the YAML trigger key, not the word. Searching for the bare
+          # string made this step fail on its own source — the check reported a
+          # violation that was only its own description of the violation.
+          if grep -rnE '^[[:space:]]*pull_request_target:' .github/workflows/; then
+            echo "pull_request_target is forbidden in this repository" >&2
+            exit 1
+          fi
+          echo "ok: no pull_request_target trigger"
+
+      - name: no committed secret values in config
+        run: |
+          set -euo pipefail
+          if grep -rnE '(secret|token|password|key)[[:space:]]*=[[:space:]]*"[^"]{12,}"' config/*.tfvars; then
+            echo "config/*.tfvars must contain only non-secret values" >&2
+            exit 1
+          fi
+          echo "ok: config holds no secret-looking values"

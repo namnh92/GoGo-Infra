@@ -18,8 +18,10 @@ terraform {
 provider "aws" {
   region = var.aws_region
 
+  # Every AWS resource in this environment inherits the standard tag set, so a
+  # bill or an audit can be split by environment without guessing from names.
   default_tags {
-    tags = local.tags
+    tags = module.tags.tags
   }
 }
 

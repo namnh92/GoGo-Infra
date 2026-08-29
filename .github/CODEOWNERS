@@ -1,0 +1,13 @@
+# Review here is a security control, not a convention.
+#
+# Workflows assume AWS roles through OIDC and read secrets from SSM, so whoever
+# can change a workflow on a trusted ref can read whatever that role can read.
+# The same applies to the IAM and secret-handling code. See docs/adr/0001.
+
+.github/workflows/    @namnh92
+.github/CODEOWNERS    @namnh92
+terraform/            @namnh92
+bootstrap/            @namnh92
+scripts/secrets/      @namnh92
+scripts/deploy/       @namnh92
+secrets.manifest.yaml @namnh92

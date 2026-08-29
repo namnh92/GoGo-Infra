@@ -24,6 +24,19 @@ resource "cloudflare_r2_bucket" "this" {
 # Guarded by a flag because lifecycle management moved between provider
 # versions; when disabled, run scripts/bootstrap/r2-lifecycle.sh which applies
 # the same rules through the S3-compatible API.
+# The API returns lifecycle rules ordered by id, while `rules` is a list, so
+# declaring them in any other order produces a diff on every single plan — the
+# two rules swapping places forever. A permanent diff is worse than cosmetic: it
+# trains everyone to skim past plan output, which is where a real change would
+# have been noticed.
+locals {
+  lifecycle_rules_by_id = { for rule in var.lifecycle_rules : rule.id => rule }
+
+  sorted_lifecycle_rules = [
+    for id in sort(keys(local.lifecycle_rules_by_id)) : local.lifecycle_rules_by_id[id]
+  ]
+}
+
 resource "cloudflare_r2_bucket_lifecycle" "this" {
   count = var.manage_lifecycle ? 1 : 0
 
@@ -31,7 +44,7 @@ resource "cloudflare_r2_bucket_lifecycle" "this" {
   bucket_name = cloudflare_r2_bucket.this.name
 
   rules = [
-    for rule in var.lifecycle_rules : {
+    for rule in local.sorted_lifecycle_rules : {
       id      = rule.id
       enabled = true
 

@@ -15,7 +15,7 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-MANIFEST = os.path.join(ROOT, "secrets.manifest.yaml")
+MANIFEST = os.path.join(ROOT, "config", "secrets.manifest.yml")
 
 FIELD = re.compile(r"^\s{4}([a-z_]+):\s*(.*)$")
 ITEM = re.compile(r"^\s{2}-\s+([a-z_]+):\s*(.*)$")

@@ -1,6 +1,7 @@
 SHELL := /bin/bash
 ENV ?= dev
 TF_DIR := terraform/environments/$(ENV)
+TF_VARS := -var-file=../../../config/global.tfvars -var-file=../../../config/$(ENV).tfvars
 
 .DEFAULT_GOAL := help
 
@@ -37,14 +38,28 @@ scan: ## Run gitleaks over the working tree
 
 .PHONY: plan
 plan: ## terraform plan for $(ENV)
-	terraform -chdir=$(TF_DIR) plan -input=false
+	terraform -chdir=$(TF_DIR) plan -input=false $(TF_VARS)
 
 .PHONY: apply
 apply: ## terraform apply for $(ENV) — prefer the CI workflow for prod
-	terraform -chdir=$(TF_DIR) apply -input=false
+	terraform -chdir=$(TF_DIR) apply -input=false $(TF_VARS)
+
+.PHONY: test
+test: ## Run the shell unit tests
+	./scripts/lib/config.test.sh
+	./scripts/ci/check-workflow-auth.test.sh
+	./scripts/ci/gitleaks-rules.test.sh
+
+.PHONY: check-workflow-auth
+check-workflow-auth: ## Assert CI authenticates as a machine, never as a person (INF-024)
+	./scripts/ci/check-workflow-auth.sh
 
 .PHONY: check
-check: fmt-check validate lint scan ## Everything CI runs before plan
+check: fmt-check validate lint scan test check-workflow-auth ## Everything CI runs before plan
+
+.PHONY: cf-scopes
+cf-scopes: ## Probe what the Cloudflare CI tokens can reach for $(ENV)
+	./scripts/ops/check-cf-token-scopes.sh $(ENV)
 
 .PHONY: secrets-list
 secrets-list: ## List SSM parameter names for $(ENV) (names only, no values)

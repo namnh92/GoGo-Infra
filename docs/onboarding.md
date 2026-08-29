@@ -10,6 +10,13 @@ Ask an infrastructure owner for:
 - Cloudflare account membership
 - GitHub access to `namnh92/GoGo-Infra`
 
+Every SaaS provider console (Neon, Upstash, Cloudflare, OneSignal, Tenjin) is signed in with
+**GitHub OAuth**, which makes the GitHub account the root of trust for all of them. Hardware or
+TOTP MFA on GitHub is mandatory before you are given access, and recovery codes must be stored
+off the laptop holding the session. Read [`accounts.md`](accounts.md) before touching a console.
+
+Automation never uses OAuth. Scripts and workflows use scoped API tokens stored in SSM.
+
 ## 2. Tools
 
 ```bash
@@ -20,11 +27,31 @@ tfenv use "$(cat .terraform-version)"
 
 ## 3. Verify
 
+There is no default AWS profile, so every command needs the named one:
+
+```bash
+export AWS_PROFILE=gogo-bootstrap
+aws sso login --profile gogo-bootstrap
+```
+
+Put the export in your shell profile. Without it the scripts report "not
+authenticated" while a perfectly good session sits in the SSO cache — the
+scripts now say so, but it is still a wasted minute each time.
+
 ```bash
 aws sts get-caller-identity     # you are authenticated
 make check                      # fmt + validate + tflint + gitleaks
 make secrets-validate ENV=dev   # SSM matches the manifest
 ```
+
+Terraform runs that touch Cloudflare need the provider's own variable:
+
+```bash
+export CLOUDFLARE_API_TOKEN='...'
+```
+
+That is the only name this repository uses for it. `TF_VAR_cloudflare_api_token` is accepted by
+the bootstrap scripts as a bridge and warns.
 
 ## 4. Start developing GoGo-BE
 

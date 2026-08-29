@@ -3,6 +3,43 @@
 AWS SSM Parameter Store is the source of truth. Not `terraform.tfstate`, not the repository,
 not a committed `.env`.
 
+## Two namespaces
+
+`/gogo/ci/*` holds the credentials that drive the pipeline. `/gogo/<env>/backend/*` holds what
+the application reads at runtime. A role with access to one has no access to the other unless
+an ADR says why.
+
+```
+/gogo/ci/<env>/terraform/read/    read-only  — assumable from a pull request
+├── cloudflare-token
+├── r2-state-access-key-id
+└── r2-state-secret-access-key
+
+/gogo/ci/<env>/terraform/write/   read-write — environment approval required
+├── cloudflare-token
+├── r2-state-access-key-id
+└── r2-state-secret-access-key
+
+/gogo/ci/<env>/deploy/
+└── ssh-private-key               the host key is pinned in config/known_hosts.<env>
+
+/gogo/ci/<env>/sentry/
+├── auth-token                    backend release upload
+└── mobile-auth-token             mobile source-map upload, separate on purpose
+```
+
+Two dimensions, both required:
+
+- **By environment** — a dev apply must not hold a credential that can touch production. SSM
+  namespaces alone are not enough; the provider tokens themselves are scoped per environment.
+- **By privilege** — read and write are separate **sub-paths**, not sibling names. A policy
+  granting `terraform/*` would cover both, and `GetParametersByPath` on that prefix returns
+  both, which is exactly what the pull-request threat model forbids. Sub-paths also mean a
+  parameter added later inherits the permission its location implies.
+
+The plan workflow runs on `pull_request`, so anything it can read is readable by anyone who can
+open a pull request — see `docs/adr/0001`.
+
 ## Layout
 
 ```
@@ -11,8 +48,8 @@ not a committed `.env`.
 /gogo/<env>/backend/r2/{endpoint,bucket,access-key-id,secret-access-key}
 /gogo/<env>/backend/auth/{jwt-secret,refresh-secret}
 /gogo/<env>/backend/onesignal/{app-id,rest-api-key,identity-verification-key}
-/gogo/<env>/backend/tenjin/api-key
 /gogo/<env>/backend/google/{server-api-key,routes-api-key}
+/gogo/<env>/backend/observability/sentry-dsn
 ```
 
 `SecureString`, Standard tier. One parameter per independently permissioned value — a single
@@ -80,6 +117,16 @@ rotated at the provider — removing it from the latest revision changes nothing
 | Date | Credential | Reason | Rotated by | Notes |
 | --- | --- | --- | --- | --- |
 | _(pending INF-021)_ | APNs auth key `AuthKey_*.p8` | Key file present in the workspace next to the repos | | Upload to OneSignal, delete the local copy, confirm it never entered Git; if it did, revoke on Apple Developer and issue a new key |
+
+## The permissions boundary is not editable from CI
+
+Every IAM role GoGo-Infra creates carries `gogo-<env>-boundary`, and that boundary denies edits
+to itself. So `terraform apply` running in CI as the apply role **cannot change it**. Boundary
+changes go through `scripts/bootstrap/aws.sh` in an operator session.
+
+That is deliberate friction. A ceiling its occupant can rewrite is not a ceiling. An
+access-denied error in CI naming the boundary policy is the control working — apply that change
+from a bootstrap session rather than widening the policy to make CI green.
 
 ## Log redaction
 

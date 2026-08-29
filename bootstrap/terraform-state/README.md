@@ -5,12 +5,16 @@ Creates the private R2 bucket holding all Terraform state. Run once per account.
 ## Run
 
 ```bash
-export TF_VAR_cloudflare_api_token='...'      # R2 admin token, never committed
-export TF_VAR_cloudflare_account_id='...'
+export CLOUDFLARE_API_TOKEN='...'             # R2 admin token, never committed
+export TF_VAR_cloudflare_account_id='...'     # account id, not a secret
 
 terraform -chdir=bootstrap/terraform-state init
 terraform -chdir=bootstrap/terraform-state apply
 ```
+
+`CLOUDFLARE_API_TOKEN` is the variable the Cloudflare provider reads on its own, and it is the
+only name used anywhere in this repository. Prefer running `scripts/bootstrap/terraform-state.sh`,
+which verifies the token against the Cloudflare API before starting an apply.
 
 ## Then migrate this configuration's own state into the bucket
 
@@ -34,9 +38,22 @@ but a state file sitting on one laptop is a single point of failure. Migrate it:
 ## Locking
 
 The environment backends set `use_lockfile = true`, which uses S3 conditional writes
-(`If-None-Match`) rather than DynamoDB. **Verify this works against R2 before relying on it**
-— that verification is part of INF-002's acceptance. If conditional writes are not honoured,
-the fallback is:
+(`If-None-Match`) rather than DynamoDB.
+
+**Verified against R2 on 29/08/2026.** Two concurrent applies on dev: the second was refused with
+
+```
+Error acquiring the state lock
+StatusCode: 412 ... PreconditionFailed
+  ID:        ef654899-0777-92f4-7994-dd3e5b965e9c
+  Operation: OperationTypeApply
+```
+
+The 412 is R2 honouring the conditional write, which is the mechanism the lock depends on. Worth
+having tested rather than assumed: nothing about a missing lock is visible until two applies
+overlap, and by then the state is already wrong.
+
+If conditional writes ever stop being honoured, the fallback is:
 
 - CI is the only place that applies, serialized by
   `concurrency: { group: terraform-<env>, cancel-in-progress: false }`, and
