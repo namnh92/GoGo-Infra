@@ -94,7 +94,22 @@ elif [[ "$redis_url" == rediss://* || "$redis_url" == redis://* ]]; then
       redis_probe() { redis-cli -u "$redis_url" "$@"; }
     fi
 
-    if [[ "$(redis_probe PING 2>/dev/null)" == "PONG" ]]; then
+    redis_out="$(redis_probe PING 2>&1 || true)"
+    if [[ "$redis_out" != "PONG" ]]; then
+      # redis-cli explains itself: wrong password, TLS required, unknown host.
+      # "credentials or network" covers all three and helps with none.
+      redis_detail="$(printf '%s' "$redis_out" | grep -v '^[[:space:]]*$' | head -1 | cut -c1-140)"
+      case "$redis_out" in
+        *"Unrecognized option"*|*"unknown option"*)
+          redis_detail="redis-cli was built without TLS support — brew install redis (6.0+)" ;;
+        *WRONGPASS*|*"invalid password"*)
+          redis_detail="password rejected — the URL carries a stale password" ;;
+        *"Connection reset"*|*"I/O error"*)
+          redis_detail="connection reset — Upstash requires TLS, so the URL must be rediss:// not redis://" ;;
+      esac
+    fi
+
+    if [[ "$redis_out" == "PONG" ]]; then
       check "responds to PING" 1
       # BullMQ needs blocking commands. Upstash supports them on the TCP
       # endpoint but not on REST, and a plan can also restrict them.
@@ -104,7 +119,7 @@ elif [[ "$redis_url" == rediss://* || "$redis_url" == redis://* ]]; then
         check "blocking commands allowed (BullMQ)" 0 "(BLPOP rejected — BullMQ will not work)"
       fi
     else
-      check "responds to PING" 0 "(credentials or network)"
+      check "responds to PING" 0 "(${redis_detail:-no output from redis-cli})"
     fi
   else
     echo "  skip  PING (redis-cli not installed: brew install redis)"
@@ -206,9 +221,29 @@ onesignal_key="$(get onesignal/rest-api-key)"
 # An App ID is a UUID and a REST key is not. Both are opaque strings copied from
 # the same console page, so storing one where the other belongs is easy — and it
 # fails as "key rejected", which sends you to rotate a key that was never wrong.
-if [[ "$onesignal_key" =~ ^[0-9a-f-]{36}$ ]]; then
-  check "onesignal/rest-api-key is not a UUID" 0 \
-    "(it looks like an App ID — the REST key was probably pasted from the wrong field)"
+# OneSignal key formats are self-describing, so the stored value can be
+# classified without calling anything and without printing it. "Access denied"
+# from the API is the same message for every wrong key; the prefix says which
+# wrong key it is.
+if [[ -n "$onesignal_key" ]]; then
+  case "$onesignal_key" in
+    os_v2_org_*)
+      check "onesignal/rest-api-key is an app key" 0 \
+        "(prefix os_v2_org_ — this is the Organization API Key. It is account-wide and cannot send for one app; take the App API Key from Settings → Keys & IDs)" ;;
+    os_v2_app_*)
+      check "onesignal/rest-api-key is an app key" 1 ;;
+    *)
+      if [[ "$onesignal_key" =~ ^[0-9a-f-]{36}$ ]]; then
+        check "onesignal/rest-api-key is an app key" 0 \
+          "(a UUID — this is the App ID, pasted from the field above the key)"
+      elif [[ "${#onesignal_key}" -ge 40 ]]; then
+        # Legacy REST keys are ~48 characters of base64 with no prefix.
+        check "onesignal/rest-api-key is an app key" 1
+      else
+        check "onesignal/rest-api-key is an app key" 0 \
+          "(${#onesignal_key} chars starting '${onesignal_key:0:4}' — not an App ID, an app key, or a legacy REST key)"
+      fi ;;
+  esac
 fi
 
 if [[ -n "$onesignal_app" && -n "$onesignal_key" ]]; then
