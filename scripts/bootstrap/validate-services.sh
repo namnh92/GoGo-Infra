@@ -32,10 +32,16 @@ check() {
 }
 
 echo "==> Manifest"
-if "${REPO_ROOT}/scripts/secrets/validate.sh" "$ENVIRONMENT" >/dev/null 2>&1; then
+# Print the diff rather than pointing at another command. "Run this other thing
+# to find out" is the same unhelpful shape as reporting a failure with no
+# reason: the information exists, it is one variable away, and withholding it
+# costs a round trip every time.
+manifest_out="$("${REPO_ROOT}/scripts/secrets/validate.sh" "$ENVIRONMENT" 2>&1)" && manifest_ok=1 || manifest_ok=0
+if [[ "$manifest_ok" == "1" ]]; then
   check "secrets match secrets.manifest.yaml" 1
 else
-  check "secrets match secrets.manifest.yaml" 0 "(run scripts/secrets/validate.sh ${ENVIRONMENT})"
+  check "secrets match secrets.manifest.yaml" 0
+  printf '%s\n' "$manifest_out" | sed 's/^/        /'
 fi
 
 echo "==> PostgreSQL"

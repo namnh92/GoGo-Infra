@@ -19,16 +19,34 @@ PARAM_PATH="${2:-}"
 
 require_env_arg "$ENVIRONMENT" allow-ci
 [[ -n "$PARAM_PATH" ]] || die "usage: put.sh <env|ci> <path> [type]   e.g. put.sh dev database/url"
-require_aws
-
+# Path is validated before authenticating: a typo should not wait on an SSO
+# round trip to be reported.
 PARAM_TYPE="${3:-}"
 if [[ -z "$PARAM_TYPE" && "$ENVIRONMENT" != "ci" ]]; then
   PARAM_TYPE="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" | awk -F'\t' -v p="$PARAM_PATH" '$1 == p { print $3 }')"
   if [[ -z "$PARAM_TYPE" ]]; then
-    echo "warning: '${PARAM_PATH}' is not in secrets.manifest.yaml." >&2
-    echo "         Add it there first so validate.sh and GoGo-BE config validation stay in sync." >&2
+    # A typo in the path writes a parameter nothing reads, nothing validates and
+    # nobody rotates — while the real one stays empty and the application fails
+    # somewhere else entirely. Confirm rather than warn-and-write.
+    echo "'${PARAM_PATH}' is not declared in config/secrets.manifest.yml." >&2
+    echo >&2
+    echo "Declared paths for ${ENVIRONMENT}:" >&2
+    python3 "$MANIFEST_READER" "$ENVIRONMENT" | cut -f1 | sed 's/^/  /' >&2
+    echo >&2
+
+    if [[ "${GOGO_ALLOW_UNDECLARED:-}" != "1" ]]; then
+      if [[ -t 0 ]]; then
+        read -r -p "Write it anyway? Type 'yes' to continue: " answer
+        [[ "$answer" == "yes" ]] || die "aborted"
+      else
+        die "refusing to write an undeclared parameter non-interactively.
+       Add it to config/secrets.manifest.yml, or set GOGO_ALLOW_UNDECLARED=1."
+      fi
+    fi
   fi
 fi
+require_aws
+
 PARAM_TYPE="${PARAM_TYPE:-SecureString}"
 
 case "$PARAM_TYPE" in
