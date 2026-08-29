@@ -78,7 +78,8 @@ Free tiers are a development convenience, never a production SLA.
   are a Team feature and this account is on Pro, so the gate is a human starting the run rather
   than a human approving it. See [`docs/adr/0002`](docs/adr/0002-no-approval-gate-on-this-plan.md).
 - `master` and `develop` are protected: CI must pass, no force push, no deletion. `master`
-  additionally requires a pull request with CODEOWNER review.
+  additionally requires a pull request, with no approving review — a deliberate choice at one
+  committer, and the first thing to revisit at two.
 - A credential that was ever committed gets rotated, not deleted.
 - Provider consoles are GitHub OAuth logins, so the GitHub account is the root of trust for the
   database, queue, storage, push and attribution providers. MFA is mandatory; automation uses

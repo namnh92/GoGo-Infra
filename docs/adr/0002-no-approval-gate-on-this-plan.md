@@ -1,6 +1,6 @@
 # ADR 0002 — The approval gate does not exist on this plan
 
-**Status:** partially resolved 29/08/2026 — see "After the plan upgrade"
+**Status:** accepted — no approval gate, by decision rather than by billing
 **Date:** 2026-08-29
 **Issues:** INF-016, INF-027
 
@@ -63,24 +63,34 @@ The account moved to a paid plan the same day. Half the gap closed.
 | Required status checks | shellcheck, gitleaks, terraform fmt/validate/tflint | same |
 | Strict (branch must be current) | yes | yes |
 | Pull request required | no | yes |
-| CODEOWNER review | — | yes |
+| Approving reviews | — | 0 |
+| CODEOWNER review | — | no |
 | Force push / deletion | blocked | blocked |
 | Linear history | — | required |
 
-So `.github/CODEOWNERS` stops being advisory for `master`, which is what ADR 0001 needs: with
-OIDC-to-SSM the workflow file is the authorization boundary, and review on it is a security
-control.
+**Required reviewers on environments still fails**, with the same 422 — that rule is a Team
+feature, not a Pro one.
 
-**Required reviewers on environments still fails**, with the same 422. That protection rule is a
-Team feature, not a Pro one. So the production approval gate does not exist yet and
-`terraform-apply-prod` stays dispatch-only.
+**Approval was then dropped as a requirement, deliberately.** Not because it is unavailable, but
+because it was decided it is not needed at this size. `master` still requires a pull request, so
+every change reaches a diff with CI running on it; it requires zero approving reviews and no
+CODEOWNER review.
 
-`enforce_admins` is **false** on both branches, deliberately. With one committer, a rule that
-admins cannot bypass and a review requirement nobody can satisfy — GitHub does not let an author
-approve their own pull request — would mean nothing can ever merge. The rules are real for
-anyone who is not an admin, and honest about being bypassable by the one person who is. That
-stops being an acceptable shape the moment a second person has push access, which is already the
-revisit trigger below.
+What that costs, stated plainly rather than left implied: ADR 0001 argues that OIDC-to-SSM makes
+`.github/workflows/**` an authorization boundary, and review on it a security control. With
+approvals at zero, `.github/CODEOWNERS` is documentation again. Anyone who can open and merge a
+pull request can change what the apply and deploy roles reach.
+
+What still contains it: the permissions boundary, the split between read-only plan credentials
+and write-capable apply credentials, path-scoped SSM policies, and CI checks that reject
+`pull_request_target` and secret-shaped values in config. None of those depend on a human
+looking.
+
+`enforce_admins` is **false** on both branches. The rules bind anyone who is not an admin and
+are honest about not binding the one person who is.
+
+Both of these — no approvals, admins exempt — are reasonable for a single committer and stop
+being reasonable at two. That is the revisit trigger below, and it is the same one.
 
 ## Options to close it
 
