@@ -1,21 +1,28 @@
 # Architecture
 
-## Development
+## Local is a workstation, not an environment
 
 ```text
-LOCAL                                REMOTE MANAGED SERVICES
-──────────────────────────           ────────────────────────────
-React Native (Expo Dev Client)  ───▶  Neon PostgreSQL + PostGIS
-GoGo-BE (api + worker)          ───▶  Upstash Redis
-CMS FE (only when needed)       ───▶  Cloudflare R2
-                                ───▶  AWS SSM Parameter Store
-                                ───▶  OneSignal · Tenjin · Google Maps Platform
+DEVELOPER MACHINE              REMOTE DEV ENVIRONMENT
+─────────────────────          ──────────────────────────────
+IDE                            api  · worker · migrate
+GoGo-MobileApp          ───▶   Neon PostgreSQL + PostGIS
+GoGo-CMS                       Upstash Redis (TCP/TLS)
+Metro / browser                Cloudflare R2
+                               OneSignal · Tenjin · Google Maps
 ```
 
-A developer runs application processes only. No PostgreSQL, PostGIS, Redis, MinIO or worker
-infrastructure container is required (`GOGO_SRS.md` acceptance #14). The Docker Compose
-`full-local` profile stays available for offline work, infrastructure debugging and CI
-integration tests.
+The default workflow is: start the mobile app or the CMS, point it at the remote DEV endpoint,
+develop. Nothing else runs on the machine — not the API, not the worker, not a database
+(`GOGO_SRS.md` acceptance #14).
+
+Running GoGo-BE locally against the remote DEV services is supported for debugging, and is
+documented as exactly that: an option, not the architecture. The moment it becomes a
+prerequisite, DEV has quietly moved back onto laptops and stopped being reproducible.
+
+DEV, STAGING and PROD are all remote and share one runtime contract — same image, same migration
+model, same environment variables. Moving between them changes resource size, plan, credentials
+and domain. It does not change the architecture.
 
 ## Production
 
