@@ -29,7 +29,28 @@ require_env_arg() {
 
 require_aws() {
   command -v aws >/dev/null 2>&1 || die "aws CLI not found. Install it, then authenticate to the GoGo AWS account."
-  aws sts get-caller-identity >/dev/null 2>&1 || die "not authenticated to AWS. Run your SSO/assume-role login first."
+
+  aws sts get-caller-identity >/dev/null 2>&1 && return 0
+
+  # "Not authenticated" is true and unhelpful when the real problem is that the
+  # session exists under a named profile and AWS_PROFILE is not set. That is the
+  # usual case here — there is no default profile — and the message sent people
+  # to re-run a login they had already done.
+  local profiles=""
+  if [[ -z "${AWS_PROFILE:-}" && -f "${HOME}/.aws/config" ]]; then
+    profiles="$(sed -nE 's/^\[profile ([^]]+)\]$/\1/p' "${HOME}/.aws/config" | tr '\n' ' ')"
+  fi
+
+  if [[ -n "$profiles" ]]; then
+    die "not authenticated to AWS, and AWS_PROFILE is not set.
+
+       Configured profiles: ${profiles}
+
+         export AWS_PROFILE=${profiles%% *}
+         aws sso login --profile ${profiles%% *}   # if the session has expired"
+  fi
+
+  die "not authenticated to AWS. Run your SSO or assume-role login first."
 }
 
 ssm_prefix() {

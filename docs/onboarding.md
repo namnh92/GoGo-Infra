@@ -27,6 +27,17 @@ tfenv use "$(cat .terraform-version)"
 
 ## 3. Verify
 
+There is no default AWS profile, so every command needs the named one:
+
+```bash
+export AWS_PROFILE=gogo-bootstrap
+aws sso login --profile gogo-bootstrap
+```
+
+Put the export in your shell profile. Without it the scripts report "not
+authenticated" while a perfectly good session sits in the SSO cache — the
+scripts now say so, but it is still a wasted minute each time.
+
 ```bash
 aws sts get-caller-identity     # you are authenticated
 make check                      # fmt + validate + tflint + gitleaks
