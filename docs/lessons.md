@@ -386,3 +386,56 @@ credentials; exporting them would replace the AWS session the rest of the script
 environment. Without `UNSUFFIXED_VALUES_BELONG_TO`, a later `setup-env.sh prod` would copy the dev
 OneSignal App ID into the prod namespace, and the first sign would be a production push arriving
 on a development handset.
+
+## Checks that pass without checking
+
+**Turn the acceptance sentence into a test.** `docs/accounts.md` claimed "no automation depends
+on OAuth" for weeks. It happened to be true, but only because nobody had broken it — nothing
+would have noticed the first personal access token added to a workflow.
+`scripts/ci/check-workflow-auth.sh` now fails the build for it.
+
+**A checker nobody has watched turn red is a green light.** Both new checks ship with a test that
+feeds them the shape they claim to catch. The first version of `check-workflow-auth.sh` flagged
+the comment in `tf-setup/action.yml` that *warns against* putting R2 credentials in
+`AWS_ACCESS_KEY_ID` — a check that fails on the warning rather than the mistake gets silenced,
+taking the real check with it. Match on the assignment, strip comments first.
+
+**A capturing group changes what a scanner reports.** `gogo-postgres-url` was written
+`postgres(ql)?://…`, so gitleaks reported group 1 — the string `ql` — as the Secret. Allowlist
+regexes match against the Secret, which made the rule impossible to allowlist, and would have
+made a genuine finding useless: the report would name `ql` instead of the password that leaked.
+Use `(?:…)` unless the group is the secret.
+
+**A scanner can be green on the branch nobody reads and dead on the branch under review.** The
+gitleaks *action* calls `GET /repos/{o}/{r}/pulls/{n}/commits` on a `pull_request` event. Under
+`permissions: contents: read` that returns 403 and the action crashes — so it passed on pushes to
+`develop` and failed on every PR, and the PR failure looked like a leak. Running the binary needs
+no token, no rate limit and no deprecated runtime, and executes the same command as `make scan`.
+
+**Pin the version and verify the bytes.** A pinned version with no checksum still runs whatever
+arrives at that URL. Retry too: the first install died on `curl: (35) Recv failure: Connection
+reset by peer` against a URL that was correct and reachable, and a red build on an unrelated PR
+teaches people to re-run until green.
+
+**An allowlist entry is how a scanner gets switched off.** Added to silence one false positive,
+then quietly covering the real thing. `scripts/ci/gitleaks-rules.test.sh` asserts both directions
+— literal credentials still caught, interpolated and placeholder forms not — so the next edit has
+to keep both true.
+
+**Fake credentials in a test file are still credential-shaped.** Writing fixture literals into
+`gitleaks-rules.test.sh` made the scanner flag its own test, correctly. Generating them at run
+time is better than a path exemption, which is the same failure this file keeps describing, and
+better than a fingerprint ignore, which stops matching the moment the line moves.
+
+**Run the check after staging, not before.** The repo scan came back clean and was reported clean
+— it had run before the offending file was committed. `gitleaks detect` reads git history, so a
+literal removed in a later commit is still there; the branch had to be rewritten.
+
+**Do not fill a register from the git author.** `docs/accounts.md` leaves every owner column
+blank on purpose. Guessing who holds an account produces a register that reads complete and is
+wrong, which is worse than the blank. Every row having one owner and no backup is the finding.
+
+**Derive the offboarding list, do not write it.** "Rotate every credential they could have read"
+is unactionable at the moment it is needed. `scripts/ops/offboard-checklist.sh` generates the
+paths from `secrets.manifest.yml`, so parameters added later appear without anyone remembering —
+and it says *regenerate* for the auth signing secrets, which have no provider console to visit.
