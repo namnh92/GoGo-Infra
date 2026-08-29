@@ -142,6 +142,50 @@ for row in "${CHECKS[@]}"; do
   fi
 done
 
+# Reading a *specific* Access policy, which is what `terraform plan` does when
+# it refreshes one.
+#
+# Status codes on the list endpoints cannot tell you this. A token without
+# `Access: Apps and Policies · Read` answers **200 with an empty list** on
+# GET /access/policies — success, no policies, nothing wrong as far as any
+# status-code check can see — and 403 on GET /access/policies/{id}. Probing only
+# the list said the read token was fine while plan failed on exactly this call.
+#
+# So the id is resolved with the write token, which can see the policies, and
+# the read token is then asked for that one policy. Resolving is not the
+# assertion; the GET is.
+echo
+echo "  read token can refresh an Access policy"
+
+read_probe="$(aws ssm get-parameter \
+  --name "/gogo/ci/${ENVIRONMENT}/terraform/read/cloudflare-token" \
+  --with-decryption --query 'Parameter.Value' --output text 2>/dev/null)"
+write_probe="$(aws ssm get-parameter \
+  --name "/gogo/ci/${ENVIRONMENT}/terraform/write/cloudflare-token" \
+  --with-decryption --query 'Parameter.Value' --output text 2>/dev/null)"
+
+if [[ -z "$read_probe" || "$read_probe" == "None" ]]; then
+  echo "    read token not stored — skipping"
+elif [[ -z "$write_probe" || "$write_probe" == "None" ]]; then
+  printf '    %-16s ? needs the write token to find a policy to read\n' "access policy"
+else
+  policy_id="$(curl -sS --max-time 20 -H "Authorization: Bearer ${write_probe}" \
+    "https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/access/policies" 2>/dev/null \
+    | python3 -c 'import json,sys; r=(json.load(sys.stdin).get("result") or []); print(r[0]["id"] if r else "")' 2>/dev/null || true)"
+
+  if [[ -z "$policy_id" ]]; then
+    printf '    %-16s ? no Access policy exists yet to read\n' "access policy"
+  else
+    code="$(api "$read_probe" "accounts/${ACCOUNT_ID}/access/policies/${policy_id}")"
+    if [[ "$code" == "200" ]]; then
+      printf '    %-16s ok\n' "access policy"
+    else
+      printf '    %-16s HTTP %s — add: Account · Access: Apps and Policies · Read\n' "access policy" "$code"
+      missing=$(( missing + 1 ))
+    fi
+  fi
+fi
+
 # The one write grant that can be established without writing: Access answers
 # 403 before it reads the body, so an empty body separates "no grant" from
 # "grant, bad request". This is the grant blocking INF-037, so the check should
