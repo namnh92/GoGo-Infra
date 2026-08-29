@@ -39,6 +39,14 @@ R2 API tokens are created outside Terraform (they are secret values) and pushed 
 
 Scope each token to a single bucket.
 
+## Destroying a bucket
+
+The provider reports that an R2 lifecycle configuration **cannot be destroyed from Terraform**.
+It is a warning, not an apply failure, but it means `terraform destroy` on a bucket can leave the
+lifecycle rule behind. Remove it by hand — through the Cloudflare dashboard or the S3-compatible
+API — as part of decommissioning, and check for it before recreating a bucket with the same name,
+or the old rule silently applies to the new contents.
+
 ## Provider version note
 
 `cloudflare_r2_bucket_lifecycle` and `cloudflare_r2_bucket_cors` require a recent

@@ -119,6 +119,16 @@ rotated at the provider — removing it from the latest revision changes nothing
 | --- | --- | --- | --- | --- |
 | _(pending INF-021)_ | APNs auth key `AuthKey_*.p8` | Key file present in the workspace next to the repos | | Upload to OneSignal, delete the local copy, confirm it never entered Git; if it did, revoke on Apple Developer and issue a new key |
 
+## The permissions boundary is not editable from CI
+
+Every IAM role GoGo-Infra creates carries `gogo-<env>-boundary`, and that boundary denies edits
+to itself. So `terraform apply` running in CI as the apply role **cannot change it**. Boundary
+changes go through `scripts/bootstrap/aws.sh` in an operator session.
+
+That is deliberate friction. A ceiling its occupant can rewrite is not a ceiling. An
+access-denied error in CI naming the boundary policy is the control working — apply that change
+from a bootstrap session rather than widening the policy to make CI green.
+
 ## Log redaction
 
 Never logged, in any repository: `password`, `secret`, `token`, `authorization`, `cookie`,

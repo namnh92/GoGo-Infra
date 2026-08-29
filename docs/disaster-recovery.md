@@ -60,6 +60,13 @@ Backends use `use_lockfile`. If a run is killed mid-apply the lock object surviv
 `.tflock` object for that key, or run `terraform force-unlock <lock-id>`, and say why in the
 pull request. Never force-unlock while another apply might still be running.
 
+## Decommissioning an R2 bucket
+
+The Cloudflare provider cannot destroy a lifecycle configuration. After `terraform destroy`,
+verify in the dashboard that no lifecycle rule survives for that bucket name — a leftover rule
+attaches itself to the next bucket created with the same name and starts expiring objects nobody
+expected it to touch.
+
 ## Rotating a secret
 
 1. Create the new credential at the provider. Keep the old one alive.

@@ -81,23 +81,28 @@ resource "aws_iam_role" "this" {
   description          = each.value.description
   assume_role_policy   = data.aws_iam_policy_document.assume_role[each.key].json
   max_session_duration = each.value.max_duration
+  permissions_boundary = var.permissions_boundary_arn
 
   tags = merge(var.tags, { role = each.key })
 }
 
+# Keys are "<role>:<policy-name>" — both static, both known at plan time. The
+# ARN is unknown until apply, which is fine because it is only a value.
+locals {
+  role_policy_attachments = merge([
+    for role_name, cfg in local.role_definitions : {
+      for policy_name, policy_arn in cfg.policy_arns :
+      "${role_name}:${policy_name}" => {
+        role_name  = role_name
+        policy_arn = policy_arn
+      }
+    }
+  ]...)
+}
+
 resource "aws_iam_role_policy_attachment" "this" {
-  for_each = {
-    for pair in flatten([
-      for role_name, cfg in local.role_definitions : [
-        for arn in cfg.policy_arns : {
-          key       = "${role_name}:${arn}"
-          role_name = role_name
-          arn       = arn
-        }
-      ]
-    ]) : pair.key => pair
-  }
+  for_each = local.role_policy_attachments
 
   role       = aws_iam_role.this[each.value.role_name].name
-  policy_arn = each.value.arn
+  policy_arn = each.value.policy_arn
 }
