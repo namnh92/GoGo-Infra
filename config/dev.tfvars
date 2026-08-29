@@ -58,19 +58,21 @@ cors_allowed_origins = [
   "http://localhost:5173",
 ]
 
-# CMS front end.
+# CMS front end — deliberately not configured.
 #
-# cms_script_name must match `name` in GoGo-CMS/wrangler.jsonc. It is the
-# dashboard-created Worker that issue #25 is bringing under IaC; the name is
-# kept rather than renamed so the existing script is adopted instead of a second
-# one appearing beside it.
+# Setting cms_host here turns the module on, and terraform-apply-dev runs
+# automatically on pushes to develop that touch terraform/** or config/**. The
+# dev write token cannot create Access policies yet (INF-043), so that apply
+# creates the hostname, fails on the Access policy, and leaves an admin console
+# on the open internet with nothing in front of it. That is not a hypothetical:
+# it happened on 29/08/2026 and the hostname was live for about ten minutes.
 #
-# Both addresses are on the access list because the Cloudflare account signs in
-# through GitHub OAuth and either may be the primary address that receives the
-# one-time PIN. Locking to the wrong one locks out the only operator.
-cms_host        = "cms-dev.gogo.id.vn"
-cms_script_name = "gogo-cms-dev"
-cms_access_emails = [
-  "namnhse02061@gmail.com",
-  "namnh.code4fun@gmail.com",
-]
+# Terraform does not roll back the half that succeeded, and an apply triggered
+# by a merge has nobody watching it.
+#
+# Turn it on in one change, after `make cf-scopes ENV=dev` reports the write
+# token can create Access policies:
+#
+#   cms_host          = "cms-dev.gogo.id.vn"
+#   cms_script_name   = "gogo-cms-dev"
+#   cms_access_emails = ["namnhse02061@gmail.com", "namnh.code4fun@gmail.com"]

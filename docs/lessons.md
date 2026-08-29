@@ -472,3 +472,21 @@ with `enabled = false` is the difference between "guarded" and "guarded at one o
 `not_found_handling` and `run_worker_first` live in GoGo-CMS's `wrangler.jsonc`. Copying them into
 tfvars makes two truths that drift, and the symptom of that drift is a Workers runtime behaviour
 change nobody traces back to a config file.
+
+**Branch from the base, not from wherever you are standing.** `feature/GOGO-37-dev-deploy-inputs`
+was cut while the CMS branch was checked out, so PR #49 — titled "host key pinning" — carried the
+entire CMS hosting module and its tfvars into `develop`. Nobody reviewing that PR was looking for
+them. `git checkout -b` inherits the current HEAD silently; `git checkout -b <new> develop` says
+what it means.
+
+**A merge is an unattended apply.** `terraform-apply-dev` runs on pushes to `develop` touching
+`terraform/**` or `config/**`. The smuggled tfvars made it create `cms-dev.gogo.id.vn`, fail on
+the Access policy it has no permission for, and leave an admin console on the open internet for
+about ten minutes. Terraform does not roll back the half that succeeded, and there is nobody
+watching a merge. Every guard that depends on a human running apply and reading the error is not
+a guard.
+
+**Disarm at the value, not only in the module.** The module refuses to create a hostname without
+an Access list, which is right and was not enough: the tfvars supplied one. `config/dev.tfvars`
+now carries the settings commented out with the reason, so turning it on is one deliberate edit
+after `make cf-scopes` says the token can create the policy.
