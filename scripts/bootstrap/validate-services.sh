@@ -94,12 +94,17 @@ elif [[ "$redis_url" == rediss://* || "$redis_url" == redis://* ]]; then
       redis_probe() { redis-cli -u "$redis_url" "$@"; }
     fi
 
-    redis_out="$(redis_probe PING 2>&1 || true)"
+    # stdout and stderr stay apart. redis-cli writes a benign warning to stderr
+    # whenever a password appears in the URL, so merging the streams turned a
+    # successful PING into "Warning: ...\nPONG" and the check failed on a
+    # working Redis — the diagnostic broke the thing it was diagnosing.
+    redis_err="$(mktemp)"
+    redis_out="$(redis_probe PING 2>"$redis_err" || true)"
+
     if [[ "$redis_out" != "PONG" ]]; then
-      # redis-cli explains itself: wrong password, TLS required, unknown host.
-      # "credentials or network" covers all three and helps with none.
-      redis_detail="$(printf '%s' "$redis_out" | grep -v '^[[:space:]]*$' | head -1 | cut -c1-140)"
-      case "$redis_out" in
+      redis_stderr="$(grep -v "may not be safe" "$redis_err" 2>/dev/null || true)"
+      redis_detail="$(printf '%s' "$redis_stderr" | grep -v '^[[:space:]]*$' | head -1 | cut -c1-140)"
+      case "$redis_stderr" in
         *"Unrecognized option"*|*"unknown option"*)
           redis_detail="redis-cli was built without TLS support — brew install redis (6.0+)" ;;
         *WRONGPASS*|*"invalid password"*)
@@ -108,6 +113,7 @@ elif [[ "$redis_url" == rediss://* || "$redis_url" == redis://* ]]; then
           redis_detail="connection reset — Upstash requires TLS, so the URL must be rediss:// not redis://" ;;
       esac
     fi
+    rm -f "$redis_err"
 
     if [[ "$redis_out" == "PONG" ]]; then
       check "responds to PING" 1
