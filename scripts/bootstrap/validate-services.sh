@@ -65,7 +65,7 @@ else
         if psql "$database_url" -tAc "SELECT 1 FROM pg_extension WHERE extname='${extension}'" 2>/dev/null | grep -q 1; then
           check "extension ${extension}" 1
         else
-          check "extension ${extension}" 0 "(CREATE EXTENSION IF NOT EXISTS ${extension};)"
+          check "extension ${extension}" 0 "(run scripts/bootstrap/db-extensions.sh ${ENVIRONMENT})"
         fi
       done
     else
@@ -118,14 +118,33 @@ r2_secret="$(get r2/secret-access-key)"
 if [[ -n "$r2_key" && -n "$r2_secret" && -n "$r2_bucket" && -n "$r2_endpoint" ]]; then
   # In a subshell with its own credentials: exporting these into the current
   # shell would replace the AWS session everything else here depends on.
-  if (
+  # list-objects rather than head-bucket: head-bucket answers with a bare status
+  # code, so every failure looks the same. The listing returns an error code that
+  # distinguishes a wrong key from a wrong bucket from a scope problem — and
+  # guessing between those three is most of the time lost here.
+  r2_error="$(
     export AWS_ACCESS_KEY_ID="$r2_key" AWS_SECRET_ACCESS_KEY="$r2_secret" AWS_DEFAULT_REGION=auto
     unset AWS_SESSION_TOKEN AWS_PROFILE
-    aws s3api head-bucket --endpoint-url "$r2_endpoint" --bucket "$r2_bucket" >/dev/null 2>&1
-  ); then
+    aws s3api list-objects-v2 --endpoint-url "$r2_endpoint" --bucket "$r2_bucket" \
+      --max-keys 1 2>&1 >/dev/null || true
+  )"
+
+  if [[ -z "$r2_error" ]]; then
     check "R2 credentials can reach ${r2_bucket}" 1
   else
-    check "R2 credentials can reach ${r2_bucket}" 0 "(token scope, or wrong bucket)"
+    case "$r2_error" in
+      *InvalidAccessKeyId*)
+        detail="(access key id not recognised — is this the S3 Access Key ID, not the API token value?)" ;;
+      *SignatureDoesNotMatch*)
+        detail="(secret does not match the access key id)" ;;
+      *NoSuchBucket*)
+        detail="(bucket ${r2_bucket} does not exist in this account)" ;;
+      *AccessDenied*)
+        detail="(token has no permission on this bucket — scope it to ${r2_bucket})" ;;
+      *)
+        detail="($(printf '%s' "$r2_error" | head -1 | cut -c1-120))" ;;
+    esac
+    check "R2 credentials can reach ${r2_bucket}" 0 "$detail"
   fi
 else
   check "R2 credentials present" 0
@@ -136,15 +155,21 @@ echo "==> Providers"
 onesignal_app="$(get onesignal/app-id)"
 onesignal_key="$(get onesignal/rest-api-key)"
 if [[ -n "$onesignal_app" && -n "$onesignal_key" ]]; then
+  # GET /apps/{id} is an ORGANIZATION-scoped endpoint: it authenticates with the
+  # Organization API Key, not with an app's REST API Key. Checking the REST key
+  # against it reports a perfectly good key as rejected.
+  #
+  # The notifications list is app-scoped and is what the REST key actually
+  # authorizes, so it tests the credential the backend will really use.
   code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
     -H "Authorization: Key ${onesignal_key}" \
-    "https://api.onesignal.com/apps/${onesignal_app}" 2>/dev/null || echo 000)"
+    "https://api.onesignal.com/notifications?app_id=${onesignal_app}&limit=1" 2>/dev/null || echo 000)"
   case "$code" in
-    200) check "OneSignal app reachable with the REST key" 1 ;;
-    401 | 403) check "OneSignal app reachable with the REST key" 0 "(key rejected — rotated or wrong app)" ;;
-    404) check "OneSignal app reachable with the REST key" 0 "(app id not found)" ;;
+    200) check "OneSignal REST key authorizes app ${onesignal_app:0:8}…" 1 ;;
+    400) check "OneSignal REST key authorizes the app" 0 "(app id malformed or unknown)" ;;
+    401 | 403) check "OneSignal REST key authorizes the app" 0 "(key rejected — rotated, or it belongs to another app)" ;;
     000) echo "  skip  OneSignal (no network)" ;;
-    *) check "OneSignal app reachable with the REST key" 0 "(http ${code})" ;;
+    *) check "OneSignal REST key authorizes the app" 0 "(http ${code})" ;;
   esac
 else
   check "onesignal app-id and rest-api-key present" 0
@@ -157,10 +182,13 @@ for key_path in google/server-api-key google/routes-api-key; do
   key="$(get "$key_path")"
   if [[ -z "$key" ]]; then
     check "${key_path} present" 0
-  elif [[ "$key" == AIza* && "${#key}" -ge 35 ]]; then
+  elif [[ "$key" == AIza* && "${#key}" -eq 39 ]]; then
     check "${key_path} looks like a Google API key" 1
   else
-    check "${key_path} looks like a Google API key" 0 "(expected AIza..., 39 chars)"
+    # Length and prefix only — never the value. A common mistake is storing an
+    # OAuth client id or a service-account field here instead of an API key.
+    check "${key_path} looks like a Google API key" 0 \
+      "(found ${#key} chars starting '${key:0:4}'; an API key is 39 chars starting AIza)"
   fi
   unset key
 done
