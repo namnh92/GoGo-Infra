@@ -294,6 +294,23 @@ removed. Building a tracking URL is template composition, not an authenticated c
 **Do not mint a credential so a checklist turns green.** That creates a real secret, with a real
 blast radius, guarding nothing.
 
+### Cloudflare permissions are split across two scopes with similar names
+
+**Symptom** — the worker script uploaded successfully, then `403 Forbidden` on
+`POST /zones/<id>/workers/routes`. Adding "Workers Scripts: Edit" to the token had just fixed the
+previous 403, so it looked like the same problem coming back.
+
+**Cause** — Workers **Scripts** is an *account* permission; Workers **Routes** is a *zone*
+permission. A token with every account permission still cannot attach a route. DNS is zone-scoped
+too. The names are close enough that "I gave it Workers access" feels complete.
+
+**Fix** — `verify_cloudflare_scopes` probes all four endpoints before Terraform runs, so one
+message lists everything missing instead of one 403 per apply. Edit the existing token rather
+than creating a new one: the value does not change, so nothing has to be re-stored in SSM.
+
+That last detail matters more than it looks. Three rounds were spent on this token, and had each
+fix meant a new token, each round would also have needed a `put.sh` and a re-run.
+
 ### Other provider facts worth not rediscovering
 
 - **Upstash** Management API authenticates with account email + API key even when the console

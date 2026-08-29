@@ -35,6 +35,12 @@ account_id="$(require_tfvar_string cloudflare_account_id \
 verify_cloudflare_token "$account_id"
 verify_cloudflare_r2_access "$account_id"
 
+# Fails before terraform rather than partway through it. Without this, a token
+# short one zone permission uploads the worker script and then 403s on the
+# route — which reads as a partial success, not a missing permission.
+zone_id="$(get_tfvar_string cloudflare_zone_id "${REPO_ROOT}/config/${ENVIRONMENT}.tfvars")"
+verify_cloudflare_scopes "$account_id" "$zone_id"
+
 # Checked here rather than at the migration step at the end. The apply itself
 # does not need these, but the migration does — and failing after the apply
 # leaves the environment created with its state still on one laptop.

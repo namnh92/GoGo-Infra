@@ -159,3 +159,54 @@ verify_cloudflare_r2_access() {
   # before an apply claims to create it.
   printf '%s' "$body" | jq -r '.result[]?.name | "  - " + .' 2>/dev/null || true
 }
+
+# verify_cloudflare_scopes <account_id> [zone_id]
+#
+# Cloudflare splits permissions across two scopes, and the split is not obvious
+# from the names: Workers *Scripts* is account-level, Workers *Routes* is
+# zone-level. A token with full account permissions still cannot attach a route,
+# and the failure arrives from Terraform as a bare 403 on a URL — after the
+# script has already been uploaded, so it looks like a partial success rather
+# than a missing permission.
+#
+# Probing each endpoint costs four requests and turns that into one message.
+verify_cloudflare_scopes() {
+  local account_id="${1:?verify_cloudflare_scopes needs an account id}"
+  local zone_id="${2:-}"
+  local missing=()
+
+  command -v curl >/dev/null 2>&1 || return 0
+
+  probe() {
+    curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+      -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" "$1" 2>/dev/null || echo 000
+  }
+
+  local base="https://api.cloudflare.com/client/v4"
+
+  [[ "$(probe "${base}/accounts/${account_id}/workers/scripts")" == "200" ]] \
+    || missing+=("Account → Workers Scripts: Edit")
+  [[ "$(probe "${base}/accounts/${account_id}/r2/buckets")" == "200" ]] \
+    || missing+=("Account → Workers R2 Storage: Edit")
+
+  if [[ -n "$zone_id" ]]; then
+    [[ "$(probe "${base}/zones/${zone_id}/workers/routes")" == "200" ]] \
+      || missing+=("Zone → Workers Routes: Edit")
+    [[ "$(probe "${base}/zones/${zone_id}/dns_records")" == "200" ]] \
+      || missing+=("Zone → DNS: Edit")
+  fi
+
+  if [[ "${#missing[@]}" -gt 0 ]]; then
+    {
+      echo "error: the Cloudflare token is missing ${#missing[@]} permission(s):"
+      echo
+      printf '  - %s\n' "${missing[@]}"
+      echo
+      echo "Edit the existing token rather than creating a new one — the value does"
+      echo "not change, so nothing has to be re-stored in SSM."
+    } >&2
+    return 1
+  fi
+
+  echo "Cloudflare token scopes verified (account and zone)."
+}
