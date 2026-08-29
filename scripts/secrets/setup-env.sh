@@ -323,13 +323,20 @@ echo "==> Derived non-secret values"
 # storage failure at runtime.
 account_id="$(env_value CLOUDFLARE_ACCOUNT_ID)"
 # Assigned by name and read back through indirect expansion in env_value, which
-# shellcheck cannot follow.
+# shellcheck cannot follow — hence the directives.
 # shellcheck disable=SC2034
-[[ -n "$(env_value R2_ENDPOINT)" ]] || printf -v ENVCFG_R2_ENDPOINT '%s' \
-  "https://${account_id}.r2.cloudflarestorage.com"
+ENVCFG_R2_ENDPOINT="$(env_value R2_ENDPOINT)"
+if [[ -z "$ENVCFG_R2_ENDPOINT" ]]; then
+  # shellcheck disable=SC2034
+  ENVCFG_R2_ENDPOINT="https://${account_id}.r2.cloudflarestorage.com"
+fi
+
 # shellcheck disable=SC2034
-[[ -n "$(env_value R2_BUCKET)" ]] || printf -v ENVCFG_R2_BUCKET '%s' \
-  "gogo-${ENVIRONMENT}-assets"
+ENVCFG_R2_BUCKET="$(env_value R2_BUCKET)"
+if [[ -z "$ENVCFG_R2_BUCKET" ]]; then
+  # shellcheck disable=SC2034
+  ENVCFG_R2_BUCKET="gogo-${ENVIRONMENT}-assets"
+fi
 
 echo "    R2_ENDPOINT = $(env_value R2_ENDPOINT)"
 echo "    R2_BUCKET   = $(env_value R2_BUCKET)"

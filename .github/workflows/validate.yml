@@ -42,6 +42,11 @@ jobs:
           tflint_version: latest
 
       - name: tflint
+        env:
+          # --recursive changes into each directory and looks for .tflint.hcl
+          # beside the files it is linting, so the root config was being ignored
+          # and its rule settings had no effect.
+          TFLINT_CONFIG_FILE: ${{ github.workspace }}/.tflint.hcl
         run: |
           tflint --init
           tflint --recursive

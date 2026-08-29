@@ -4,7 +4,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-# shellcheck disable=SC2034  # used by put.sh, pull.sh, validate.sh and setup-env.sh
+# Used by put.sh, pull.sh, validate.sh and setup-env.sh, which source this file.
+# shellcheck disable=SC2034
 MANIFEST_READER="${REPO_ROOT}/scripts/lib/manifest.py"
 
 die() {
