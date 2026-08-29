@@ -144,20 +144,21 @@ for row in "${CHECKS[@]}"; do
   fi
 done
 
-# Reading a *specific* Access policy, which is what `terraform plan` does when
-# it refreshes one.
+# Reading a *specific* object, which is what `terraform plan` does when it
+# refreshes one. This is the check that matters, and the list endpoints cannot
+# stand in for it.
 #
-# Status codes on the list endpoints cannot tell you this. A token without
-# `Access: Apps and Policies · Read` answers **200 with an empty list** on
-# GET /access/policies — success, no policies, nothing wrong as far as any
-# status-code check can see — and 403 on GET /access/policies/{id}. Probing only
-# the list said the read token was fine while plan failed on exactly this call.
+# A token without the read grant answers the collection with success and an
+# empty result — no error, nothing a status code can see — and 401 or 403 only
+# on the item. Twice in one session a green list check was followed by a plan
+# that failed on the item: first Access policies, then tunnels. Probing lists is
+# how a check reports healthy about the thing that is broken.
 #
-# So the id is resolved with the write token, which can see the policies, and
-# the read token is then asked for that one policy. Resolving is not the
-# assertion; the GET is.
+# The id is resolved with the write token, which can see the objects, and the
+# read token is then asked for that one. Resolving is not the assertion; the GET
+# is.
 echo
-echo "  read token can refresh an Access policy"
+echo "  read token can refresh what Terraform manages"
 
 read_probe="$(aws ssm get-parameter \
   --name "/gogo/ci/${ENVIRONMENT}/terraform/read/cloudflare-token" \
@@ -166,26 +167,40 @@ write_probe="$(aws ssm get-parameter \
   --name "/gogo/ci/${ENVIRONMENT}/terraform/write/cloudflare-token" \
   --with-decryption --query 'Parameter.Value' --output text 2>/dev/null)"
 
+# label|collection path|item path prefix|grant to add
+ITEM_PROBES=(
+  "access policy|accounts/${ACCOUNT_ID}/access/policies|accounts/${ACCOUNT_ID}/access/policies|Account · Access: Apps and Policies · Read"
+  "tunnel|accounts/${ACCOUNT_ID}/cfd_tunnel|accounts/${ACCOUNT_ID}/cfd_tunnel|Account · Cloudflare Tunnel · Read"
+)
+if [[ -n "$ZONE_ID" ]]; then
+  ITEM_PROBES+=("dns record|zones/${ZONE_ID}/dns_records|zones/${ZONE_ID}/dns_records|Zone · DNS · Read")
+fi
+
 if [[ -z "$read_probe" || "$read_probe" == "None" ]]; then
   echo "    read token not stored — skipping"
 elif [[ -z "$write_probe" || "$write_probe" == "None" ]]; then
-  printf '    %-16s ? needs the write token to find a policy to read\n' "access policy"
+  echo "    needs the write token to find objects to read — skipping"
 else
-  policy_id="$(curl -sS --max-time 20 -H "Authorization: Bearer ${write_probe}" \
-    "https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/access/policies" 2>/dev/null \
-    | python3 -c 'import json,sys; r=(json.load(sys.stdin).get("result") or []); print(r[0]["id"] if r else "")' 2>/dev/null || true)"
+  for row in "${ITEM_PROBES[@]}"; do
+    IFS='|' read -r label collection item_prefix grant <<< "$row"
 
-  if [[ -z "$policy_id" ]]; then
-    printf '    %-16s ? no Access policy exists yet to read\n' "access policy"
-  else
-    code="$(api "$read_probe" "accounts/${ACCOUNT_ID}/access/policies/${policy_id}")"
+    object_id="$(curl -sS --max-time 20 -H "Authorization: Bearer ${write_probe}" \
+      "https://api.cloudflare.com/client/v4/${collection}" 2>/dev/null \
+      | python3 -c 'import json,sys; r=(json.load(sys.stdin).get("result") or []); print(r[0]["id"] if r else "")' 2>/dev/null || true)"
+
+    if [[ -z "$object_id" ]]; then
+      printf '    %-16s ? none exists yet to read\n' "$label"
+      continue
+    fi
+
+    code="$(api "$read_probe" "${item_prefix}/${object_id}")"
     if [[ "$code" == "200" ]]; then
-      printf '    %-16s ok\n' "access policy"
+      printf '    %-16s ok\n' "$label"
     else
-      printf '    %-16s HTTP %s — add: Account · Access: Apps and Policies · Read\n' "access policy" "$code"
+      printf '    %-16s HTTP %s — add: %s\n' "$label" "$code" "$grant"
       missing=$(( missing + 1 ))
     fi
-  fi
+  done
 fi
 
 # The one write grant that can be established without writing: Access answers

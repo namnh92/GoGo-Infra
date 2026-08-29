@@ -85,8 +85,13 @@ jobs:
           # reachable — a transient reset on the release-asset redirect. Without
           # retries that is a red build on an unrelated PR, and the habit of
           # re-running until green is how a real failure gets waved through.
-          curl -sSfL --connect-timeout 10 --retry 5 --retry-delay 3 \
-            --retry-all-errors -o /tmp/gitleaks.tar.gz "$url"
+          # Six attempts over ~15s was not enough for a GitHub incident: the
+          # release endpoint returned 504 to every one of them, and the same
+          # outage was timing out API calls elsewhere at that minute. Two
+          # minutes of retries rides out a blip without pretending it can ride
+          # out an outage.
+          curl -sSfL --connect-timeout 10 --retry 8 --retry-delay 10 \
+            --retry-max-time 120 --retry-all-errors -o /tmp/gitleaks.tar.gz "$url"
 
           echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -
           tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
