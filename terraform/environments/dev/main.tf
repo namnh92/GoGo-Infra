@@ -406,8 +406,11 @@ module "share_link_worker" {
   tenjin_tracking_template = var.tenjin_tracking_template
 }
 
-# CMS front end. Terraform owns the hostname and who may reach it; GoGo-CMS
-# owns the Worker script itself (modules/cloudflare-cms-hosting/README.md).
+# CMS front end, deployed from build/cms — run scripts/build-cms.sh first.
+#
+# be_origin reuses api_origin: the CMS Worker proxies /v1/* to the same backend
+# the share-link Worker resolves against. Empty until INF-038 gives dev an API,
+# and the Worker answers 502 rather than pretending it worked.
 #
 # Off unless all three inputs are set. The access list is part of that check on
 # purpose: publishing an admin hostname and adding the guard in a follow-up
@@ -427,6 +430,8 @@ module "cms_hosting" {
   hostname      = var.cms_host
   script_name   = var.cms_script_name
   access_emails = var.cms_access_emails
+  build_dir     = "${path.root}/../../../build/cms"
+  be_origin     = var.api_origin
 }
 
 module "dns" {
