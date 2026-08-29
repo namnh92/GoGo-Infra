@@ -517,3 +517,15 @@ say what it actually asked.
 `failed to make http request`: the resource was created and the response was lost. Re-running
 would have created a second one. `terraform import` and a listing before assuming, every time an
 apply dies mid-resource.
+
+**`GetParametersByPath` is authorised against the path, not the parameters under it.** A policy
+granting `parameter/gogo/dev/backend/*` lets a role read every parameter by name and refuses to
+list them. `secrets:validate` calls get-parameters-by-path, so the first CI deploy died on
+AccessDenied while every value it wanted was readable. `aws iam simulate-principal-policy` answers
+this in one call and does not need the role to be assumable — use it before guessing.
+
+**A trust policy and a workflow can disagree silently.** `gogo-dev-deploy` trusted GoGo-BE while
+`deploy-dev.yml` lived in GoGo-Infra. Plan and apply trusted the right repository and worked;
+nothing compares a trust policy against the repository that holds the workflow, so the mismatch
+surfaced only when a dispatch first ran. Deployment orchestration is owned by one repository, and
+the trust policy is where that ownership is enforced.
