@@ -10,7 +10,9 @@ environment = "dev"
 # delegating dev.gogo.id.vn as its own zone or removing DNS write from the dev
 # token entirely (INF-028, security spec §11).
 cloudflare_zone_id = "84bece58fc6f0065213f682cbd9741c2"
-dns_record_suffix  = "dev.gogo.id.vn"
+# Every dev record must carry the -dev suffix. One zone serves all three
+# environments, so this is what keeps a dev apply from naming a production host.
+dns_record_suffix  = "-dev.gogo.id.vn"
 
 # Decided 29/08/2026: dev claims web links too, on its own host, so deep links
 # can be tested without a store build. That is only safe because the host names
@@ -19,7 +21,15 @@ dns_record_suffix  = "dev.gogo.id.vn"
 # claim that cannot verify — Android then offers an unverified handler and iOS
 # ignores it, which is worse than not claiming.
 #
-share_host = "go.dev.gogo.id.vn"
+# One label, not go.dev.gogo.id.vn.
+#
+# Cloudflare Universal SSL covers the apex and *.gogo.id.vn — a wildcard matches
+# exactly one label, so a third-level name has no certificate and fails at the
+# TLS handshake, before any of the routing below is reached. Covering it needs
+# Advanced Certificate Manager, which is paid. A hyphen costs nothing.
+#
+# Same reason the remote-first spec writes api-dev.<domain>.
+share_host = "go-dev.gogo.id.vn"
 
 # The dev API is not reachable from the edge yet. The worker still serves
 # /.well-known/ correctly; /l/{slug} answers 502 until this points somewhere,
@@ -36,7 +46,7 @@ api_origin = ""
 # the traffic goes, and one day someone would follow it.
 dns_records = {
   share = {
-    name    = "go.dev.gogo.id.vn"
+    name    = "go-dev.gogo.id.vn"
     type    = "A"
     content = "192.0.2.1"
     proxied = true

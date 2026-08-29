@@ -311,6 +311,28 @@ than creating a new one: the value does not change, so nothing has to be re-stor
 That last detail matters more than it looks. Three rounds were spent on this token, and had each
 fix meant a new token, each round would also have needed a `put.sh` and a re-run.
 
+### A wildcard certificate covers one label, not a subtree
+
+**Symptom** — DNS resolved to Cloudflare, worker routes were attached and correct, and every
+request to `https://go.dev.gogo.id.vn/...` died with
+`sslv3 alert handshake failure`. Nothing in the routing was wrong; nothing in the routing was
+ever reached.
+
+**Cause** — Cloudflare Universal SSL issues a certificate for the apex and `*.gogo.id.vn`. A
+wildcard matches exactly **one** label, so `go.dev.gogo.id.vn` — three levels — is not covered.
+The connection fails at the handshake, before HTTP exists, which is why no worker log and no
+route configuration shows anything.
+
+Covering it needs Advanced Certificate Manager, which is paid.
+
+**Fix** — one label: `go-dev.gogo.id.vn`, `go-stag.gogo.id.vn`, `go.gogo.id.vn`. A hyphen instead
+of a dot costs nothing and keeps free TLS. The remote-first spec had already written
+`api-dev.<domain>` for the same reason; the hostname was chosen without noticing that.
+
+**Worth generalising** — a TLS handshake failure means the request never became HTTP. Reading
+application logs, route tables or worker code at that point is looking downstream of where the
+failure is.
+
 ### Other provider facts worth not rediscovering
 
 - **Upstash** Management API authenticates with account email + API key even when the console
