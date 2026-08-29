@@ -153,10 +153,18 @@ if [[ -n "$r2_key" && -n "$r2_secret" && -n "$r2_bucket" && -n "$r2_endpoint" ]]
   # distinguishes a wrong key from a wrong bucket from a scope problem — and
   # guessing between those three is most of the time lost here.
   r2_error="$(
-    export AWS_ACCESS_KEY_ID="$r2_key" AWS_SECRET_ACCESS_KEY="$r2_secret" AWS_DEFAULT_REGION=auto
+    export AWS_ACCESS_KEY_ID="$r2_key" AWS_SECRET_ACCESS_KEY="$r2_secret"
+    # R2 has no regions and accepts only auto. AWS_REGION takes precedence over
+    # AWS_DEFAULT_REGION, so setting only the latter left ap-southeast-1 from
+    # the surrounding shell in place and R2 rejected the request. A defect in
+    # this script that presented as a credential problem.
+    #
+    # Apostrophes stay out of comments inside command substitution: bash tracks
+    # quote state through them and an unmatched one breaks parsing far away.
+    export AWS_REGION=auto AWS_DEFAULT_REGION=auto
     unset AWS_SESSION_TOKEN AWS_PROFILE
-    aws s3api list-objects-v2 --endpoint-url "$r2_endpoint" --bucket "$r2_bucket" \
-      --max-keys 1 2>&1 >/dev/null || true
+    aws s3api list-objects-v2 --region auto --endpoint-url "$r2_endpoint" \
+      --bucket "$r2_bucket" --max-keys 1 2>&1 >/dev/null || true
   )"
 
   if [[ -z "$r2_error" ]]; then
@@ -188,6 +196,14 @@ unset r2_key r2_secret r2_bucket r2_endpoint
 echo "==> Providers"
 onesignal_app="$(get onesignal/app-id)"
 onesignal_key="$(get onesignal/rest-api-key)"
+# An App ID is a UUID and a REST key is not. Both are opaque strings copied from
+# the same console page, so storing one where the other belongs is easy — and it
+# fails as "key rejected", which sends you to rotate a key that was never wrong.
+if [[ "$onesignal_key" =~ ^[0-9a-f-]{36}$ ]]; then
+  check "onesignal/rest-api-key is not a UUID" 0 \
+    "(it looks like an App ID — the REST key was probably pasted from the wrong field)"
+fi
+
 if [[ -n "$onesignal_app" && -n "$onesignal_key" ]]; then
   # GET /apps/{id} is an ORGANIZATION-scoped endpoint: it authenticates with the
   # Organization API Key, not with an app's REST API Key. Checking the REST key
