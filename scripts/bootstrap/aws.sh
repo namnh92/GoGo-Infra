@@ -18,6 +18,14 @@ TF_DIR="${REPO_ROOT}/terraform/environments/${ENVIRONMENT}"
 OVERRIDE="${TF_DIR}/backend_override.tf"
 
 source "${REPO_ROOT}/scripts/lib/config.sh"
+source "${REPO_ROOT}/scripts/lib/cloudflare.sh"
+
+# The environment configurations manage Cloudflare resources, so this stage
+# needs the provider token even though the visible work is IAM. Check it here:
+# discovering it is missing after the IAM apply has run reads like an IAM
+# failure and sends the operator looking in the wrong place.
+require_cloudflare_token
+verify_cloudflare_token
 
 command -v terraform >/dev/null || { echo "terraform required" >&2; exit 1; }
 aws sts get-caller-identity >/dev/null || { echo "not authenticated to AWS" >&2; exit 1; }
@@ -25,6 +33,10 @@ aws sts get-caller-identity >/dev/null || { echo "not authenticated to AWS" >&2;
 account_id="$(require_tfvar_string cloudflare_account_id \
   "${REPO_ROOT}/config/global.tfvars" "$CLOUDFLARE_ID_PATTERN")"
 
+# Extends the existing handler rather than registering a second trap: a second
+# `trap ... EXIT` replaces the first, and the override file would then be left
+# behind — after which every later `terraform init` in that directory silently
+# uses a local backend.
 cleanup() { rm -f "$OVERRIDE"; }
 trap cleanup EXIT
 

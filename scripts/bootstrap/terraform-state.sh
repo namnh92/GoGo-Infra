@@ -3,7 +3,7 @@
 # Stage 0a — create the private R2 bucket that holds all Terraform state.
 # Idempotent: re-running on an already bootstrapped account is a no-op.
 #
-#   TF_VAR_cloudflare_api_token=... ./scripts/bootstrap/terraform-state.sh
+#   CLOUDFLARE_API_TOKEN=... ./scripts/bootstrap/terraform-state.sh
 
 set -euo pipefail
 
@@ -11,8 +11,10 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BOOTSTRAP_DIR="${REPO_ROOT}/bootstrap/terraform-state"
 
 source "${REPO_ROOT}/scripts/lib/config.sh"
+source "${REPO_ROOT}/scripts/lib/cloudflare.sh"
 
-: "${TF_VAR_cloudflare_api_token:?set TF_VAR_cloudflare_api_token (R2 admin token; not committed anywhere)}"
+require_cloudflare_token
+verify_cloudflare_token
 
 account_id="$(require_tfvar_string cloudflare_account_id \
   "${REPO_ROOT}/config/global.tfvars" "$CLOUDFLARE_ID_PATTERN")"

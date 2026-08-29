@@ -30,12 +30,33 @@ push workflows        from here on, CI owns apply
 ```
 
 ```bash
+export CLOUDFLARE_API_TOKEN='...'     # R2 admin token for this stage
+
 ./scripts/bootstrap/preflight.sh
-TF_VAR_cloudflare_api_token=... ./scripts/bootstrap/terraform-state.sh
+./scripts/bootstrap/terraform-state.sh
 # create credentials, store them (the script prints the exact put.sh commands)
 ./scripts/bootstrap/aws.sh dev
 ./scripts/bootstrap/complete.sh dev
 ```
+
+### One name for the Cloudflare token
+
+`CLOUDFLARE_API_TOKEN`, everywhere — it is the variable the Terraform provider reads on its own,
+and the CI composite action exports the same name.
+
+There used to be two: `bootstrap/terraform-state` took the token as a `TF_VAR_` input while
+`terraform/environments/*` relied on the provider's native variable. Both looked correct in
+isolation. The result was an operator who exported the token, saw it confirmed as loaded, and
+then watched the environment apply send unauthenticated requests — the provider was reading a
+variable nothing had set. The scripts now bridge the legacy name with a warning rather than
+letting the mismatch happen silently.
+
+### Fail fast, not halfway
+
+`terraform-state.sh` and `aws.sh` verify the token against `/user/tokens/verify` before starting
+an apply. Without that, a wrong or expired token first shows up as an authentication error raised
+after the IAM resources are already created, which reads like an IAM problem and sends you
+looking in the wrong place.
 
 ## Why Terraform owns bootstrap resources from the start
 

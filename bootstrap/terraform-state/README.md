@@ -5,12 +5,16 @@ Creates the private R2 bucket holding all Terraform state. Run once per account.
 ## Run
 
 ```bash
-export TF_VAR_cloudflare_api_token='...'      # R2 admin token, never committed
-export TF_VAR_cloudflare_account_id='...'
+export CLOUDFLARE_API_TOKEN='...'             # R2 admin token, never committed
+export TF_VAR_cloudflare_account_id='...'     # account id, not a secret
 
 terraform -chdir=bootstrap/terraform-state init
 terraform -chdir=bootstrap/terraform-state apply
 ```
+
+`CLOUDFLARE_API_TOKEN` is the variable the Cloudflare provider reads on its own, and it is the
+only name used anywhere in this repository. Prefer running `scripts/bootstrap/terraform-state.sh`,
+which verifies the token against the Cloudflare API before starting an apply.
 
 ## Then migrate this configuration's own state into the bucket
 

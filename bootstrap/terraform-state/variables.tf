@@ -1,9 +1,3 @@
-variable "cloudflare_api_token" {
-  description = "Cloudflare API token with R2 admin permission. Pass with TF_VAR_cloudflare_api_token, never in a tfvars file."
-  type        = string
-  sensitive   = true
-}
-
 variable "cloudflare_account_id" {
   description = "Cloudflare account id."
   type        = string

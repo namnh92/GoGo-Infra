@@ -65,6 +65,15 @@ else
   fail "config/global.tfvars" "(missing — copy the committed template and fill it in)"
 fi
 
+echo "==> Cloudflare"
+if [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+  ok "CLOUDFLARE_API_TOKEN is set"
+elif [[ -n "${TF_VAR_cloudflare_api_token:-}" ]]; then
+  fail "CLOUDFLARE_API_TOKEN" "(only TF_VAR_cloudflare_api_token is set — the provider reads CLOUDFLARE_API_TOKEN)"
+else
+  fail "CLOUDFLARE_API_TOKEN" "(not set — export it before terraform-state.sh or aws.sh)"
+fi
+
 echo "==> Manifest"
 if python3 "${REPO_ROOT}/scripts/lib/manifest.py" dev >/dev/null 2>&1; then
   ok "config/secrets.manifest.yml parses"

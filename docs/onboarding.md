@@ -33,6 +33,15 @@ make check                      # fmt + validate + tflint + gitleaks
 make secrets-validate ENV=dev   # SSM matches the manifest
 ```
 
+Terraform runs that touch Cloudflare need the provider's own variable:
+
+```bash
+export CLOUDFLARE_API_TOKEN='...'
+```
+
+That is the only name this repository uses for it. `TF_VAR_cloudflare_api_token` is accepted by
+the bootstrap scripts as a bridge and warns.
+
 ## 4. Start developing GoGo-BE
 
 ```bash
