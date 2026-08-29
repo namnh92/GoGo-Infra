@@ -529,3 +529,17 @@ this in one call and does not need the role to be assumable — use it before gu
 nothing compares a trust policy against the repository that holds the workflow, so the mismatch
 surfaced only when a dispatch first ran. Deployment orchestration is owned by one repository, and
 the trust policy is where that ownership is enforced.
+
+**Build every image the deploy runs, not only the ones that stay running.** `deploy-vps.sh` built
+`api` and `worker`, so the `migrate` image was whatever the last rebuild left behind — an hour
+stale when this was found. Migrations then run old code against a new schema and the deploy
+reports success, because the container did exactly what it was built to do. The symptom that
+exposed it was unrelated and silent: a database seed logged `seed complete` while skipping the
+block that creates the CMS admin, because the stale image still had the old guard. Naming
+`migrate` explicitly is required — it sits behind a profile, so a bare `build` skips it.
+
+**Guard on the environment, not on the build mode.** The seed created its bootstrap admin only
+when `NODE_ENV !== 'production'`, and every deployed environment sets `NODE_ENV=production`
+including DEV, which runs the production build. The check skipped exactly the environment it
+existed for while reading as though it protected production. `APP_ENV` is the environment; the
+rendered env file already carried both.

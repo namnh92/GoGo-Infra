@@ -116,7 +116,14 @@ scp "${scp_opts[@]}" "$ENV_FILE" "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/$
 remote "cd '${DEPLOY_PATH}' && install -m 600 '${REMOTE_ENV_FILE}.new' '${REMOTE_ENV_FILE}' && rm -f '${REMOTE_ENV_FILE}.new'"
 
 echo "==> Building images"
-remote "cd '${DEPLOY_PATH}' && ${COMPOSE} build api worker"
+# migrate is built too, and naming it is required: it sits behind the `tools`
+# profile, so a bare `build` skips it.
+#
+# Building only api and worker left the migrate image at whatever the last
+# rebuild produced — an hour stale on the deploy that found this. Migrations
+# then run yesterday's code against today's schema, and the deploy reports
+# success because the container it ran did exactly what it was built to do.
+remote "cd '${DEPLOY_PATH}' && ${COMPOSE} build api worker migrate"
 
 echo "==> Running migrations"
 # Before the new containers take traffic, and expand-only, so the previous
