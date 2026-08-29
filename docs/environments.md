@@ -98,8 +98,17 @@ Terraform touches and prints the Cloudflare permission to add for each failure. 
 plan or apply returns 403: the provider names the URL, not the missing scope, so a permission gap
 reads as an authentication failure and sends you to look at the wrong thing.
 
-It probes reads only. A token that reads an API can still be refused on write, so an apply can
-fail where a plan passes — which is why the write column says "reachable", not "ok".
+It also asserts the read token holds **no** Edit grant. The read token is what `terraform plan`
+runs as, on pull requests, from branches nobody has reviewed yet. Read means read. A write grant
+added there because "plan needed to see the resource" turns every PR into a job that can change
+infrastructure, and a green plan would look exactly the same. `make cf-scopes` is the source of
+truth for what each token should hold.
+
+Write grants are established without writing anything, where the API allows it: a DELETE against
+a resource that does not exist, or a POST with a body that cannot describe anything. Both rely on
+Cloudflare answering 403 before it looks at what was asked for. Where neither works the column
+says "reachable", not "ok" — a token that reads an API can still be refused on write, so an apply
+can fail where a plan passes.
 
 `scripts/ops/check-quotas.sh <env>` reports how close each service is to its limit, and exits
 non-zero when something is over.
