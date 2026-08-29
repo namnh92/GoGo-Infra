@@ -53,6 +53,15 @@ BullMQ needs a TCP connection and blocking commands. The Upstash REST API cannot
 Even on TCP, a blocking consumer polls continuously, so the command budget — not the storage
 limit — is what runs out first.
 
+**Verified (29/08/2026):** Upstash accepts blocking commands on the TCP endpoint. `PING` and
+`BLPOP` both succeed against the dev database with `rediss://`, which was the open question —
+a plan can allow `PING` while refusing `BLPOP`, and BullMQ needs the second. Checked by
+`scripts/bootstrap/validate-services.sh`, so it stays checked rather than being remembered.
+
+Still open: the command budget. A blocking consumer polls continuously, so what runs out first
+is commands per month, not storage. Run the worker under normal dev load for a day and record
+the number here.
+
 **Decided (29/08/2026): Upstash stays.** Postgres does not substitute for it — Redis carries
 BullMQ, rate limiting, caching and idempotency, and Neon covers none of those.
 
