@@ -1,30 +1,29 @@
 #!/usr/bin/env bash
 #
-# Deploy one release to the production VPS. INF-017, INF-018.
+# Deploy a GoGo-BE release to the production VPS. INF-017.
 #
-#   ./scripts/deploy/deploy-vps.sh <sha> <env-file>
+#   ./scripts/deploy/deploy-vps.sh <ref> <env-file>
 #
-# Releases are immutable directories with a symlink switch, so a rollback is a
-# symlink move rather than a re-deploy of an older artifact:
-#
-#   /opt/gogo/releases/<sha>/
-#   /opt/gogo/shared/.env.prod
-#   /opt/gogo/current -> releases/<sha>
+# The stack itself is GoGo-BE's: docker/docker-compose.prod.yml defines caddy,
+# api, worker, migrate, postgres, redis and the nightly backup. This script does
+# the two things that repository cannot: it puts a .env.prod rendered from SSM
+# onto the host, and it drives the deploy. See vps/README.md for the boundary.
 #
 # Required environment: DEPLOY_HOST, DEPLOY_USER, DEPLOY_PATH, KNOWN_HOSTS_FILE,
 # SSH_KEY_FILE. DEPLOY_PORT defaults to 22.
 
 set -euo pipefail
 
-RELEASE_SHA="${1:?usage: deploy-vps.sh <sha> <env-file>}"
-ENV_FILE="${2:?usage: deploy-vps.sh <sha> <env-file>}"
+RELEASE_REF="${1:?usage: deploy-vps.sh <ref> <env-file>}"
+ENV_FILE="${2:?usage: deploy-vps.sh <ref> <env-file>}"
 
 : "${DEPLOY_HOST:?}" "${DEPLOY_USER:?}" "${DEPLOY_PATH:?}"
 : "${KNOWN_HOSTS_FILE:?}" "${SSH_KEY_FILE:?}"
 DEPLOY_PORT="${DEPLOY_PORT:-22}"
+COMPOSE="docker compose -f docker/docker-compose.prod.yml --env-file .env.prod"
 
-# StrictHostKeyChecking=yes with a pinned file: an unknown or changed host key
-# aborts the deploy instead of being accepted the way ssh-keyscan would.
+# StrictHostKeyChecking with a pinned file: an unknown or changed host key
+# aborts rather than being accepted the way ssh-keyscan would.
 ssh_opts=(-i "$SSH_KEY_FILE" -p "$DEPLOY_PORT"
           -o StrictHostKeyChecking=yes
           -o UserKnownHostsFile="$KNOWN_HOSTS_FILE"
@@ -32,36 +31,38 @@ ssh_opts=(-i "$SSH_KEY_FILE" -p "$DEPLOY_PORT"
 
 remote() { ssh "${ssh_opts[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "$@"; }
 
-release_dir="${DEPLOY_PATH}/releases/${RELEASE_SHA}"
+echo "==> Recording the running revision for rollback"
+# Captured before anything changes. Without it a rollback has to guess, and
+# guessing during an incident is how the wrong revision goes back out.
+previous="$(remote "cd '${DEPLOY_PATH}' && git rev-parse HEAD" 2>/dev/null || true)"
+if [[ -n "$previous" ]]; then
+  echo "    current: ${previous}"
+  remote "printf '%s' '${previous}' > '${DEPLOY_PATH}/.previous-revision'"
+else
+  echo "    no previous revision found — first deploy"
+fi
 
-echo "==> Preparing ${release_dir}"
-remote "mkdir -p '${release_dir}' '${DEPLOY_PATH}/shared'"
+echo "==> Fetching ${RELEASE_REF}"
+remote "cd '${DEPLOY_PATH}' && git fetch --prune origin && git checkout --detach '${RELEASE_REF}'"
 
-echo "==> Shipping environment file"
-scp "${ssh_opts[@]}" "$ENV_FILE" \
-  "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/shared/.env.prod.new"
+echo "==> Shipping the environment file"
+scp "${ssh_opts[@]}" "$ENV_FILE" "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/.env.prod.new"
+# install(1) renames into place: a process restarting mid-copy would otherwise
+# read half a file and fail on a config error that looks like a code bug.
+remote "cd '${DEPLOY_PATH}' && install -m 600 .env.prod.new .env.prod && rm -f .env.prod.new"
 
-# Atomic replace. A partially written env file read by a restarting process is
-# a config error that looks like a code bug.
-remote "chmod 600 '${DEPLOY_PATH}/shared/.env.prod.new' && \
-        mv '${DEPLOY_PATH}/shared/.env.prod.new' '${DEPLOY_PATH}/shared/.env.prod'"
-
-echo "==> Recording the previous release for rollback"
-remote "readlink -f '${DEPLOY_PATH}/current' > '${DEPLOY_PATH}/shared/previous' 2>/dev/null || true"
+echo "==> Building images"
+remote "cd '${DEPLOY_PATH}' && ${COMPOSE} build api worker"
 
 echo "==> Running migrations"
-# Migrations run before the symlink switch and must be backward compatible, so
-# the previous release still works if the health check fails and we roll back.
-remote "cd '${release_dir}' && ./scripts/migrate.sh"
+# Before the new containers take traffic, and expand-only, so the previous
+# revision still runs against this schema if the health check fails.
+remote "cd '${DEPLOY_PATH}' && ${COMPOSE} run --rm migrate"
 
-echo "==> Switching current -> ${RELEASE_SHA}"
-remote "ln -sfn '${release_dir}' '${DEPLOY_PATH}/current.new' && \
-        mv -T '${DEPLOY_PATH}/current.new' '${DEPLOY_PATH}/current'"
+echo "==> Starting the stack"
+remote "cd '${DEPLOY_PATH}' && ${COMPOSE} up -d --remove-orphans"
 
-echo "==> Restarting services"
-remote "sudo systemctl restart gogo-api gogo-worker"
+echo "==> Pruning dangling images"
+remote "docker image prune -f >/dev/null"
 
-echo "==> Pruning old releases (keeping 5)"
-remote "cd '${DEPLOY_PATH}/releases' && ls -1dt */ | tail -n +6 | xargs -r rm -rf"
-
-echo "deployed ${RELEASE_SHA}"
+echo "deployed ${RELEASE_REF}"
