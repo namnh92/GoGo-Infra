@@ -84,6 +84,24 @@ variable "cloudflare_zone_id" {
   default     = ""
 }
 
+variable "share_host" {
+  description = "Canonical share-link hostname, e.g. go.dev.gogo.id.vn. Empty disables the worker."
+  type        = string
+  default     = ""
+}
+
+variable "api_origin" {
+  description = "Origin the share-link worker calls to resolve a slug."
+  type        = string
+  default     = ""
+}
+
+variable "tenjin_tracking_template" {
+  description = "Tenjin tracking URL template. Empty means links resolve without attribution."
+  type        = string
+  default     = ""
+}
+
 variable "dns_record_suffix" {
   description = "Every DNS record in this environment must end with this hostname. Empty disables the check."
   type        = string

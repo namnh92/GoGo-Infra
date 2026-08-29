@@ -19,9 +19,18 @@ dns_record_suffix  = "dev.gogo.id.vn"
 # claim that cannot verify — Android then offers an unverified handler and iOS
 # ignores it, which is worse than not claiming.
 #
-# Waiting on the Worker (INF-012) to have something to point at.
+share_host = "go.dev.gogo.id.vn"
+
+# The dev API is not reachable from the edge yet. The worker still serves
+# /.well-known/ correctly; /l/{slug} answers 502 until this points somewhere,
+# which is the honest failure — better than redirecting to nothing.
+api_origin = ""
+
+# A DNS record is still needed for the hostname to exist. Cloudflare workers
+# routes attach to a zone, but the name has to resolve: proxied A/AAAA or CNAME
+# to any origin works, since the worker answers before the origin is reached.
 # dns_records = {
-#   share = { name = "go.dev.gogo.id.vn", type = "CNAME", content = "<worker route>" }
+#   share = { name = "go.dev.gogo.id.vn", type = "A", content = "192.0.2.1", proxied = true }
 # }
 
 cors_allowed_origins = [

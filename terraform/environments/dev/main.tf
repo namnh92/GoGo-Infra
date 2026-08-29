@@ -340,6 +340,21 @@ module "assets_bucket" {
   cors_allowed_origins = var.cors_allowed_origins
 }
 
+# The share-link edge. Off until share_host is set, so an environment without
+# a hostname plans clean instead of half-creating routes.
+module "share_link_worker" {
+  source = "../../modules/cloudflare-worker"
+  count  = var.share_host == "" || var.cloudflare_zone_id == "" ? 0 : 1
+
+  account_id               = var.cloudflare_account_id
+  zone_id                  = var.cloudflare_zone_id
+  environment              = var.environment
+  script_name              = "${module.tags.name_prefix}-share-link"
+  host                     = var.share_host
+  api_origin               = var.api_origin
+  tenjin_tracking_template = var.tenjin_tracking_template
+}
+
 module "dns" {
   source = "../../modules/cloudflare-dns"
   count  = var.cloudflare_zone_id == "" ? 0 : 1
