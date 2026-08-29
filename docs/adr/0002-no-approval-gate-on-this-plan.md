@@ -62,29 +62,34 @@ The account moved to a paid plan the same day. Half the gap closed.
 | --- | --- | --- |
 | Required status checks | shellcheck, gitleaks, terraform fmt/validate/tflint | same |
 | Strict (branch must be current) | yes | yes |
-| Pull request required | no | yes |
-| Approving reviews | — | 0 |
-| CODEOWNER review | — | no |
+| Pull request required | no | no |
 | Force push / deletion | blocked | blocked |
 | Linear history | — | required |
+
+Green CI is the whole gate. Nothing merges with a failing `terraform validate`, a shellcheck
+error or a gitleaks hit, and history cannot be rewritten or a branch deleted.
 
 **Required reviewers on environments still fails**, with the same 422 — that rule is a Team
 feature, not a Pro one.
 
-**Approval was then dropped as a requirement, deliberately.** Not because it is unavailable, but
-because it was decided it is not needed at this size. `master` still requires a pull request, so
-every change reaches a diff with CI running on it; it requires zero approving reviews and no
-CODEOWNER review.
+**Human review was then dropped entirely, deliberately.** Not because it is unavailable — the
+branch-level approval was available on this plan — but because it was decided that green CI is a
+sufficient gate at this size. Neither branch requires a pull request.
 
 What that costs, stated plainly rather than left implied: ADR 0001 argues that OIDC-to-SSM makes
-`.github/workflows/**` an authorization boundary, and review on it a security control. With
-approvals at zero, `.github/CODEOWNERS` is documentation again. Anyone who can open and merge a
-pull request can change what the apply and deploy roles reach.
+`.github/workflows/**` an authorization boundary, and review on it a security control. With no
+review anywhere, `.github/CODEOWNERS` is documentation. Whoever can push to a protected branch
+can change what the apply and deploy roles reach, and the only thing between that change and
+production credentials is CI passing — which the same commit can also change.
 
-What still contains it: the permissions boundary, the split between read-only plan credentials
-and write-capable apply credentials, path-scoped SSM policies, and CI checks that reject
-`pull_request_target` and secret-shaped values in config. None of those depend on a human
-looking.
+That is the actual shape of the residual risk, and it is why the controls below matter more here
+than they would in a repository with reviewers.
+
+What still contains it, none of which depends on a human looking: the permissions boundary, the
+split between read-only plan credentials and write-capable apply credentials, path-scoped SSM
+policies, and the CI checks that reject `pull_request_target` and secret-shaped values in config.
+Those are enforced in AWS and in Cloudflare, not in GitHub, so a workflow edit cannot lift
+them — it can only reach what the roles already allow.
 
 `enforce_admins` is **false** on both branches. The rules bind anyone who is not an admin and
 are honest about not binding the one person who is.
