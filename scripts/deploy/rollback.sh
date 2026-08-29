@@ -19,7 +19,8 @@ TARGET_REF="${1:-}"
 : "${KNOWN_HOSTS_FILE:?}" "${SSH_KEY_FILE:?}"
 DEPLOY_PORT="${DEPLOY_PORT:-22}"
 REMOTE_ENV_FILE="${REMOTE_ENV_FILE:?set REMOTE_ENV_FILE, e.g. .env.dev or .env.prod}"
-COMPOSE="ENV_FILE=${REMOTE_ENV_FILE} docker compose -f docker/docker-compose.prod.yml --env-file ${REMOTE_ENV_FILE}"
+COMPOSE_EDGE="${COMPOSE_EDGE:?set COMPOSE_EDGE}"
+COMPOSE="ENV_FILE=${REMOTE_ENV_FILE} docker compose -f docker/docker-compose.prod.yml -f ${COMPOSE_EDGE} --env-file ${REMOTE_ENV_FILE}"
 
 ssh_opts=(-i "$SSH_KEY_FILE" -p "$DEPLOY_PORT"
           -o StrictHostKeyChecking=yes

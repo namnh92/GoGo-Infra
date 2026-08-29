@@ -39,7 +39,13 @@ ENVIRONMENT_NAME="${REMOTE_ENV_FILE#.env.}"
 # deployed the same way on the same host. The first DEV deploy landed beside an
 # unrelated `gogo-prod` stack on this machine, and both answered to names nobody
 # had chosen deliberately.
-COMPOSE="COMPOSE_PROJECT_NAME=gogo-${ENVIRONMENT_NAME:-dev} ENV_FILE=${REMOTE_ENV_FILE} docker compose -f docker/docker-compose.prod.yml --env-file ${REMOTE_ENV_FILE}"
+# The edge is chosen per host, not assumed. A host that accepts inbound
+# connections runs Caddy with its own certificate; one that does not runs
+# cloudflared, which dials out. Getting this wrong is not a missing certificate
+# but a retry loop into a Let's Encrypt rate limit.
+COMPOSE_EDGE="${COMPOSE_EDGE:?set COMPOSE_EDGE, e.g. docker/docker-compose.edge-caddy.yml or docker/docker-compose.edge-tunnel.yml}"
+
+COMPOSE="COMPOSE_PROJECT_NAME=gogo-${ENVIRONMENT_NAME:-dev} ENV_FILE=${REMOTE_ENV_FILE} docker compose -f docker/docker-compose.prod.yml -f ${COMPOSE_EDGE} --env-file ${REMOTE_ENV_FILE}"
 
 # StrictHostKeyChecking with a pinned file: an unknown or changed host key
 # aborts rather than being accepted the way ssh-keyscan would.

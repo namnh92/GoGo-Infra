@@ -25,3 +25,9 @@ output "tunnel_hostnames" {
   description = "Hostnames served through the tunnel, if one is configured."
   value       = try(module.tunnel[0].hostnames, [])
 }
+
+output "tunnel_token" {
+  description = "Connector credential. Sensitive: it is enough to run a connector for this tunnel, so it is piped straight into SSM and never printed."
+  value       = try(module.tunnel[0].tunnel_token, "")
+  sensitive   = true
+}
