@@ -224,12 +224,15 @@ env_value() {
 # MUST differ per environment — one value across both is a defect. A shared
 # OneSignal App ID means a development device receives production pushes; a
 # shared Cloudflare zone means a dev apply can rewrite production DNS.
-ENV_MUST_DIFFER="ONESIGNAL_APP_ID FIREBASE_PROJECT_ID CLOUDFLARE_ZONE_ID"
+#
+# IOS_BUNDLE_ID and ANDROID_PACKAGE_NAME belong here: app.config.ts builds three
+# flavours from max.gogo.{flavor}, so prod is max.gogo.prod, not the dev value.
+# An earlier version of this list had them as may-differ, from a misreading of
+# the mobile config rather than from the config.
+ENV_MUST_DIFFER="ONESIGNAL_APP_ID FIREBASE_PROJECT_ID CLOUDFLARE_ZONE_ID IOS_BUNDLE_ID ANDROID_PACKAGE_NAME"
 
 # MAY differ — the suffix works if wanted, but one value is a legitimate choice.
-# GoGo ships a single app identity: IOS_BUNDLE_ID and ANDROID_PACKAGE_NAME are
-# max.gogo.dev in every environment, and Tenjin issues one SDK key per app.
-ENV_MAY_DIFFER="IOS_BUNDLE_ID ANDROID_PACKAGE_NAME TENJIN_IOS_SDK_KEY TENJIN_ANDROID_SDK_KEY"
+ENV_MAY_DIFFER="TENJIN_IOS_SDK_KEY TENJIN_ANDROID_SDK_KEY"
 
 is_env_scoped() {
   [[ " ${ENV_MUST_DIFFER} " == *" $1 "* ]]

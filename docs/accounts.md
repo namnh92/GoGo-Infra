@@ -73,23 +73,33 @@ Fill in as accounts are created. "Owner" is a person; "backup" must not be the s
 
 ## App identity
 
-Decided 29/08/2026, and permanent:
+**Corrected 29/08/2026.** An earlier version of this section recorded one identity,
+`max.gogo.dev`, across every environment. That was wrong: `GoGo-MobileApp/app.config.ts` builds
+three flavours from `max.gogo.{flavor}`.
 
-| | Value |
-| --- | --- |
-| iOS bundle id | `max.gogo.dev` |
-| Android package name | `max.gogo.dev` |
+| Flavour | Bundle id / package | Scheme | Claims web links |
+| --- | --- | --- | --- |
+| dev | `max.gogo.dev` | `gogo-dev://` | no |
+| stag | `max.gogo.stag` | `gogo-stag://` | no |
+| prod | `max.gogo.prod` | `gogo://` | yes |
 
-One identity across every environment. Neither can be changed after the first store submission,
-and both are baked into `apple-app-site-association`, `assetlinks.json` and the APNs
-configuration in OneSignal.
+Better than one identity, and deliberately so: three flavours install side by side, so a tester
+can run staging next to the store build. `bootstrap.env` therefore needs the suffixed form —
+`IOS_BUNDLE_ID_DEV`, `IOS_BUNDLE_ID_PROD` — and the bare key is dev's.
 
-Two consequences to plan around rather than rediscover:
+Only production claims `https://` links. A dev build claiming a domain whose `assetlinks.json`
+never names it ships a claim that cannot verify: Android offers an unverified handler in the
+chooser and iOS ignores it, which is worse than not claiming at all.
 
-- A development build and a production build cannot coexist on one device. Push separation comes
-  from having separate OneSignal App IDs, not from the bundle id.
-- The dev OneSignal app must be configured with this same bundle id, so its APNs certificate
-  covers the same identity.
+Permanent after the first store submission, and baked into `apple-app-site-association`,
+`assetlinks.json` and the APNs configuration in OneSignal — one OneSignal app per flavour that
+receives push, each configured with that flavour's bundle id.
+
+### Web link domain
+
+`gogo.id.vn`, decided 29/08/2026. `GoGo-MobileApp` currently claims `gogo.app`, a domain nobody
+here owns, so no link can verify regardless of the fingerprint. Tracked as GoGo-MobileApp
+work; the infrastructure side is `go.gogo.id.vn` throughout.
 
 ## Offboarding
 
