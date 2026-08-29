@@ -8,6 +8,11 @@ name: debug-oidc
 # never echoed.
 
 on:
+  # Push-triggered, not dispatch: workflow_dispatch only works for a workflow
+  # that already exists on the default branch, and master is 55 commits behind.
+  push:
+    branches: [develop]
+    paths: ['.github/workflows/debug-oidc.yml']
   workflow_dispatch:
 
 permissions:
