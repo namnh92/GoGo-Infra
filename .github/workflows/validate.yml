@@ -93,6 +93,11 @@ jobs:
           sudo install /tmp/gitleaks /usr/local/bin/gitleaks
           gitleaks version
 
+      # Runs before the scan: an allowlist edit that quietly disables a rule
+      # would otherwise show up as a clean scan.
+      - name: gitleaks rules still catch real credentials
+        run: ./scripts/ci/gitleaks-rules.test.sh
+
       - name: gitleaks
         run: make scan
 
