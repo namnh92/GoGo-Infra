@@ -51,6 +51,28 @@ dns_records = {
     content = "192.0.2.1"
     proxied = true
   }
+
+  # SSH target for the dev deploy. proxied = false is not a preference: the
+  # Cloudflare proxy carries HTTP and HTTPS only, so an orange-clouded record
+  # answers port 22 with a timeout — which is exactly how the first attempt to
+  # reach this host through go-dev.gogo.id.vn failed.
+  #
+  # A grey record publishes the origin address. Accepted for dev. Do not reuse
+  # this address for a production origin behind the proxy: once it is public, a
+  # flood goes straight past Cloudflare to the host.
+  #
+  # The address is on a VNPT consumer range, not a datacenter allocation. If the
+  # line hands out a different address, this record points somewhere else with
+  # no error anywhere — deploys start failing, or worse, reach whoever holds it
+  # next. The host key pin in config/known_hosts.dev is what stops the second
+  # case from being silent.
+  vps = {
+    name    = "vps-dev.gogo.id.vn"
+    type    = "A"
+    content = "14.226.6.188"
+    ttl     = 300
+    proxied = false
+  }
 }
 
 cors_allowed_origins = [
