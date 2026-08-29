@@ -83,6 +83,22 @@ front of whoever is least expecting it. If an account is already in that state,
 **zero destroy and zero replace**. Anything else means the live resource differs from the code
 and has to be reconciled by hand first.
 
+## If the apply succeeded but the migration did not
+
+The usual cause is that the six CI credentials were not in SSM yet, so
+`terraform init -migrate-state` could not reach the R2 backend. The environment is applied and
+correct; its state is simply still a file in `terraform/environments/<env>/`.
+
+Do not delete that file, and do not re-run the apply to fix it. Store the credentials, then:
+
+```bash
+./scripts/bootstrap/migrate-state.sh dev
+```
+
+It backs the state up outside the working directory first, migrates, and verifies that the
+remote backend returns at least as many resources as the local file held. `aws.sh` now checks
+for those credentials **before** the apply, so this state should not be reachable again.
+
 ## Idempotence
 
 Every script can be re-run. Bootstrap gets interrupted — a token turns out to be wrong, a

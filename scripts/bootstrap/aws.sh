@@ -35,6 +35,12 @@ account_id="$(require_tfvar_string cloudflare_account_id \
 verify_cloudflare_token "$account_id"
 verify_cloudflare_r2_access "$account_id"
 
+# Checked here rather than at the migration step at the end. The apply itself
+# does not need these, but the migration does — and failing after the apply
+# leaves the environment created with its state still on one laptop.
+source "${REPO_ROOT}/scripts/lib/r2-profile.sh"
+require_ci_credentials "$ENVIRONMENT"
+
 # Extends the existing handler rather than registering a second trap: a second
 # `trap ... EXIT` replaces the first, and the override file would then be left
 # behind — after which every later `terraform init` in that directory silently
@@ -62,7 +68,6 @@ echo "==> Migrating state into R2"
 cleanup
 trap - EXIT
 
-source "${REPO_ROOT}/scripts/lib/r2-profile.sh"
 write_r2_profile "/gogo/ci/${ENVIRONMENT}/terraform/write"
 
 terraform -chdir="$TF_DIR" init -input=false -migrate-state \
