@@ -85,13 +85,20 @@ elif [[ "$redis_url" == rediss://* || "$redis_url" == redis://* ]]; then
   check "redis/url is a TCP URL" 1
 
   if command -v redis-cli >/dev/null; then
-    tls_flag=()
-    [[ "$redis_url" == rediss://* ]] && tls_flag=(--tls)
-    if [[ "$(redis-cli "${tls_flag[@]}" -u "$redis_url" PING 2>/dev/null)" == "PONG" ]]; then
+    # macOS ships bash 3.2, where "${arr[@]}" on an empty array is an unbound
+    # variable under set -u. The script aborted mid-check and the surviving
+    # output said PING had failed — a crash reported as a service problem.
+    if [[ "$redis_url" == rediss://* ]]; then
+      redis_probe() { redis-cli --tls -u "$redis_url" "$@"; }
+    else
+      redis_probe() { redis-cli -u "$redis_url" "$@"; }
+    fi
+
+    if [[ "$(redis_probe PING 2>/dev/null)" == "PONG" ]]; then
       check "responds to PING" 1
       # BullMQ needs blocking commands. Upstash supports them on the TCP
       # endpoint but not on REST, and a plan can also restrict them.
-      if redis-cli "${tls_flag[@]}" -u "$redis_url" BLPOP __gogo_probe__ 1 >/dev/null 2>&1; then
+      if redis_probe BLPOP __gogo_probe__ 1 >/dev/null 2>&1; then
         check "blocking commands allowed (BullMQ)" 1
       else
         check "blocking commands allowed (BullMQ)" 0 "(BLPOP rejected — BullMQ will not work)"
@@ -218,16 +225,28 @@ if [[ -n "$onesignal_app" && -n "$onesignal_key" ]]; then
   # rejected — which is what the previous version of this check did.
   code=000
   scheme=""
+  onesignal_detail=""
   for attempt in "Key|https://api.onesignal.com/notifications" \
                  "Basic|https://onesignal.com/api/v1/notifications"; do
     this_scheme="${attempt%%|*}"
     url="${attempt#*|}"
-    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+    response="$(curl -sS -w $'\n%{http_code}' --max-time 15 \
       -H "Authorization: ${this_scheme} ${onesignal_key}" \
-      "${url}?app_id=${onesignal_app}&limit=1" 2>/dev/null || echo 000)"
+      "${url}?app_id=${onesignal_app}&limit=1" 2>/dev/null || printf '\n000')"
+    code="${response##*$'\n'}"
+    body="${response%$'\n'*}"
+
     if [[ "$code" == "200" ]]; then
       scheme="$this_scheme"
       break
+    fi
+
+    # Keep the provider explanation. OneSignal says whether the app id is
+    # unknown, the key is invalid, or the key belongs to another app — three
+    # different fixes that a bare 401 cannot tell apart.
+    if command -v jq >/dev/null 2>&1; then
+      provider_error="$(printf '%s' "$body" | jq -r '(.errors // [])[0] // empty' 2>/dev/null || true)"
+      [[ -n "$provider_error" ]] && onesignal_detail="$provider_error"
     fi
   done
 
@@ -235,7 +254,7 @@ if [[ -n "$onesignal_app" && -n "$onesignal_key" ]]; then
     200) check "OneSignal REST key authorizes the app (${scheme} scheme)" 1 ;;
     400) check "OneSignal REST key authorizes the app" 0 "(app id malformed or unknown for this key)" ;;
     401 | 403) check "OneSignal REST key authorizes the app" 0 \
-      "(rejected by both auth schemes — wrong key, rotated, or it belongs to another app)" ;;
+      "(${onesignal_detail:-rejected by both auth schemes})" ;;
     000) echo "  skip  OneSignal (no network)" ;;
     *) check "OneSignal REST key authorizes the app" 0 "(http ${code})" ;;
   esac
