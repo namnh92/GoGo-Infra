@@ -74,7 +74,9 @@ Free tiers are a development convenience, never a production SLA.
 - OIDC trust policies pin repository **and** ref or environment. Wildcards are rejected by a
   variable validation, not by review discipline.
 - SSM read permission is scoped per environment path, never `/gogo/*`.
-- A pull request can plan. Only an approved environment can apply.
+- A pull request can plan. Only a dispatched run can apply to production — the approval gate is a
+  paid GitHub feature this plan does not include, so the gate is a human starting the run. See
+  [`docs/adr/0002`](docs/adr/0002-no-approval-gate-on-this-plan.md).
 - A credential that was ever committed gets rotated, not deleted.
 - Provider consoles are GitHub OAuth logins, so the GitHub account is the root of trust for the
   database, queue, storage, push and attribution providers. MFA is mandatory; automation uses

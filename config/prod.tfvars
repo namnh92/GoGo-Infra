@@ -1,5 +1,5 @@
 environment        = "prod"
-cloudflare_zone_id = "" # gogo.id.vn zone
+cloudflare_zone_id = "84bece58fc6f0065213f682cbd9741c2" # gogo.id.vn
 
 # Fill in once the VPS address is known. go.gogo.id.vn is the canonical
 # share-link host (GOGO_SRS.md §8.11) and must also serve

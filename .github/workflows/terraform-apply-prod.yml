@@ -1,11 +1,18 @@
 name: terraform-apply-prod
 
+# Dispatch only, deliberately.
+#
+# The design assumed the production GitHub Environment would hold an approval
+# gate. Required reviewers are a paid feature and this repository is private on
+# a free plan, so that gate does not exist — and neither does branch protection
+# on master. Applying automatically on merge would therefore mean any merge can
+# change production infrastructure with nothing between it and the apply.
+#
+# Requiring a human to start the run is weaker than an approval, and it is what
+# is available. Restore the push trigger once required reviewers are enabled;
+# the environment reference stays either way, because the OIDC subject
+# repo:...:environment:production is what pins the trust policy.
 on:
-  push:
-    branches: [master]
-    paths:
-      - 'terraform/**'
-      - 'config/**'
   workflow_dispatch:
 
 permissions:
