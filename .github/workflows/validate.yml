@@ -107,11 +107,14 @@ jobs:
       # a direct path from an unreviewed change to production secrets.
       - name: no pull_request_target in privileged workflows
         run: |
-          if grep -rn 'pull_request_target' .github/workflows/; then
+          # Match the YAML trigger key, not the word. Searching for the bare
+          # string made this step fail on its own source — the check reported a
+          # violation that was only its own description of the violation.
+          if grep -rnE '^[[:space:]]*pull_request_target:' .github/workflows/; then
             echo "pull_request_target is forbidden in this repository" >&2
             exit 1
           fi
-          echo "ok: no pull_request_target"
+          echo "ok: no pull_request_target trigger"
 
       - name: no committed secret values in config
         run: |
