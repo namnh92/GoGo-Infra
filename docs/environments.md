@@ -104,6 +104,12 @@ added there because "plan needed to see the resource" turns every PR into a job 
 infrastructure, and a green plan would look exactly the same. `make cf-scopes` is the source of
 truth for what each token should hold.
 
+It also reports **grants beyond what Terraform uses** — the reverse question, and the one nobody
+asks until an incident: not "can it do the job" but "what else can it do". Cloudflare does not let
+a token enumerate its own permissions, so this infers them: a 200 on an endpoint no resource in
+this repository touches means some grant covers it. Reported, never failed on — an extra grant is
+a decision to review, and a check that turns one into a broken build gets muted.
+
 Write grants are established without writing anything, where the API allows it: a DELETE against
 a resource that does not exist, or a POST with a body that cannot describe anything. Both rely on
 Cloudflare answering 403 before it looks at what was asked for. Where neither works the column

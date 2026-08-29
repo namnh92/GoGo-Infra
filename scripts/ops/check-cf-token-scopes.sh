@@ -273,6 +273,58 @@ else
   echo "    read token not stored — skipping"
 fi
 
+# Grants beyond what Terraform uses.
+#
+# The reverse question from everything above, and the one nobody asks until an
+# incident: not "can it do the job" but "what else can it do". Cloudflare does
+# not let a token enumerate its own permissions, so this infers them — a 200 on
+# an endpoint no resource in this repository touches means some grant covers it.
+#
+# Reported, never failed on. An extra grant is a decision to review, not a
+# broken build, and a check that turns one into the other gets muted.
+echo
+echo "  grants beyond what Terraform uses"
+
+# label|path|permission a 200 implies
+EXTRA_PROBES=(
+  "workers kv|accounts/${ACCOUNT_ID}/storage/kv/namespaces|Account · Workers KV Storage"
+  "d1|accounts/${ACCOUNT_ID}/d1/database|Account · D1"
+  "queues|accounts/${ACCOUNT_ID}/queues|Account · Queues"
+  "pages|accounts/${ACCOUNT_ID}/pages/projects|Account · Cloudflare Pages"
+  "images|accounts/${ACCOUNT_ID}/images/v1|Account · Cloudflare Images"
+  "stream|accounts/${ACCOUNT_ID}/stream|Account · Stream"
+  "account members|accounts/${ACCOUNT_ID}/members|Account · Account Settings"
+  "access idps|accounts/${ACCOUNT_ID}/access/identity_providers|Account · Access: Organizations, IdPs and Groups"
+  "load balancers|accounts/${ACCOUNT_ID}/load_balancers/pools|Account · Load Balancing"
+  "billing|accounts/${ACCOUNT_ID}/billing/profile|Account · Billing"
+  "logpush|accounts/${ACCOUNT_ID}/logpush/jobs|Account · Logs"
+)
+if [[ -n "$ZONE_ID" ]]; then
+  EXTRA_PROBES+=(
+    "zone settings|zones/${ZONE_ID}/settings|Zone · Zone Settings"
+    "page rules|zones/${ZONE_ID}/pagerules|Zone · Page Rules"
+    "zone analytics|zones/${ZONE_ID}/analytics/dashboard|Zone · Analytics"
+  )
+fi
+
+for stage in read write; do
+  token="$(aws ssm get-parameter \
+    --name "/gogo/ci/${ENVIRONMENT}/terraform/${stage}/cloudflare-token" \
+    --with-decryption --query 'Parameter.Value' --output text 2>/dev/null)"
+  [[ -z "$token" || "$token" == "None" ]] && continue
+
+  found=0
+  for row in "${EXTRA_PROBES[@]}"; do
+    IFS='|' read -r label path perm <<< "$row"
+    code="$(api "$token" "$path")"
+    if [[ "$code" == "200" ]]; then
+      printf '    %-6s extra: %-16s %s\n' "$stage" "$label" "$perm"
+      found=$(( found + 1 ))
+    fi
+  done
+  [[ "$found" -eq 0 ]] && printf '    %-6s nothing beyond what Terraform uses\n' "$stage"
+done
+
 echo
 if [[ "$missing" -gt 0 ]]; then
   # Read is probed, not write: a probe that proves write would have to create
