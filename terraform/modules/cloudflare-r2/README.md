@@ -39,6 +39,15 @@ R2 API tokens are created outside Terraform (they are secret values) and pushed 
 
 Scope each token to a single bucket.
 
+## Lifecycle rules are sorted by id
+
+The API returns rules ordered by id and `rules` is a list, so declaring them in any other order
+makes every plan report the rules swapping places. The module sorts by id before sending, which
+matches what comes back and leaves a clean plan.
+
+Worth fixing rather than tolerating: a diff that appears on every run is how people learn to skim
+plan output, and skimmed plan output is where a real change goes unnoticed.
+
 ## Destroying a bucket
 
 The provider reports that an R2 lifecycle configuration **cannot be destroyed from Terraform**.

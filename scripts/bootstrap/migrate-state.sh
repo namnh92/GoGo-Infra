@@ -48,7 +48,10 @@ chmod 600 "$backup"
 echo "==> Backed up local state to ${backup}"
 
 echo "==> Migrating"
-terraform -chdir="$TF_DIR" init -input=false -migrate-state \
+# -force-copy answers the migration prompt that -input=false refuses to ask.
+# The state was copied outside the working directory a moment ago, so an
+# unattended copy is safe here.
+terraform -chdir="$TF_DIR" init -input=false -force-copy -migrate-state \
   -backend-config="endpoints={s3=\"https://${account_id}.r2.cloudflarestorage.com\"}"
 
 echo "==> Verifying the remote state"

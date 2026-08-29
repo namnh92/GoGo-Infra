@@ -101,15 +101,33 @@ write_r2_profile() {
   key_id="$(read_param "${ssm_prefix}/r2-state-access-key-id")" || return 1
   secret="$(read_param "${ssm_prefix}/r2-state-secret-access-key")" || return 1
 
+  local creds="${HOME}/.aws/credentials"
   mkdir -p "${HOME}/.aws"
-  touch "${HOME}/.aws/credentials"
-  chmod 600 "${HOME}/.aws/credentials"
+  touch "$creds"
+  chmod 600 "$creds"
+
+  # Replace the section rather than appending it. Appending on every run leaves
+  # duplicate [r2-state] blocks, and which one wins is parser-specific — so a
+  # rotated credential can keep working while a fresh one is ignored, or the
+  # reverse, with nothing in the output to say which happened.
+  local tmp
+  tmp="$(mktemp)"
+  chmod 600 "$tmp"
+  awk -v section="[${profile}]" '
+    $0 == section { skip = 1; next }
+    /^\[/        { skip = 0 }
+    !skip
+  ' "$creds" >"$tmp"
 
   {
     printf '\n[%s]\n' "$profile"
     printf 'aws_access_key_id=%s\n' "$key_id"
     printf 'aws_secret_access_key=%s\n' "$secret"
-  } >>"${HOME}/.aws/credentials"
+  } >>"$tmp"
+
+  # install(1) renames into place, so a reader never sees a half-written file.
+  install -m 600 "$tmp" "$creds"
+  rm -f "$tmp"
 
   unset key_id secret
   echo "wrote profile [${profile}] from ${ssm_prefix} (values not shown)"

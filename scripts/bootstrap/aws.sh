@@ -70,7 +70,9 @@ trap - EXIT
 
 write_r2_profile "/gogo/ci/${ENVIRONMENT}/terraform/write"
 
-terraform -chdir="$TF_DIR" init -input=false -migrate-state \
+# -force-copy answers the migration prompt. Without it, -migrate-state asks for
+# approval and -input=false refuses to ask, so init fails having done nothing.
+terraform -chdir="$TF_DIR" init -input=false -force-copy -migrate-state \
   -backend-config="endpoints={s3=\"https://${account_id}.r2.cloudflarestorage.com\"}"
 
 echo "==> Verifying"
