@@ -12,7 +12,7 @@ environment = "dev"
 cloudflare_zone_id = "84bece58fc6f0065213f682cbd9741c2"
 # Every dev record must carry the -dev suffix. One zone serves all three
 # environments, so this is what keeps a dev apply from naming a production host.
-dns_record_suffix  = "-dev.gogo.id.vn"
+dns_record_suffix = "-dev.gogo.id.vn"
 
 # Decided 29/08/2026: dev claims web links too, on its own host, so deep links
 # can be tested without a store build. That is only safe because the host names
