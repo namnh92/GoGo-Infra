@@ -189,7 +189,9 @@ load_env_file() {
 # APNs and FCM configuration.
 env_value() {
   local key="$1"
-  local suffixed="ENVCFG_${key}_$(printf '%s' "$ENVIRONMENT" | tr '[:lower:]' '[:upper:]')"
+  local env_upper
+  env_upper="$(printf '%s' "$ENVIRONMENT" | tr '[:lower:]' '[:upper:]')"
+  local suffixed="ENVCFG_${key}_${env_upper}"
   local plain="ENVCFG_${key}"
 
   if [[ -n "${!suffixed:-}" ]]; then
@@ -232,6 +234,9 @@ env_value() {
 ENV_MUST_DIFFER="ONESIGNAL_APP_ID FIREBASE_PROJECT_ID CLOUDFLARE_ZONE_ID IOS_BUNDLE_ID ANDROID_PACKAGE_NAME ANDROID_SIGNING_SHA256"
 
 # MAY differ — the suffix works if wanted, but one value is a legitimate choice.
+# Documentation rather than logic: is_env_scoped only consults ENV_MUST_DIFFER,
+# and the point of writing this list down is that the omission is deliberate.
+# shellcheck disable=SC2034
 ENV_MAY_DIFFER="TENJIN_IOS_SDK_KEY TENJIN_ANDROID_SDK_KEY"
 
 is_env_scoped() {
@@ -317,8 +322,12 @@ echo "==> Derived non-secret values"
 # and a hand-typed endpoint is one typo away from an error that surfaces as a
 # storage failure at runtime.
 account_id="$(env_value CLOUDFLARE_ACCOUNT_ID)"
+# Assigned by name and read back through indirect expansion in env_value, which
+# shellcheck cannot follow.
+# shellcheck disable=SC2034
 [[ -n "$(env_value R2_ENDPOINT)" ]] || printf -v ENVCFG_R2_ENDPOINT '%s' \
   "https://${account_id}.r2.cloudflarestorage.com"
+# shellcheck disable=SC2034
 [[ -n "$(env_value R2_BUCKET)" ]] || printf -v ENVCFG_R2_BUCKET '%s' \
   "gogo-${ENVIRONMENT}-assets"
 

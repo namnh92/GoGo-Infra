@@ -107,33 +107,3 @@ variable "cors_allowed_origins" {
   type        = list(string)
   default     = []
 }
-
-variable "deploy_host" {
-  description = "Production VPS hostname or IP."
-  type        = string
-  default     = ""
-}
-
-variable "deploy_port" {
-  description = "SSH port on the production VPS."
-  type        = number
-  default     = 22
-}
-
-variable "deploy_user" {
-  description = "SSH user used by the deploy workflow."
-  type        = string
-  default     = "deploy"
-}
-
-variable "deploy_path" {
-  description = "Release root on the production VPS."
-  type        = string
-  default     = "/opt/gogo"
-}
-
-variable "health_url" {
-  description = "Health endpoint checked after a deploy."
-  type        = string
-  default     = ""
-}

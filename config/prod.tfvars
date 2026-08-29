@@ -15,8 +15,6 @@ cors_allowed_origins = [
   "https://www.gogo.id.vn",
 ]
 
-deploy_host = ""
-deploy_port = 22
-deploy_user = "deploy"
-deploy_path = "/opt/gogo"
-health_url  = ""
+# deploy_host / deploy_port / deploy_user / deploy_path / health_url live in
+# config/bootstrap.env. Terraform does not use them — the deploy workflow does —
+# and having them in two files is how the two drift.

@@ -1,6 +1,5 @@
 locals {
-  environment = var.environment
-  repo        = "${var.github_owner}/${var.infra_repository}"
+  repo = "${var.github_owner}/${var.infra_repository}"
 }
 
 module "tags" {

@@ -6,6 +6,13 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.60"
     }
+    # Declared because this module uses tls_certificate directly. A module that
+    # relies on a provider the root happens to configure works until someone
+    # reuses the module somewhere that does not.
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
   }
 }
 

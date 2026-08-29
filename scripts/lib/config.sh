@@ -48,6 +48,9 @@ require_tfvar_string() {
 }
 
 # Shapes worth validating rather than passing straight to a provider.
+# shellcheck disable=SC2034  # consumed by scripts that source this file
 readonly CLOUDFLARE_ID_PATTERN='^[0-9a-f]{32}$'
+# shellcheck disable=SC2034
 readonly AWS_ACCOUNT_ID_PATTERN='^[0-9]{12}$'
+# shellcheck disable=SC2034
 readonly AWS_REGION_PATTERN='^[a-z]{2}(-gov)?-[a-z]+-[0-9]$'
