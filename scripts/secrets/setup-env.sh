@@ -83,6 +83,37 @@ key_pattern() {
   esac
 }
 
+# Where a value ends up. Without this the report reads as one undifferentiated
+# list, and a filled-in TENJIN_IOS_SDK_KEY looks like it should have satisfied
+# TENJIN_SERVER_API_KEY — they are different credentials from different pages of
+# the Tenjin console, and only the second one is ever written to SSM.
+key_destination() {
+  case "$1" in
+    R2_ENDPOINT|R2_BUCKET|ONESIGNAL_APP_ID)
+      echo "→ SSM" ;;
+    TENJIN_IOS_SDK_KEY|TENJIN_ANDROID_SDK_KEY)
+      echo "→ mobile build (client config — NOT the server API key)" ;;
+    APPLE_TEAM_ID|IOS_BUNDLE_ID|APNS_KEY_ID|FIREBASE_PROJECT_ID)
+      echo "→ OneSignal console + apple-app-site-association" ;;
+    ANDROID_PACKAGE_NAME|ANDROID_SIGNING_SHA256)
+      echo "→ assetlinks.json" ;;
+    IOS_STORE_URL|ANDROID_STORE_URL)
+      echo "→ share-link fallback page" ;;
+    CLOUDFLARE_ACCOUNT_ID|CLOUDFLARE_ZONE_ID)
+      echo "→ terraform" ;;
+    ROOT_DOMAIN|API_DOMAIN|CMS_DOMAIN|SHARE_DOMAIN)
+      echo "→ DNS records" ;;
+    GCP_PROJECT_ID)
+      echo "→ Google Cloud console" ;;
+    DEPLOY_*|HEALTH_URL)
+      echo "→ deploy workflow variables" ;;
+    DEVELOPER_SSO_PRINCIPAL_ARN)
+      echo "→ terraform (developer role)" ;;
+    *)
+      echo "" ;;
+  esac
+}
+
 key_blocks() {
   case "$1" in
     CLOUDFLARE_ZONE_ID)          echo "INF-011 DNS, INF-012 share-link Worker" ;;
@@ -225,7 +256,10 @@ if [[ "$CHECK_ONLY" == "yes" ]]; then
       fi
       blank=$((blank + 1))
     elif [[ "$value" =~ $pattern ]]; then
-      printf '  ✓ %-28s %s%s\n' "$key" "$value" "$scope"
+      printf '  ✓ %-28s %s\n' "$key" "$value"
+      dest="$(key_destination "$key")"
+      [[ -n "$dest" ]] && printf '      %s\n' "$dest"
+      [[ -n "$scope" ]] && printf '    %s\n' "$scope"
       filled=$((filled + 1))
     else
       printf '  ✗ %-28s %s\n    unexpected shape, want %s\n' "$key" "$value" "$pattern"

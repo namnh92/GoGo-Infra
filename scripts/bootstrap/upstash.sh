@@ -27,8 +27,47 @@ NAME="gogo-${ENVIRONMENT}-redis"
 REGION="${UPSTASH_REGION:-ap-southeast-1}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-: "${UPSTASH_EMAIL:?set UPSTASH_EMAIL}"
-: "${UPSTASH_API_KEY:?set UPSTASH_API_KEY}"
+
+# This script PROVISIONS. It creates a new Upstash database and overwrites
+# redis/url in SSM. If that parameter already holds a working value —
+# because the resource was created by hand in the console — running this leaves
+# an orphaned database still billing, and points the environment at an
+# empty one.
+#
+# So: refuse, and say which of the two situations the operator is in.
+guard_existing() {
+  local path="/gogo/${ENVIRONMENT}/backend/redis/url"
+
+  command -v aws >/dev/null 2>&1 || return 0
+  aws sts get-caller-identity >/dev/null 2>&1 || return 0
+  aws ssm get-parameter --name "$path" >/dev/null 2>&1 || return 0
+
+  if [[ "${GOGO_PROVISION_ANYWAY:-}" == "1" ]]; then
+    echo "warning: ${path} already set; GOGO_PROVISION_ANYWAY=1 — creating a second Upstash database anyway." >&2
+    return 0
+  fi
+
+  cat >&2 <<MSG
+error: ${path} is already set.
+
+  Nothing to do — the environment already points at a Upstash database.
+
+  This script creates a NEW one and overwrites that parameter, which would
+  leave the existing database orphaned and still counting against the plan.
+
+  To change the value instead:
+    ./scripts/secrets/put.sh ${ENVIRONMENT} redis/url
+
+  To provision a second one deliberately:
+    GOGO_PROVISION_ANYWAY=1 $0 ${ENVIRONMENT}
+MSG
+  return 1
+}
+
+guard_existing
+
+: "${UPSTASH_EMAIL:?set UPSTASH_EMAIL — the GitHub account primary email; the Management API uses email + key even when the console login is OAuth}"
+: "${UPSTASH_API_KEY:?set UPSTASH_API_KEY — create one at https://console.upstash.com under Account → Management API}"
 command -v jq >/dev/null || { echo "jq required" >&2; exit 1; }
 
 echo "==> Creating Upstash Redis ${NAME} in ${REGION}"
