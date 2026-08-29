@@ -73,6 +73,22 @@ dns_records = {
     ttl     = 300
     proxied = false
   }
+
+  # The dev API. Grey cloud, and this one is not negotiable either: Caddy on the
+  # host obtains its own Let's Encrypt certificate over HTTP-01, which requires
+  # the challenge to reach port 80 on the origin. An orange record terminates
+  # TLS at Cloudflare and answers the challenge itself, so issuance never
+  # completes and Caddy retries until it is rate-limited.
+  #
+  # Same address as vps — one host serves SSH and the API — so the origin is
+  # already published either way.
+  api = {
+    name    = "api-dev.gogo.id.vn"
+    type    = "A"
+    content = "14.226.6.188"
+    ttl     = 300
+    proxied = false
+  }
 }
 
 cors_allowed_origins = [
