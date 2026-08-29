@@ -32,7 +32,14 @@ done
 require_aws
 prefix="$(ssm_prefix "$ENVIRONMENT")"
 results=()
-worst=0   # 0 ok, 1 warn, 2 breach, 3 unknown
+unknowns=0
+# 0 ok, 1 warn, 2 breach. An unknown never sets the exit code.
+#
+# A scheduled run that fails every day because a Neon API key is not stored is
+# a check nobody reads by the end of the week, and then the breach it was meant
+# to catch goes unread with it. Unknowns are printed, counted and summarised;
+# they are not an alarm.
+worst=0
 
 get() {
   aws ssm get-parameter --name "${prefix}/$1" --with-decryption \
@@ -45,7 +52,7 @@ record() {
   case "$2" in
     breach) worst=2 ;;
     warn) [[ "$worst" -lt 2 ]] && worst=1 ;;
-    unknown) [[ "$worst" -eq 0 ]] && worst=3 ;;
+    unknown) unknowns=$(( unknowns + 1 )) ;;
   esac
   return 0
 }
@@ -147,6 +154,14 @@ else
     esac
     printf '%s%-16s %s\n' "$icon" "$svc" "$detail"
   done
+
+  echo
+  case "$worst" in
+    2) echo "OVER a free-tier limit. Acting on this is not optional: the tier stops, it does not slow down." ;;
+    1) echo "Approaching a limit." ;;
+    *) echo "Within limits." ;;
+  esac
+  [[ "$unknowns" -gt 0 ]] && echo "${unknowns} check(s) could not run — see the ? lines. Not counted as failures."
 fi
 
 exit "$worst"

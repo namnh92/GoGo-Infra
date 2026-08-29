@@ -107,7 +107,28 @@ under our control and the thing that spends the budget.
 
 Two checks report `unknown` on purpose: Neon compute hours and Google quota need API keys this
 repository does not store. Reporting a reassuring `ok` for a check that never ran is worse than
-having no check.
+having no check — and an unknown does not set the exit code, because a job that fails every day
+over a missing API key is a job nobody reads by the end of the week, taking the breach it was
+meant to catch with it.
+
+### What it found on the first run
+
+At the shipped defaults — both schedulers at 5s — the estimate was **207,360 commands a day
+against a free tier of roughly 16,667**. Twelve times over, before a single job existed.
+
+DEV is now set to:
+
+| Parameter | Value | Effect |
+| --- | --- | --- |
+| `worker/outbox-poll-ms` | 60000 | notifications dispatch within a minute |
+| `worker/ingest-poll-ms` | 300000 | place-import chunks advance every five minutes |
+
+That lands at ~10,368 commands a day. Both schedulers at 60s would still be over, which is worth
+knowing before someone tightens the ingest interval for convenience: the budget only works because
+ingest is slow.
+
+Production leaves both unset and keeps the 5s default — it runs Redis with an SLA and is not
+metered this way.
 
 ### Running it on a schedule needs a decision first
 
