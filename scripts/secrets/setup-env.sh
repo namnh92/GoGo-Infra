@@ -44,6 +44,7 @@ PREFIX="$(ssm_prefix "$ENVIRONMENT")"
 # than passed along: an allowlist is what stops a token pasted into the wrong
 # line from being written to SSM as an unencrypted String.
 ALLOWED_KEYS="
+UNSUFFIXED_VALUES_BELONG_TO
 CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_ZONE_ID
 ROOT_DOMAIN API_DOMAIN CMS_DOMAIN SHARE_DOMAIN
 R2_ENDPOINT R2_BUCKET
@@ -193,9 +194,29 @@ env_value() {
 
   if [[ -n "${!suffixed:-}" ]]; then
     printf '%s' "${!suffixed}"
-  else
-    printf '%s' "${!plain:-}"
+    return 0
   fi
+
+  [[ -n "${!plain:-}" ]] || return 0
+
+  # An unsuffixed value belongs to one environment — whichever the operator was
+  # configuring when they typed it. Falling back to it from another environment
+  # is how a dev OneSignal App ID ends up in the prod namespace: no error, no
+  # warning, and the first sign is a production push landing on a dev handset.
+  local owner="${ENVCFG_UNSUFFIXED_VALUES_BELONG_TO:-dev}"
+  if is_env_scoped "$key" && [[ "$ENVIRONMENT" != "$owner" ]]; then
+    {
+      echo
+      echo "error: ${key} has no ${ENVIRONMENT} value."
+      echo "       config/bootstrap.env has a bare ${key}, and"
+      echo "       UNSUFFIXED_VALUES_BELONG_TO=${owner} — so that value is ${owner}'s."
+      echo "       This key must differ per environment. Set:"
+      echo "         ${key}_$(printf '%s' "$ENVIRONMENT" | tr '[:lower:]' '[:upper:]')=..."
+    } >&2
+    return 1
+  fi
+
+  printf '%s' "${!plain}"
 }
 
 # Two different things, worth keeping apart.
