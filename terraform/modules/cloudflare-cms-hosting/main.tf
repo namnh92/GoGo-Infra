@@ -21,7 +21,19 @@ terraform {
 # arrangement decays into.
 
 locals {
-  metadata = jsondecode(file("${var.build_dir}/metadata.json"))
+  metadata_path = "${var.build_dir}/metadata.json"
+  has_build     = fileexists(local.metadata_path)
+
+  # Guarded so a missing artifact reaches the precondition below with a sentence
+  # someone can act on, instead of Terraform failing inside file() with a path
+  # and no explanation.
+  metadata = local.has_build ? jsondecode(file(local.metadata_path)) : {
+    main_module        = "index.js"
+    compatibility_date = "1970-01-01"
+    not_found_handling = "none"
+    run_worker_first   = []
+    assets_binding     = "ASSETS"
+  }
 
   worker_file = "${var.build_dir}/worker/${local.metadata.main_module}"
   assets_dir  = "${var.build_dir}/assets"
@@ -64,6 +76,19 @@ resource "cloudflare_workers_script" "cms" {
       text = var.be_origin
     },
   ]
+
+  # Fails the plan rather than planning a destroy.
+  #
+  # build/cms is gitignored, so a runner without it would otherwise compute an
+  # empty deploy — and on an environment that already has the Worker in state,
+  # "no artifact" would read as "remove the Worker". A red plan is recoverable;
+  # an automatic apply that deletes the deployed CMS is not.
+  lifecycle {
+    precondition {
+      condition     = local.has_build
+      error_message = "No build at ${var.build_dir}. Run ./scripts/build-cms.sh first (see modules/cloudflare-cms-hosting/README.md). CI does not build this yet — INF-044 (#46)."
+    }
+  }
 }
 
 # Explicitly off, not left to the default.
