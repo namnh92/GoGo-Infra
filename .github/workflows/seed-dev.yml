@@ -71,7 +71,13 @@ jobs:
           # it wrote: a corpus that lands in the wrong schema, or behind a
           # status filter, leaves search empty and every screen in an empty
           # state that looks like a client bug.
-          search="${API_ORIGIN%/health}/places/search?q=a&limit=1"
+          #
+          # No `q`. A text query makes this step assert two things at once, and
+          # the first version failed on the wrong one: `q=a` returned nothing
+          # against a freshly seeded database, because relevance matching is not
+          # substring matching. Retrieval is what this step is for; text search
+          # has its own tests.
+          search="${API_ORIGIN%/health}/places/search?limit=1"
           body="$(curl -fsS --max-time 15 "$search")"
           echo "$body"
           if [[ "$body" == *'"results":[]'* ]]; then
