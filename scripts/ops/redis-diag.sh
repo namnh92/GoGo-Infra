@@ -13,6 +13,7 @@
 # the URL — which is the question being asked. The URL itself is never printed.
 
 set -uo pipefail
+[[ -n "${DIAG_TRACE:-}" ]] && set -x
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "${REPO_ROOT}/scripts/secrets/common.sh"
@@ -70,12 +71,12 @@ section "bullmq set sizes"
 # diagnosing. ZCARD/LLEN is one command per set.
 for q in gogo-outbox gogo-ingest gogo-privacy; do
   printf '%-14s' "$q"
-  for set in wait active delayed completed failed; do
-    case "$set" in
-      wait|active) n="$(r LLEN "bull:${q}:${set}")" ;;
-      *)           n="$(r ZCARD "bull:${q}:${set}")" ;;
+  for state in wait active delayed completed failed; do
+    case "$state" in
+      wait|active) n="$(r LLEN "bull:${q}:${state}")" ;;
+      *)           n="$(r ZCARD "bull:${q}:${state}")" ;;
     esac
-    printf ' %s=%s' "$set" "${n:-?}"
+    printf ' %s=%s' "$state" "${n:-?}"
   done
   echo
 done
@@ -98,6 +99,34 @@ for q in gogo-outbox gogo-ingest gogo-privacy; do
   printf '%s: %s\n' "$q" "$id"
   r HGETALL "bull:${q}:${id}" | paste - - | grep -E '^(failedReason|attemptsMade|finishedOn|timestamp|processedOn|stacktrace)' | cut -c1-300 | sed 's/^/    /'
 done
+
+section "60s MONITOR sample, aggregated by command and key prefix"
+# MONITOR streams every command the server receives. Sixty seconds of it,
+# reduced to <command> <first two key segments> <count>, answers the question
+# the provider's top-commands chart cannot: which subsystem is sending them.
+#
+# Reduced, never printed raw: a raw MONITOR line carries full arguments, and a
+# SET of a session token would land in a workflow log. Only the command name
+# and the key's first two colon-separated segments survive.
+#
+# One connection, one command, sixty seconds — the cheapest measurement here.
+timeout 60 redis-cli "${tls[@]}" -u "$redis_url" MONITOR 2>/dev/null \
+  | awk '
+      NR == 1 && /^OK/ { next }
+      {
+        # 1700000000.123456 [0 1.2.3.4:5678] "GET" "bull:gogo-outbox:id"
+        cmd = $4; gsub(/"/, "", cmd); cmd = toupper(cmd)
+        key = $5; gsub(/"/, "", key)
+        n = split(key, seg, ":")
+        prefix = (n >= 2) ? seg[1] ":" seg[2] : key
+        if (prefix == "") prefix = "-"
+        count[cmd " " prefix]++
+        total++
+      }
+      END {
+        for (k in count) printf "%8d  %s\n", count[k], k
+        printf "%8d  TOTAL in 60s  (%.1f/s)\n", total, total / 60
+      }' | sort -rn | head -40
 
 section "memory"
 r INFO memory | grep -E '^(used_memory_human|used_memory_peak_human)' || true
