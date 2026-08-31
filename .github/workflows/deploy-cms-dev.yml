@@ -1,0 +1,201 @@
+name: deploy-cms-dev
+
+# Deploys the GoGo-CMS Worker to dev.
+#
+# Dispatch-only, for the same reason deploy-dev.yml is: the dev CMS is what
+# Mobile and backend developers point their browser at, and a deploy on every
+# push to develop would swap it under them several times an hour. It also means
+# no build runs unless somebody wanted one.
+#
+# The split of responsibilities matches the backend deploy (SRS §163):
+# GoGo-CMS owns the build and hands over a ref; GoGo-Infra owns the credentials,
+# the ordering and the promotion. Terraform still owns the hostname and the
+# Access policy — this workflow only ever uploads a script and points traffic
+# at a version (modules/cloudflare-cms-hosting/README.md).
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_ref:
+        description: GoGo-CMS ref to build and deploy
+        required: true
+        default: develop
+      promote_version_id:
+        description: >-
+          Existing Worker version to promote instead of building. This is the
+          rollback path: no checkout, no build, no upload.
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  id-token: write
+
+# Never cancel-in-progress. Interrupting an upload leaves a version half
+# written; interrupting a promotion leaves traffic split across two versions.
+concurrency:
+  group: gogo-deploy-cms-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy the CMS worker to dev
+    runs-on: ubuntu-latest
+    environment: dev
+
+    env:
+      # Non-secret. Named here so every step reads the same value and a missing
+      # one fails at the check below rather than halfway through a deploy.
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      CMS_BE_ORIGIN: ${{ vars.CMS_BE_ORIGIN }}
+
+    steps:
+      - name: check deploy configuration
+        run: |
+          set -euo pipefail
+          # GoGo-CMS commits `"vars": { "BE_ORIGIN": "" }` in wrangler.jsonc,
+          # and plain-text vars in the config OVERRIDE the dashboard value.
+          # Uploading without passing it produces a CMS that loads and answers
+          # every /v1/* with 503 BACKEND_NOT_CONFIGURED — a deploy that looks
+          # successful and is not. Refuse before that can happen.
+          missing=0
+          for name in CLOUDFLARE_ACCOUNT_ID CMS_BE_ORIGIN; do
+            if [ -z "${!name}" ]; then
+              echo "::error::repository variable ${name} is not set"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_CMS_DEPLOY_DEV_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: fetch deploy credentials
+        env:
+          SSM_PREFIX: /gogo/ci/dev/cms-deploy
+        run: |
+          set -euo pipefail
+          cf="$(aws ssm get-parameter --name "${SSM_PREFIX}/cloudflare-token" \
+            --with-decryption --query 'Parameter.Value' --output text)"
+          echo "::add-mask::${cf}"
+          echo "CLOUDFLARE_API_TOKEN=${cf}" >> "$GITHUB_ENV"
+
+          # GoGo-CMS is private, so checkout needs a token of its own. Read-only
+          # on contents, and it never leaves this job.
+          gh="$(aws ssm get-parameter --name "${SSM_PREFIX}/github-read-token" \
+            --with-decryption --query 'Parameter.Value' --output text)"
+          echo "::add-mask::${gh}"
+          echo "CMS_READ_TOKEN=${gh}" >> "$GITHUB_ENV"
+
+      # ---- Rollback path: promote an existing version, build nothing --------
+      - name: promote an existing version
+        if: inputs.promote_version_id != ''
+        run: |
+          set -euo pipefail
+          npx --yes wrangler@4 versions deploy "${{ inputs.promote_version_id }}@100%" -y
+
+      # ---- Normal path: build the ref, upload, promote ----------------------
+      - name: check out GoGo-CMS
+        if: inputs.promote_version_id == ''
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/GoGo-CMS
+          ref: ${{ inputs.release_ref }}
+          token: ${{ env.CMS_READ_TOKEN }}
+          path: cms
+
+      - uses: pnpm/action-setup@v4
+        if: inputs.promote_version_id == ''
+      - uses: actions/setup-node@v4
+        if: inputs.promote_version_id == ''
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: cms/pnpm-lock.yaml
+
+      - name: build
+        if: inputs.promote_version_id == ''
+        working-directory: cms
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          # The gates themselves live in GoGo-CMS's own CI and run on every PR
+          # and push. Re-running them here would double the compute and still
+          # not be the thing that decides mergeability. What this asserts is the
+          # one property CI cannot: that the committed client still matches the
+          # vendored contract at the ref being deployed.
+          pnpm api:check
+          pnpm build
+
+      - name: upload version
+        if: inputs.promote_version_id == ''
+        id: upload
+        working-directory: cms
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          pnpm exec wrangler versions upload \
+            --var "BE_ORIGIN:${CMS_BE_ORIGIN}" \
+            --message "${{ inputs.release_ref }} ${sha:0:7} — GoGo-Infra run ${{ github.run_id }}" \
+            | tee "${RUNNER_TEMP}/upload.log"
+
+          version_id="$(grep -oE 'Worker Version ID: [0-9a-f-]{36}' "${RUNNER_TEMP}/upload.log" \
+            | tail -1 | awk '{ print $4 }')"
+          if [ -z "$version_id" ]; then
+            # Nothing is promoted on a parse failure: an unpromoted upload
+            # changes nothing, while promoting a guessed id changes everything.
+            echo "::error::could not read the version id from wrangler output"
+            exit 1
+          fi
+          echo "version_id=${version_id}" >> "$GITHUB_OUTPUT"
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
+      - name: promote to 100% of traffic
+        if: inputs.promote_version_id == ''
+        working-directory: cms
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler versions deploy "${{ steps.upload.outputs.version_id }}@100%" -y
+
+      # The hostname sits behind Cloudflare Access, so an unauthenticated probe
+      # can only prove that Access is in front — which is itself the thing that
+      # must never silently disappear. A 200 here would mean the admin console
+      # is open to the internet.
+      - name: verify Access still guards the hostname
+        env:
+          CMS_URL: ${{ vars.CMS_URL_DEV }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CMS_URL}" ]; then
+            echo "CMS_URL_DEV is not set; skipping the Access check" >&2
+            exit 0
+          fi
+          code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${CMS_URL}/")"
+          case "$code" in
+            302|301) echo "Access is in front (HTTP ${code})" ;;
+            200)
+              echo "::error::${CMS_URL} answered 200 unauthenticated — Access is NOT in front"
+              exit 1
+              ;;
+            *) echo "::warning::unexpected HTTP ${code} from ${CMS_URL}" ;;
+          esac
+
+      - name: summary
+        if: always()
+        run: |
+          {
+            echo "### CMS deploy — dev"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Worker | \`gogo-cms-dev\` |"
+            echo "| Ref | \`${{ inputs.release_ref }}\` |"
+            echo "| Version | \`${{ inputs.promote_version_id || steps.upload.outputs.version_id }}\` |"
+            echo "| Commit | \`${{ steps.upload.outputs.sha }}\` |"
+            echo
+            echo "Rollback: dispatch this workflow again with **promote_version_id** set to the"
+            echo "previous version. It promotes without building, so it does not depend on the"
+            echo "old ref still being buildable."
+          } >> "$GITHUB_STEP_SUMMARY"

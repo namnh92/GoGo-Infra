@@ -102,6 +102,26 @@ module "policy_deploy" {
   tags        = module.tags.tags
 }
 
+# The CMS deploy reads two credentials and nothing else: a Cloudflare token
+# holding only Workers Scripts Edit, and a GitHub token that can read GoGo-CMS.
+#
+# It does NOT borrow the apply role. That role's Cloudflare token can edit DNS,
+# Access and R2 — everything Terraform touches — and a job whose whole purpose
+# is uploading a Worker script would then be able to move a hostname. The point
+# of separate paths is that the blast radius of a compromised workflow is the
+# job's own job, not the union of every job.
+module "policy_cms_deploy" {
+  source = "../../modules/aws-ssm-iam"
+
+  name        = "${module.tags.name_prefix}-cms-deploy"
+  description = "Cloudflare Workers token and GoGo-CMS read token for the CMS deploy"
+
+  parameter_paths = ["ci/${var.environment}/cms-deploy/*"]
+
+  kms_key_arn = data.aws_kms_key.ssm.arn
+  tags        = module.tags.tags
+}
+
 # The quota monitor reads two things no other role reads together: the runtime
 # secrets, to reach Redis and PostgreSQL, and a Cloudflare token, to ask for R2
 # usage. That combination is why it gets its own role rather than borrowing the
@@ -437,6 +457,21 @@ module "github_oidc" {
 
       policy_arns = {
         ssm_read = module.policy_deploy.policy_arn
+      }
+    }
+
+    cms_deploy = {
+      # GoGo-Infra, like every other deploy subject here: the workflow lives in
+      # this repository, so this is the repo GitHub will name in the token.
+      #
+      # Same reasoning as `deploy` — GoGo-Infra owns deployment orchestration
+      # (SRS §163) and GoGo-CMS owns the build. What crosses the boundary is a
+      # ref, not a set of credentials.
+      description = "CMS Worker deploy to dev: read the Workers token and the GoGo-CMS read token"
+      subjects    = [for f in values(local.oidc_subject.infra) : "${f}:environment:dev"]
+
+      policy_arns = {
+        ssm_read = module.policy_cms_deploy.policy_arn
       }
     }
   }
