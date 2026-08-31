@@ -31,7 +31,10 @@ redis_url="$(aws ssm get-parameter --name "${prefix}/redis/url" --with-decryptio
 tls=()
 [[ "$redis_url" == rediss://* ]] && tls=(--tls)
 
-r() { redis-cli "${tls[@]}" -u "$redis_url" "$@" 2>&1 | tr -d '\r'; }
+# stderr is dropped, not merged: redis-cli prints "Warning: Using a password..."
+# there on every call, and merged into stdout it became a key name in the
+# scheduler section and an empty-looking job id that aborted the failed-job one.
+r() { redis-cli "${tls[@]}" -u "$redis_url" "$@" 2>/dev/null | tr -d '\r'; }
 
 section() { printf '\n== %s ==\n' "$1"; }
 
@@ -55,6 +58,34 @@ r CLIENT LIST | sed -E 's/ (age|fd|sub|psub|multi|qbuf|qbuf-free|obl|oll|omem|ev
 
 section "clients by address"
 r CLIENT LIST | grep -oE 'addr=[^ ]+' | sed -E 's/addr=//; s/:[0-9]+$//' | sort | uniq -c | sort -rn || true
+
+section "60s MONITOR sample, aggregated by command and key prefix"
+# MONITOR streams every command the server receives. Sixty seconds of it,
+# reduced to <command> <first two key segments> <count>, answers the question
+# the provider's top-commands chart cannot: which subsystem is sending them.
+#
+# Reduced, never printed raw: a raw MONITOR line carries full arguments, and a
+# SET of a session token would land in a workflow log. Only the command name
+# and the key's first two colon-separated segments survive.
+#
+# One connection, one command, sixty seconds — the cheapest measurement here.
+timeout 60 redis-cli "${tls[@]}" -u "$redis_url" MONITOR 2>/dev/null \
+  | awk '
+      NR == 1 && /^OK/ { next }
+      {
+        # 1700000000.123456 [0 1.2.3.4:5678] "GET" "bull:gogo-outbox:id"
+        cmd = $4; gsub(/"/, "", cmd); cmd = toupper(cmd)
+        key = $5; gsub(/"/, "", key)
+        n = split(key, seg, ":")
+        prefix = (n >= 2) ? seg[1] ":" seg[2] : key
+        if (prefix == "") prefix = "-"
+        count[cmd " " prefix]++
+        total++
+      }
+      END {
+        for (k in count) printf "%8d  %s\n", count[k], k
+        printf "%8d  TOTAL in 60s  (%.1f/s)\n", total, total / 60
+      }' | sort -rn | head -40
 
 section "commands by type (since counter start)"
 # Not every provider supports commandstats; an error here is printed, not hidden.
@@ -94,39 +125,11 @@ done
 
 section "newest failed job per queue (why it failed)"
 for q in gogo-outbox gogo-ingest gogo-privacy; do
-  id="$(r ZRANGE "bull:${q}:failed" -1 -1)"
-  [[ -n "$id" ]] || { printf '%s: none\n' "$q"; continue; }
+  id="$(r ZRANGE "bull:${q}:failed" -1 -1 || true)"
+  if [[ -z "$id" ]]; then printf '%s: none\n' "$q"; continue; fi
   printf '%s: %s\n' "$q" "$id"
   r HGETALL "bull:${q}:${id}" | paste - - | grep -E '^(failedReason|attemptsMade|finishedOn|timestamp|processedOn|stacktrace)' | cut -c1-300 | sed 's/^/    /'
 done
-
-section "60s MONITOR sample, aggregated by command and key prefix"
-# MONITOR streams every command the server receives. Sixty seconds of it,
-# reduced to <command> <first two key segments> <count>, answers the question
-# the provider's top-commands chart cannot: which subsystem is sending them.
-#
-# Reduced, never printed raw: a raw MONITOR line carries full arguments, and a
-# SET of a session token would land in a workflow log. Only the command name
-# and the key's first two colon-separated segments survive.
-#
-# One connection, one command, sixty seconds — the cheapest measurement here.
-timeout 60 redis-cli "${tls[@]}" -u "$redis_url" MONITOR 2>/dev/null \
-  | awk '
-      NR == 1 && /^OK/ { next }
-      {
-        # 1700000000.123456 [0 1.2.3.4:5678] "GET" "bull:gogo-outbox:id"
-        cmd = $4; gsub(/"/, "", cmd); cmd = toupper(cmd)
-        key = $5; gsub(/"/, "", key)
-        n = split(key, seg, ":")
-        prefix = (n >= 2) ? seg[1] ":" seg[2] : key
-        if (prefix == "") prefix = "-"
-        count[cmd " " prefix]++
-        total++
-      }
-      END {
-        for (k in count) printf "%8d  %s\n", count[k], k
-        printf "%8d  TOTAL in 60s  (%.1f/s)\n", total, total / 60
-      }' | sort -rn | head -40
 
 section "memory"
 r INFO memory | grep -E '^(used_memory_human|used_memory_peak_human)' || true

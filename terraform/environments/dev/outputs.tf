@@ -6,8 +6,9 @@ output "github_role_arns" {
 output "ssm_paths" {
   description = "Which parameter paths each policy covers, for review."
   value = {
-    plan  = module.policy_plan.parameter_paths
-    apply = module.policy_apply.parameter_paths
+    plan       = module.policy_plan.parameter_paths
+    apply      = module.policy_apply.parameter_paths
+    cms_deploy = module.policy_cms_deploy.parameter_paths
   }
 }
 
@@ -35,6 +36,11 @@ output "tunnel_token" {
 output "assets_public_base_url" {
   description = "Base URL for catalogue images, or empty while the public bucket is off."
   value       = try(module.public_assets_bucket[0].public_base_url, "")
+}
+
+output "cms_deploy_role_arn" {
+  description = "Role the CMS deploy workflow assumes. Set as AWS_CMS_DEPLOY_DEV_ROLE_ARN."
+  value       = module.github_oidc.role_arns["cms_deploy"]
 }
 
 output "monitor_role_arn" {
