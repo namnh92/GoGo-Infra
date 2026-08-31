@@ -33,6 +33,35 @@ copy-paste mistake.
 Separate OneSignal applications matter beyond hygiene: sharing one would let a development
 device receive a production push, and would force APNs and FCM configuration to be shared too.
 
+## DEV data is shared, seeded, and disposable
+
+DEV is one deployed environment, not one per developer. Everyone points at the same Neon
+database, so everything in it is shared: a room someone creates is visible to the next person,
+and anyone can edit or delete what anyone else made. Nothing in DEV is a place to keep something
+you need to still be there tomorrow.
+
+The contents come from `GoGo-BE`'s seed — taxonomies, service areas, a small verified place
+corpus around HCMC, and a bootstrap CMS admin:
+
+```bash
+gh workflow run seed-dev.yml -R namnh92/GoGo-Infra
+```
+
+**Deploy does not seed.** `deploy-vps.sh` runs migrations and nothing else. A seed on every
+deploy would overwrite whatever someone was testing, several times a day, with no signal that it
+had happened — so it is a separate, dispatch-only workflow. The seed itself is idempotent
+(matches on name, skips what exists), so running it twice is harmless; running it automatically
+is a different question, and the answer is no.
+
+The workflow checks `/v1/places/search` afterwards rather than trusting the seed's exit code. A
+corpus that lands but is not served leaves every screen in an empty state that reads as a client
+bug, and that is a slow thing to diagnose from the other side.
+
+`APP_ENV` is passed explicitly from the environment name, because GoGo-BE defaults it to `dev`
+when unset and it decides whether the bootstrap admin is created at all (INF-048). Seeding a
+production host additionally requires `SEED_CONFIRM`: demo places in a real catalogue become
+indistinguishable from real ones as soon as anyone links to them.
+
 ## Free-tier limits that shape design
 
 These are development conveniences with real edges. Measure them, write the numbers down here,

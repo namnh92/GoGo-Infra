@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+#
+# Shared plumbing for the scripts that drive a deployed host: SSH options, the
+# compose invocation, and remote().
+#
+# Sourced, never executed. The caller sets `set -euo pipefail` itself.
+#
+# This exists because deploy-vps.sh and rollback.sh each carried their own copy,
+# and the copies had already drifted: rollback built its compose command without
+# COMPOSE_PROJECT_NAME, so a rollback addressed the project "docker" while the
+# deploy that created it addressed "gogo-dev". Rolling back would have rebuilt a
+# stack nobody deployed and left the running one untouched.
+#
+# Required environment: DEPLOY_HOST, DEPLOY_USER, DEPLOY_PATH, KNOWN_HOSTS_FILE,
+# SSH_KEY_FILE, REMOTE_ENV_FILE, COMPOSE_EDGE. DEPLOY_PORT defaults to 22.
+
+: "${DEPLOY_HOST:?}" "${DEPLOY_USER:?}" "${DEPLOY_PATH:?}"
+: "${KNOWN_HOSTS_FILE:?}" "${SSH_KEY_FILE:?}"
+DEPLOY_PORT="${DEPLOY_PORT:-22}"
+
+# REMOTE_ENV_FILE names the file on the host. It is per environment because the
+# dev host is a different machine with different credentials: writing `.env.prod`
+# there invites someone to fill it with production values, and the file would
+# look correct while pointing the dev API at the production database.
+REMOTE_ENV_FILE="${REMOTE_ENV_FILE:?set REMOTE_ENV_FILE, e.g. .env.dev or .env.prod}"
+
+# Derived from the env file name so the two cannot disagree: .env.dev -> dev.
+ENVIRONMENT_NAME="${REMOTE_ENV_FILE#.env.}"
+: "${ENVIRONMENT_NAME:?REMOTE_ENV_FILE must look like .env.<environment>}"
+
+# The edge is chosen per host, not assumed. A host that accepts inbound
+# connections runs Caddy with its own certificate; one that does not runs
+# cloudflared, which dials out. Getting this wrong is not a missing certificate
+# but a retry loop into a Let's Encrypt rate limit.
+COMPOSE_EDGE="${COMPOSE_EDGE:?set COMPOSE_EDGE, e.g. docker/docker-compose.edge-caddy.yml or docker/docker-compose.edge-tunnel.yml}"
+
+# ENV_FILE and --env-file both, because they do different jobs: the flag gives
+# compose the variables it needs to interpolate the file, and ENV_FILE tells the
+# services which file to load into the containers. Passing only the flag builds
+# the images and then fails at the first container with "env file .env.prod not
+# found", which reads like a missing file rather than a naming mismatch.
+#
+# COMPOSE_PROJECT_NAME, because the default is the directory name — "docker" —
+# which says nothing about what is running and collides with any other checkout
+# deployed the same way on the same host. The first DEV deploy landed beside an
+# unrelated `gogo-prod` stack on this machine, and both answered to names nobody
+# had chosen deliberately.
+COMPOSE="COMPOSE_PROJECT_NAME=gogo-${ENVIRONMENT_NAME} ENV_FILE=${REMOTE_ENV_FILE} docker compose -f docker/docker-compose.prod.yml -f ${COMPOSE_EDGE} --env-file ${REMOTE_ENV_FILE}"
+
+# StrictHostKeyChecking with a pinned file: an unknown or changed host key
+# aborts rather than being accepted the way ssh-keyscan would.
+#
+# Shared options, then the port flag each tool actually wants. scp reads -p as
+# "preserve modification times" and -P as the port; passing ssh's array to scp
+# made it treat 22 as a filename and fail with
+#   scp: stat local "22": No such file or directory
+# which reads like a missing file rather than a wrong flag.
+common_opts=(-i "$SSH_KEY_FILE"
+             -o StrictHostKeyChecking=yes
+             -o UserKnownHostsFile="$KNOWN_HOSTS_FILE"
+             -o IdentitiesOnly=yes)
+ssh_opts=("${common_opts[@]}" -p "$DEPLOY_PORT")
+# Used by deploy-vps.sh only; declared here so the two flag conventions stay
+# side by side, which is what stops the -p/-P confusion from coming back.
+# shellcheck disable=SC2034
+scp_opts=("${common_opts[@]}" -P "$DEPLOY_PORT")
+
+# bash -lc, not a bare command.
+#
+# ssh runs a non-interactive, non-login shell, whose PATH is the system default.
+# Docker installed by Homebrew lives in /opt/homebrew/bin and by rancher/colima
+# elsewhere; none of them are on that PATH. The deploy would fail on
+# `docker: command not found` while `docker --version` works perfectly for
+# anyone who logs in to check.
+#
+# A login shell reads the host's own profile, so the host decides where its
+# tools are. Naming a path here would put "Docker is at /opt/homebrew/bin" into
+# a deploy contract that ADR-0004 says must not know what the host is.
+remote() {
+  ssh "${ssh_opts[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "bash -lc $(printf '%q' "$*")"
+}
