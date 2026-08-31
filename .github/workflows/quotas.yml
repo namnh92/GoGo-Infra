@@ -46,6 +46,12 @@ jobs:
           role-to-assume: ${{ vars.AWS_MONITOR_DEV_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
+      # psql is already on the runner image; redis-cli is not, and without it the
+      # Redis memory line reports `unknown` forever — a check that never runs is
+      # indistinguishable from one that always passes.
+      - name: install redis-cli
+        run: sudo apt-get update -qq && sudo apt-get install -y redis-tools
+
       - name: check quotas
         id: check
         run: ./scripts/ops/check-quotas.sh dev

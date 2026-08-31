@@ -57,7 +57,7 @@ record() {
   return 0
 }
 
-# ── Redis: memory, and the command budget it is actually billed on ───────────
+# ── Redis: memory ────────────────────────────────────────────────────────────
 redis_url="$(get redis/url)"
 if [[ -z "$redis_url" ]]; then
   record redis unknown "redis/url not set"
@@ -73,24 +73,31 @@ else
   else
     record redis unknown "INFO memory returned nothing"
   fi
+fi
 
-  # The command counter Upstash exposes over the Redis protocol is per
-  # connection, not per month, so it cannot answer the question that matters.
-  # The estimate below is arithmetic on the configured poll intervals, which is
-  # the thing under our control and the thing that spends the budget.
-  outbox_ms="$(get worker/outbox-poll-ms)"; outbox_ms="${outbox_ms:-5000}"
-  ingest_ms="$(get worker/ingest-poll-ms)"; ingest_ms="${ingest_ms:-5000}"
-  cmds_per_cycle=6      # enqueue, move, complete, ack and lock traffic per tick
-  per_day=$(( (86400000 / outbox_ms + 86400000 / ingest_ms) * cmds_per_cycle ))
-  free_per_day=16667    # Upstash free: ~500k/month
-  if [[ "$per_day" -gt "$free_per_day" ]]; then
-    record redis-commands breach \
-      "~${per_day}/day estimated from poll intervals (${outbox_ms}ms, ${ingest_ms}ms) vs ~${free_per_day}/day free"
-  elif [[ "$per_day" -gt $(( free_per_day * 70 / 100 )) ]]; then
-    record redis-commands warn "~${per_day}/day, over 70% of ~${free_per_day}/day"
-  else
-    record redis-commands ok "~${per_day}/day estimated, under ~${free_per_day}/day"
-  fi
+# ── Redis: the command budget it is actually billed on ───────────────────────
+#
+# Outside the redis-cli branch on purpose. This is arithmetic on two SSM values
+# and needs no client at all — and it is the number that matters most, because
+# the free tier stops on commands long before it stops on memory. It used to sit
+# inside that branch, so a runner without redis-cli silently skipped the one
+# check the whole quota story is about.
+#
+# The command counter Upstash exposes over the Redis protocol is per connection,
+# not per month, so it cannot answer the question. The estimate below is the
+# thing under our control and the thing that spends the budget.
+outbox_ms="$(get worker/outbox-poll-ms)"; outbox_ms="${outbox_ms:-5000}"
+ingest_ms="$(get worker/ingest-poll-ms)"; ingest_ms="${ingest_ms:-5000}"
+cmds_per_cycle=6      # enqueue, move, complete, ack and lock traffic per tick
+per_day=$(( (86400000 / outbox_ms + 86400000 / ingest_ms) * cmds_per_cycle ))
+free_per_day=16667    # Upstash free: ~500k/month
+if [[ "$per_day" -gt "$free_per_day" ]]; then
+  record redis-commands breach \
+    "~${per_day}/day estimated from poll intervals (${outbox_ms}ms, ${ingest_ms}ms) vs ~${free_per_day}/day free"
+elif [[ "$per_day" -gt $(( free_per_day * 70 / 100 )) ]]; then
+  record redis-commands warn "~${per_day}/day, over 70% of ~${free_per_day}/day"
+else
+  record redis-commands ok "~${per_day}/day estimated, under ~${free_per_day}/day"
 fi
 
 # ── PostgreSQL: database size ────────────────────────────────────────────────
@@ -109,8 +116,14 @@ else
   fi
 fi
 
-# ── R2: object count and bytes ───────────────────────────────────────────────
-bucket="$(get r2/bucket)"
+# ── R2: object count and bytes, per bucket ───────────────────────────────────
+#
+# Both buckets. The 10 GiB free tier is per account, not per bucket, so watching
+# only the one named in SSM would miss half the number it is trying to report
+# (ADR-0005 split delivery across a private and a public bucket).
+private_bucket="$(get r2/bucket)"
+public_bucket="gogo-${ENVIRONMENT}-public"
+
 # Read token first. Usage is a read, and this script runs unattended on a timer
 # — an unattended job holding the write-capable token is a credential that can
 # change DNS with nobody watching. The write token stays as a fallback so a
@@ -124,18 +137,34 @@ for scope in read write; do
 done
 cf_account="$(sed -nE 's/^[[:space:]]*cloudflare_account_id[[:space:]]*=[[:space:]]*"([^"]+)".*$/\1/p' \
   "${REPO_ROOT}/config/global.tfvars" | head -1)"
-if [[ -z "$bucket" || -z "$cf_token" || -z "$cf_account" ]]; then
-  record r2 unknown "bucket, token or account id missing"
-else
+
+r2_total_bytes=0
+for bucket in "$private_bucket" "$public_bucket"; do
+  [[ -n "$bucket" ]] || continue
+  if [[ -z "$cf_token" || -z "$cf_account" ]]; then
+    record "r2:${bucket}" unknown "token or account id missing"
+    continue
+  fi
   body="$(curl -sS --max-time 15 -H "Authorization: Bearer ${cf_token}" \
     "https://api.cloudflare.com/client/v4/accounts/${cf_account}/r2/buckets/${bucket}/usage" 2>/dev/null || true)"
   if command -v jq >/dev/null 2>&1 && [[ "$(printf '%s' "$body" | jq -r '.success // false')" == "true" ]]; then
     objects="$(printf '%s' "$body" | jq -r '.result.objectCount // 0')"
     bytes="$(printf '%s' "$body" | jq -r '.result.payloadSize // 0')"
-    record r2 ok "${objects} objects, $(( bytes / 1024 / 1024 )) MiB of 10 GiB free"
+    r2_total_bytes=$(( r2_total_bytes + bytes ))
+    record "r2:${bucket}" ok "${objects} objects, $(( bytes / 1024 / 1024 )) MiB"
   else
-    record r2 unknown "usage endpoint unavailable or token lacks R2 read"
+    record "r2:${bucket}" unknown "usage endpoint unavailable or token lacks R2 read"
   fi
+done
+
+# The limit is on the account, so the account total is what can breach.
+r2_free_bytes=$(( 10 * 1024 * 1024 * 1024 ))
+if [[ "$r2_total_bytes" -gt "$r2_free_bytes" ]]; then
+  record r2-total breach "$(( r2_total_bytes / 1024 / 1024 )) MiB of 10 GiB free"
+elif [[ "$r2_total_bytes" -gt $(( r2_free_bytes * 70 / 100 )) ]]; then
+  record r2-total warn "$(( r2_total_bytes / 1024 / 1024 )) MiB, over 70% of 10 GiB free"
+else
+  record r2-total ok "$(( r2_total_bytes / 1024 / 1024 )) MiB of 10 GiB free"
 fi
 
 # ── Stated gaps, not silently skipped ────────────────────────────────────────
