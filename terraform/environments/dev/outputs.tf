@@ -40,7 +40,7 @@ output "assets_public_base_url" {
 
 output "cms_deploy_role_arn" {
   description = "Role the CMS deploy workflow assumes. Set as AWS_CMS_DEPLOY_DEV_ROLE_ARN."
-  value       = module.github_oidc.role_arns["cms_deploy"]
+  value       = module.github_oidc.role_arns["cms-deploy"]
 }
 
 output "monitor_role_arn" {

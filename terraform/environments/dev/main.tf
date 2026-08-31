@@ -460,7 +460,7 @@ module "github_oidc" {
       }
     }
 
-    cms_deploy = {
+    cms-deploy = {
       # GoGo-Infra, like every other deploy subject here: the workflow lives in
       # this repository, so this is the repo GitHub will name in the token.
       #
