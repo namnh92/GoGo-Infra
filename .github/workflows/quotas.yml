@@ -1,0 +1,66 @@
+name: quotas
+
+# Free tiers do not degrade, they stop. Upstash stops accepting commands and the
+# queue goes quiet — no error, no log, jobs that never run. The first thing that
+# notices is a person asking why they got no notification.
+#
+# The alert channel is this workflow failing. GitHub already notifies the repo
+# owner when a scheduled run fails, so a breach reaches a person without a new
+# service, a new webhook or a new credential to keep working. A warn does not
+# fail the run: an alert that fires before anything is wrong stops being read
+# well before the day it matters.
+
+on:
+  schedule:
+    # 01:00 UTC — 08:00 in Asia/Ho_Chi_Minh, before the working day rather than
+    # during it, so a breach is read before the queue has been quiet for hours.
+    #
+    # Schedules only fire from the default branch. While that is `master`, this
+    # file has to reach `master` through a release before the timer starts; on
+    # `develop` it runs by dispatch only. Same trap as INF-045.
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: gogo-quotas-dev
+  cancel-in-progress: true
+
+jobs:
+  quotas:
+    name: free-tier quotas (dev)
+    runs-on: ubuntu-latest
+
+    # No `environment:`. The dev environment allows only the develop branch, and
+    # a schedule runs from the default branch — claiming it here would be
+    # refused by GitHub before AWS ever saw the request.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_MONITOR_DEV_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: check quotas
+        id: check
+        run: ./scripts/ops/check-quotas.sh dev
+
+      # Written to the run summary rather than only stdout, so the numbers are
+      # readable from the run list without opening a log — which is the
+      # difference between a check people glance at and one they stop opening.
+      - name: summary
+        if: always()
+        run: |
+          set -uo pipefail
+          {
+            echo '## Free-tier quotas — dev'
+            echo
+            echo '```'
+            ./scripts/ops/check-quotas.sh dev || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

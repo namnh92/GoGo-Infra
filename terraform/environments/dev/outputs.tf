@@ -36,3 +36,8 @@ output "assets_public_base_url" {
   description = "Base URL for catalogue images, or empty while the public bucket is off."
   value       = try(module.public_assets_bucket[0].public_base_url, "")
 }
+
+output "monitor_role_arn" {
+  description = "Role the scheduled quota check assumes."
+  value       = module.github_oidc.role_arns["monitor"]
+}

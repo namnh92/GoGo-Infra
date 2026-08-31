@@ -111,8 +111,17 @@ fi
 
 # ── R2: object count and bytes ───────────────────────────────────────────────
 bucket="$(get r2/bucket)"
-cf_token="$(aws ssm get-parameter --name "/gogo/ci/${ENVIRONMENT}/terraform/write/cloudflare-token" \
-  --with-decryption --query 'Parameter.Value' --output text 2>/dev/null || true)"
+# Read token first. Usage is a read, and this script runs unattended on a timer
+# — an unattended job holding the write-capable token is a credential that can
+# change DNS with nobody watching. The write token stays as a fallback so a
+# developer running this by hand, who may only hold that one, still gets an
+# answer instead of an unknown.
+cf_token=""
+for scope in read write; do
+  cf_token="$(aws ssm get-parameter --name "/gogo/ci/${ENVIRONMENT}/terraform/${scope}/cloudflare-token" \
+    --with-decryption --query 'Parameter.Value' --output text 2>/dev/null || true)"
+  [[ -n "$cf_token" ]] && break
+done
 cf_account="$(sed -nE 's/^[[:space:]]*cloudflare_account_id[[:space:]]*=[[:space:]]*"([^"]+)".*$/\1/p' \
   "${REPO_ROOT}/config/global.tfvars" | head -1)"
 if [[ -z "$bucket" || -z "$cf_token" || -z "$cf_account" ]]; then
