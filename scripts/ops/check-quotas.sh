@@ -68,37 +68,31 @@ else
   [[ "$redis_url" == rediss://* ]] && tls=(--tls)
   used="$(redis-cli "${tls[@]}" -u "$redis_url" INFO memory 2>/dev/null \
     | tr -d '\r' | sed -nE 's/^used_memory:([0-9]+)$/\1/p')"
-  if [[ -n "$used" ]]; then
-    record redis ok "used_memory $(( used / 1024 )) KiB"
-  else
+  # Upstash free: 256 MB of data. The tier stops at the limit rather than
+  # evicting, so the warn line is the one that leaves time to act.
+  free_bytes=$(( 256 * 1024 * 1024 ))
+  if [[ -z "$used" ]]; then
     record redis unknown "INFO memory returned nothing"
+  elif [[ "$used" -gt "$free_bytes" ]]; then
+    record redis breach "used_memory $(( used / 1024 / 1024 )) MiB of 256 MiB free"
+  elif [[ "$used" -gt $(( free_bytes * 70 / 100 )) ]]; then
+    record redis warn "used_memory $(( used / 1024 / 1024 )) MiB, over 70% of 256 MiB free"
+  else
+    record redis ok "used_memory $(( used / 1024 )) KiB of 256 MiB free"
   fi
 fi
 
-# ── Redis: the command budget it is actually billed on ───────────────────────
+# ── Redis: the command budget ────────────────────────────────────────────────
 #
-# Outside the redis-cli branch on purpose. This is arithmetic on two SSM values
-# and needs no client at all — and it is the number that matters most, because
-# the free tier stops on commands long before it stops on memory. It used to sit
-# inside that branch, so a runner without redis-cli silently skipped the one
-# check the whole quota story is about.
+# Not estimated any more. This used to compute commands/day from the worker's
+# poll intervals, because BullMQ turned every tick into Redis traffic. The
+# worker no longer holds a Redis connection (GoGo-BE#262), and the number that
+# remained — one phone polling a room at 225 requests a minute — was never
+# derivable from configuration. Measure it: `redis-diag.yml` runs MONITOR for
+# sixty seconds and reports commands per second by command and key prefix.
 #
-# The command counter Upstash exposes over the Redis protocol is per connection,
-# not per month, so it cannot answer the question. The estimate below is the
-# thing under our control and the thing that spends the budget.
-outbox_ms="$(get worker/outbox-poll-ms)"; outbox_ms="${outbox_ms:-5000}"
-ingest_ms="$(get worker/ingest-poll-ms)"; ingest_ms="${ingest_ms:-5000}"
-cmds_per_cycle=6      # enqueue, move, complete, ack and lock traffic per tick
-per_day=$(( (86400000 / outbox_ms + 86400000 / ingest_ms) * cmds_per_cycle ))
-free_per_day=16667    # Upstash free: ~500k/month
-if [[ "$per_day" -gt "$free_per_day" ]]; then
-  record redis-commands breach \
-    "~${per_day}/day estimated from poll intervals (${outbox_ms}ms, ${ingest_ms}ms) vs ~${free_per_day}/day free"
-elif [[ "$per_day" -gt $(( free_per_day * 70 / 100 )) ]]; then
-  record redis-commands warn "~${per_day}/day, over 70% of ~${free_per_day}/day"
-else
-  record redis-commands ok "~${per_day}/day estimated, under ~${free_per_day}/day"
-fi
+# The provider's monthly counter is the alarm for the budget itself; it is not
+# readable over the Redis protocol, so this script cannot watch it.
 
 # ── PostgreSQL: database size ────────────────────────────────────────────────
 database_url="$(get database/url)"

@@ -72,95 +72,45 @@ and never let them leak into a production SLO (`GOGO_SRS.md` §10.1).
 | Neon | compute auto-suspends when idle | first query after a pause is slow; dev latency is not an SLO measurement |
 | Neon | connection cap | `api` + `worker` must use the `-pooler` endpoint |
 | Neon | short history window | dev is rebuilt from migrations + seed, never restored |
-| Upstash | command quota | BullMQ blocking consumers burn commands continuously — see below |
+| Upstash | command quota | billed per command; measured by `redis-diag.yml`, not estimated — see below |
 | R2 | operation quota | bulk import and media processing are the heavy consumers |
 | Google Maps Platform | billed per call | keys split per API, quota alerts required (INF-015) |
 
-### The BullMQ question (INF-009)
+### The BullMQ question (INF-009) — closed by removing BullMQ
 
-BullMQ needs a TCP connection and blocking commands. The Upstash REST API cannot serve it.
-Even on TCP, a blocking consumer polls continuously, so the command budget — not the storage
-limit — is what runs out first.
+BullMQ needs a TCP connection and blocking commands, and Upstash's TCP endpoint serves both —
+`PING` and `BLPOP` verified 29/08/2026 by `scripts/bootstrap/validate-services.sh`. That was
+never the problem. The problem was what BullMQ was *for* here.
 
-**Verified (29/08/2026):** Upstash accepts blocking commands on the TCP endpoint. `PING` and
-`BLPOP` both succeed against the dev database with `rediss://`, which was the open question —
-a plan can allow `PING` while refusing `BLPOP`, and BullMQ needs the second. Checked by
-`scripts/bootstrap/validate-services.sh`, so it stays checked rather than being remembered.
+`apps/worker` ran three queues, three job schedulers and three blocking consumers, and nothing
+ever enqueued a job: the consumers ignored the payload and polled Postgres, which already held
+the work. BullMQ was a distributed timer paid for in Redis commands — measured on DEV at roughly
+100,000 a day with nothing to do, which is the whole of a Saturday on the provider's graph.
 
-**Decided (29/08/2026): Upstash stays.** Postgres does not substitute for it — Redis carries
-BullMQ, rate limiting, caching and idempotency, and Neon covers none of those.
+**Removed (GoGo-BE#262).** The worker keeps its own schedule in process and takes a Postgres
+advisory lock per tick, which preserves the one thing BullMQ was providing — a tick never runs
+twice at once. The worker holds no Redis connection at all now.
 
-**The command budget, measured (31/08/2026): ~10,368/day against ~16,667/day free — 62%.**
+**Decided (29/08/2026): Upstash stays** for what Redis is actually for here — exact rate limits
+on login/OTP/invite, session revocation, realtime pub/sub. Postgres does not substitute for
+those.
 
-The number is not read from a console. Upstash's command counter over the Redis protocol is
-per connection, not per month, so it cannot answer the question. What spends the budget is the
-poll interval, which is a value we set, so the estimate is arithmetic on it:
+**Measured after the change (31/08/2026):** 9 commands in a 60-second `MONITOR`, 0.1/s, against
+692 (11.5/s) before. The remaining traffic is the API's own: a revocation check every five
+seconds per active session, and the exact limiters on the routes that name one.
 
-```
-(86400000/OUTBOX_POLL_MS + 86400000/INGEST_POLL_MS) × 6 commands per tick
-```
+**Where the number comes from.** `redis-diag.yml` runs `MONITOR` for sixty seconds and reports
+commands per second by command and key prefix. It replaced an estimate computed from the
+worker's poll intervals, which modelled the scheduler and missed everything else — the day it
+disagreed with the provider's counter by thirty times was the day it stopped being evidence.
+Upstash's own monthly counter is the budget alarm; it is not readable over the Redis protocol.
 
-`scripts/ops/check-quotas.sh` recomputes it on every scheduled run, so it tracks the
-configuration rather than a number someone wrote down once.
-
-**Both intervals are 100000ms in DEV, and that is load-bearing.** The application's own default
-is 5000ms (`apps/worker/src/main.ts`), which is ~207,360/day — twelve times the budget. An
-environment that does not set these two parameters spends a month of free tier in about two
-days, and the way it shows up is the queue going quiet: no error, no log, jobs that never run.
-
-Two things keep that from happening silently, and neither is a person remembering:
-
-- `config/secrets.manifest.yml` marks `worker/outbox-poll-ms` and `worker/ingest-poll-ms`
-  **required**, so `validate.sh` fails a deploy that is missing them.
-- `scripts/ops/check-quotas.test.sh` pins the thresholds, including the case where the
-  parameters are absent and the estimate falls back to the same 5000ms the worker would.
-
-Changing an interval takes a redeploy, not just an SSM write: the value reaches the worker
-through the rendered env file. Until then the check reports the new number while the worker
-spends the old one.
-
-If a blocking consumer ever does burn the tier, the fallback stays what it was: Upstash for
-cache and rate limiting, a local Redis container for the worker — the connection string is the
-only thing that changes.
-
-### Neon free tier, and the branch strategy (INF-008)
-
-| Limit | Free tier | Where it is watched |
-| --- | --- | --- |
-| Storage | 0.5 GB | `check-quotas.sh` → `postgres` |
-| Compute | ~191.9 hours/month on the default branch | `check-quotas.sh` → `neon-compute`, once an API key is stored |
-| Auto-suspend | after 5 minutes idle | not watched — it is a latency property, not a quota |
-| Connections | pooled endpoint required; the direct endpoint runs out quickly | the `-pooler` host is what SSM stores |
-
-Compute hours need a key the repository does not hold. `check-quotas.sh` reads it from
-`/gogo/ci/<env>/neon/api-key` and `/gogo/ci/<env>/neon/project-id` — an operations credential for
-the console API, deliberately outside the backend manifest, which is for what the application runs
-on. Without it the line reports `unknown`, which is what it did before and still beats a
-reassuring number nobody measured:
-
-```bash
-./scripts/secrets/put.sh ci dev/neon/api-key      # console → Account settings → API keys
-./scripts/secrets/put.sh ci dev/neon/project-id
-```
-
-**Cold start.** The endpoint suspends after five minutes idle and the first query afterwards pays
-the wake-up. That is a property of the tier, not a fault, and it is why a health check that only
-pings the API says nothing about whether the database is warm. Do not tune it away by holding a
-connection open from a cron job: that converts idle time into compute hours, and compute hours are
-the limit that actually bites.
-
-**Branch strategy — decided 31/08/2026.**
-
-| Environment | Neon | Why |
-| --- | --- | --- |
-| dev | `main` branch of project `gogo-dev` | One shared database, seeded and disposable |
-| staging | its own project, not a branch of dev | A branch shares the parent's compute allowance, so a staging load test would spend dev's hours. Separate projects keep one environment from taking another down through a limit nobody was watching |
-| Per-PR | none | Branches are cheap to create and easy to leave behind; the free tier counts what is left behind. Contract tests run against dev, which is deployed |
-| prod | not Neon free — managed PostgreSQL with PITR (INF-041) | RPO ≤ 15 minutes is not reachable on a tier without point-in-time restore |
-
-Neon branches stay available for what they are good at: a throwaway copy to try a migration
-against real shape before it runs anywhere shared. Created by hand, deleted the same day, never
-part of a pipeline that can forget one.
+**The 371k day, for the record.** One phone on a room screen: the polling transport replayed
+every event of its phase on every tick, once per mounted screen in the navigation stack, and
+each request cost two Redis commands before reaching a controller — revocation lookup and
+baseline rate limit. 225 requests a minute from a single session. Fixed on both ends:
+GoGo-MobileApp#120 (one poller per room, paused in the background, backing off when idle) and
+GoGo-BE#261 (an ordinary request touches Redis zero times).
 
 ## One Cloudflare zone, two environments
 
@@ -276,23 +226,9 @@ Environment: a scheduled run comes from the default branch, and the `dev` enviro
 
 Exit code 2, and only that, fails the run. The line naming the service says which limit.
 
-**`redis-commands` over budget.** The estimate is `(86400000/OUTBOX_POLL_MS + 86400000/INGEST_POLL_MS) × 6`
-against ~16,667 commands/day. Someone changed a poll interval, or an environment is missing one and
-fell back to the application's 5000ms default — which is ~207,360/day, twelve times the budget. Fix
-the parameter, do not raise the threshold:
-
-```bash
-./scripts/secrets/put.sh dev worker/outbox-poll-ms 100000
-./scripts/secrets/put.sh dev worker/ingest-poll-ms 100000
-```
-
-Then redeploy, because the value reaches the worker through the rendered env file, not from SSM at
-runtime. Until the redeploy the check reads the new number and the worker keeps spending the old
-one.
-
-**`redis` memory near 30 MB.** Look for a queue that is not draining before assuming the tier is
-too small — BullMQ at dev load uses very little, so growth usually means jobs are failing and being
-retained.
+**`redis` memory near 256 MB.** Nothing here should hold that much: the realtime event buffers
+and revocation entries all carry a TTL. Growth means a key without one — `redis-diag.yml` lists
+the keyspace by prefix, which is where to look first.
 
 **`r2-total` near 10 GiB.** The limit is per account, so both buckets count. Check lifecycle rules
 are still expiring `tmp/` and `imports/tmp/`; permanent prefixes are meant to grow.
