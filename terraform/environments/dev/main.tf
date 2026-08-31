@@ -102,6 +102,30 @@ module "policy_deploy" {
   tags        = module.tags.tags
 }
 
+# The quota monitor reads two things no other role reads together: the runtime
+# secrets, to reach Redis and PostgreSQL, and a Cloudflare token, to ask for R2
+# usage. That combination is why it gets its own role rather than borrowing the
+# deploy role — a scheduled job that runs unattended every day should not also
+# hold the SSH key to the host.
+#
+# It takes the **read** Cloudflare token. Usage is a read; handing a job that
+# runs on a timer the write-capable token would mean an unattended credential
+# that can change DNS.
+module "policy_monitor" {
+  source = "../../modules/aws-ssm-iam"
+
+  name        = "${module.tags.name_prefix}-monitor"
+  description = "Quota and health checks for ${var.environment}: runtime endpoints and read-only provider usage"
+
+  parameter_paths = [
+    "${var.environment}/backend/*",
+    "ci/${var.environment}/terraform/read/*",
+  ]
+
+  kms_key_arn = data.aws_kms_key.ssm.arn
+  tags        = module.tags.tags
+}
+
 module "policy_developer" {
   source = "../../modules/aws-ssm-iam"
 
@@ -365,6 +389,29 @@ module "github_oidc" {
       policy_arns = {
         infra     = aws_iam_policy.infra_apply.arn
         ssm_write = module.policy_apply.policy_arn
+      }
+    }
+
+    monitor = {
+      # No `environment:` subject. A scheduled workflow runs on the default
+      # branch, and the dev environment carries a deployment branch policy that
+      # allows only `develop` — so a schedule claiming `environment:dev` would
+      # be refused by GitHub before it ever reached AWS.
+      #
+      # Both branches are trusted because the workflow is dispatched by hand
+      # from `develop` while it is being changed, and fires on a timer from
+      # `master`, which is the only branch GitHub schedules from.
+      description = "Scheduled quota and health checks for dev. Read-only, unattended."
+
+      subjects = flatten([
+        for f in values(local.oidc_subject.infra) : [
+          "${f}:ref:refs/heads/master",
+          "${f}:ref:refs/heads/develop",
+        ]
+      ])
+
+      policy_arns = {
+        ssm_read = module.policy_monitor.policy_arn
       }
     }
 

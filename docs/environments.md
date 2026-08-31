@@ -182,20 +182,33 @@ ingest is slow.
 Production leaves both unset and keeps the 5s default — it runs Redis with an SLA and is not
 metered this way.
 
-### Running it on a schedule needs a decision first
+### Running it on a schedule — decided 31/08/2026
 
 The script reads runtime secrets (`/gogo/<env>/backend/*`) **and** a CI credential (the Cloudflare
-token, for R2 usage). No current role holds both, deliberately: ADR 0001 separates pipeline
-credentials from application credentials, and a role that reads both would undo that separation
-for the sake of a cron job.
+token, for R2 usage). No existing role held both, deliberately: ADR 0001 separates pipeline
+credentials from application credentials, and widening a role to cover a cron job would undo that
+separation invisibly.
 
-Options, none taken yet:
+**Taken: a role of its own, `gogo-dev-monitor`**, scoped to exactly those two paths. Not the
+deploy role — a job that runs unattended every day should not also hold the SSH key to the host.
+And it takes the **read** Cloudflare token, not the write one: usage is a read, and an unattended
+credential that can change DNS is a different thing to leave running on a timer.
 
-1. Two jobs, two roles — the runtime half under the deploy role, the R2 half under the apply role.
-2. A read-only monitoring role scoped to exactly the parameters this script reads.
-3. Keep it manual until there is a reason to automate.
+`.github/workflows/quotas.yml` runs it at 01:00 UTC — 08:00 local, before the working day rather
+than during it.
 
-Widening an existing role is the one option to avoid, because it is invisible afterwards.
+**The alert is the workflow failing.** GitHub already notifies the repository owner when a
+scheduled run fails, so a breach reaches a person without a new service, a new webhook, or a new
+credential that has to keep working for the alert to work. A `warn` deliberately does not fail the
+run: something that fires before anything is wrong stops being read well before the day it
+matters. Unknowns never fail it either — a check that goes red every day because a Neon API key is
+not stored is a check nobody reads by Friday.
+
+**The timer only starts once the file reaches `master`.** GitHub schedules workflows from the
+default branch only, so until a release carries this file over, `quotas.yml` runs by dispatch
+alone. Same trap as INF-045, and the reason the role trusts both branch refs rather than a GitHub
+Environment: a scheduled run comes from the default branch, and the `dev` environment allows only
+`develop`.
 
 ## Terraform state
 
