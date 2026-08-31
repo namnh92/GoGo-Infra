@@ -1,0 +1,40 @@
+name: redis-diag
+
+# Asks Redis who is connected and what they are sending. Dispatch-only, read-only,
+# under the monitor role. Exists for the day the quota counter and the estimate
+# disagree — which is a day to measure, not to argue.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  diag:
+    name: redis diagnostics (dev)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_MONITOR_DEV_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: install redis-cli
+        run: sudo apt-get update -qq && sudo apt-get install -y redis-tools
+
+      - name: diagnostics
+        run: |
+          set -uo pipefail
+          ./scripts/ops/redis-diag.sh dev | tee diag.txt
+          {
+            echo '## Redis diagnostics — dev'
+            echo
+            echo '```'
+            cat diag.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
