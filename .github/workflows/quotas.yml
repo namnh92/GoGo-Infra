@@ -52,9 +52,23 @@ jobs:
       - name: install redis-cli
         run: sudo apt-get update -qq && sudo apt-get install -y redis-tools
 
+      # Exit codes are the alert: 0 within limits, 1 approaching, 2 over.
+      #
+      # Only 2 fails the run. A warn that pages is a warn people learn to
+      # dismiss, and the dismissing habit is what is still there on the day the
+      # breach arrives. An unknown never reaches here as a failure at all — the
+      # script counts those separately.
       - name: check quotas
         id: check
-        run: ./scripts/ops/check-quotas.sh dev
+        run: |
+          set -uo pipefail
+          ./scripts/ops/check-quotas.sh dev
+          code=$?
+          case "$code" in
+            0) ;;
+            1) echo "::warning title=Free tier::Approaching a limit — see the run summary." ;;
+            *) exit "$code" ;;
+          esac
 
       # Written to the run summary rather than only stdout, so the numbers are
       # readable from the run list without opening a log — which is the

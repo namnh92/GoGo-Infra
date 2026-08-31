@@ -210,6 +210,39 @@ alone. Same trap as INF-045, and the reason the role trusts both branch refs rat
 Environment: a scheduled run comes from the default branch, and the `dev` environment allows only
 `develop`.
 
+### Runbook — the quota check went red
+
+Exit code 2, and only that, fails the run. The line naming the service says which limit.
+
+**`redis-commands` over budget.** The estimate is `(86400000/OUTBOX_POLL_MS + 86400000/INGEST_POLL_MS) × 6`
+against ~16,667 commands/day. Someone changed a poll interval, or an environment is missing one and
+fell back to the application's 5000ms default — which is ~207,360/day, twelve times the budget. Fix
+the parameter, do not raise the threshold:
+
+```bash
+./scripts/secrets/put.sh dev worker/outbox-poll-ms 100000
+./scripts/secrets/put.sh dev worker/ingest-poll-ms 100000
+```
+
+Then redeploy, because the value reaches the worker through the rendered env file, not from SSM at
+runtime. Until the redeploy the check reads the new number and the worker keeps spending the old
+one.
+
+**`redis` memory near 30 MB.** Look for a queue that is not draining before assuming the tier is
+too small — BullMQ at dev load uses very little, so growth usually means jobs are failing and being
+retained.
+
+**`r2-total` near 10 GiB.** The limit is per account, so both buckets count. Check lifecycle rules
+are still expiring `tmp/` and `imports/tmp/`; permanent prefixes are meant to grow.
+
+**`postgres` size.** Neon free is 0.5 GB. The seed corpus is tiny, so growth is real data or an
+import that ran more than once.
+
+**A `?` line is not a failure and never has been.** It means a check could not run — usually a
+provider that only exposes usage through an API key this repository does not store. Fixing those is
+INF-008 (Neon) and INF-015 (Google), not an incident.
+
+
 ## Terraform state
 
 One bucket, one key per environment:
