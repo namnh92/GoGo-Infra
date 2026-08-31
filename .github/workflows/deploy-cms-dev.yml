@@ -123,12 +123,17 @@ jobs:
         working-directory: cms
         run: |
           set -euo pipefail
-          declared="$(node -e "
-            const fs = require('fs');
-            const raw = fs.readFileSync('wrangler.jsonc', 'utf8')
-              .replace(/^\s*\/\/.*$/gm, '');
-            process.stdout.write(JSON.parse(raw).name ?? '');
-          ")"
+          # Reads the one field rather than parsing the file. wrangler.jsonc is
+          # JSONC — comments and trailing commas — so `JSON.parse` rejects it,
+          # and stripping those by regex breaks the moment a value contains
+          # `//`, which a BE_ORIGIN URL does. One key, one match, no home-made
+          # parser pretending to be a real one.
+          declared="$(grep -m1 -oE '"name"[[:space:]]*:[[:space:]]*"[^"]+"' wrangler.jsonc \
+            | sed -E 's/.*"([^"]+)"$/\1/')"
+          if [ -z "$declared" ]; then
+            echo "::error::no \"name\" field found in wrangler.jsonc"
+            exit 1
+          fi
           if [ "$declared" != "${CMS_SCRIPT_NAME}" ]; then
             echo "::error::wrangler.jsonc name is '${declared}', Terraform bound '${CMS_SCRIPT_NAME}'"
             exit 1
