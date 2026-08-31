@@ -33,14 +33,37 @@ resource "cloudflare_workers_custom_domain" "cms" {
   service    = var.script_name
 }
 
-# One-time PIN by default: Cloudflare mails a code to an address on the list, so
-# this works before any identity provider exists. It is a stopgap. The workspace
-# rule is SSO/MFA for CMS in production, and this is the layer standing in until
-# GoGo-BE#62 lands — not a substitute for it.
-#
 # Access does not authenticate anyone to the CMS. GoGo-BE remains the authority
-# on every permission; this only keeps an admin login page off the open web,
-# where it is a free target for credential stuffing.
+# on every permission; this keeps an admin login page off the open web, where it
+# is a free target for credential stuffing, and it tells GoGo-BE who is knocking
+# (ADR-0010 in that repository).
+#
+# Two policies, in precedence order, because they answer different questions.
+#
+# 1. Organisation membership, when an identity provider exists. This is the only
+#    thing SSO buys over the TOTP the CMS already has: one place to stop being
+#    staff. Removing someone from the GitHub organisation removes their way in,
+#    without editing a list here and remembering to.
+#
+# 2. One-time PIN against an explicit address list. Before an identity provider
+#    exists this is the only door; after one exists it is the break-glass path,
+#    which is why it is not deleted. An account lockout at the identity provider
+#    must not also lock out the person who would fix it.
+resource "cloudflare_zero_trust_access_policy" "cms_org" {
+  count = var.access_idp_id == "" ? 0 : 1
+
+  account_id = var.account_id
+  name       = "gogo-${var.environment}-cms-github-org"
+  decision   = "allow"
+
+  include = [{
+    github_organization = {
+      identity_provider_id = var.access_idp_id
+      name                 = var.access_github_org
+    }
+  }]
+}
+
 resource "cloudflare_zero_trust_access_policy" "cms" {
   account_id = var.account_id
   name       = "gogo-${var.environment}-cms-allow"
@@ -70,10 +93,18 @@ resource "cloudflare_zero_trust_access_application" "cms" {
   # picker, so it is obvious which identity the session belongs to.
   auto_redirect_to_identity = false
 
-  policies = [
-    {
+  # Organisation membership first when it exists, so the ordinary way in is the
+  # one that offboarding controls. The PIN list stays behind it as break-glass.
+  policies = concat(
+    [
+      for policy in cloudflare_zero_trust_access_policy.cms_org : {
+        id         = policy.id
+        precedence = 1
+      }
+    ],
+    [{
       id         = cloudflare_zero_trust_access_policy.cms.id
-      precedence = 1
-    }
-  ]
+      precedence = var.access_idp_id == "" ? 1 : 2
+    }]
+  )
 }

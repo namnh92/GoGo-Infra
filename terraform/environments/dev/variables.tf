@@ -171,3 +171,18 @@ variable "assets_host" {
   type        = string
   default     = ""
 }
+
+# Created by hand in the Cloudflare dashboard: a GitHub OAuth app has a client
+# secret, and declaring it here would write that secret into Terraform state.
+# Only the id lives in configuration, which is not a secret.
+variable "cms_access_idp_id" {
+  description = "Cloudflare Access identity provider id for the CMS. Empty keeps one-time PIN as the only method."
+  type        = string
+  default     = ""
+}
+
+variable "cms_access_github_org" {
+  description = "GitHub organisation whose members may reach the CMS."
+  type        = string
+  default     = ""
+}

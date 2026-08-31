@@ -134,3 +134,49 @@ Never logged, in any repository: `password`, `secret`, `token`, `authorization`,
 `apiKey`, `privateKey`, `accessKey`, `refreshToken`, `databaseUrl`, `redisUrl`. Never dump
 `process.env` or a whole config object. Configuration errors name the variable, never the
 value.
+
+## Turning on CMS SSO
+
+Cloudflare Access can tell GoGo-BE who is knocking, but only once an identity provider exists and
+the backend knows which audience to trust. Three steps, in this order, because each one is useless
+before the one above it.
+
+**1. Create the identity provider by hand.** Cloudflare Zero Trust → Settings → Authentication →
+Login methods → GitHub. It needs a GitHub OAuth app's client id and secret.
+
+By hand, not in Terraform, for the same reason R2 and Neon keys are: declaring a client secret in
+configuration writes it into Terraform state. An identity provider *id* is not a secret, so that is
+the only part that reaches this repository.
+
+**2. Point the environment at it.**
+
+```hcl
+# config/dev.tfvars
+cms_access_idp_id     = "<identity provider id from the dashboard>"
+cms_access_github_org = "<github organisation>"
+```
+
+The organisation is not optional when the id is set, and Terraform refuses the pair without it: an
+identity provider with no organisation rule authenticates anyone who has a GitHub account.
+
+Applying this adds an organisation-membership policy *ahead of* the one-time PIN list. The PIN list
+stays — it is the break-glass path. An account problem at the identity provider must not also lock
+out the person who would fix it.
+
+**3. Give GoGo-BE the two values it verifies.**
+
+```bash
+./scripts/secrets/put.sh dev access/team-domain "<team>.cloudflareaccess.com"
+./scripts/secrets/put.sh dev access/aud "$(terraform -chdir=terraform/environments/dev output -raw cms_access_aud)"
+```
+
+Then redeploy: both reach the API through the rendered env file, not from SSM at runtime.
+
+**Set both or neither.** A team domain without an audience accepts an assertion minted for any
+other application in the same Cloudflare account — Access signs every application in a team with
+the same keys, so the token is valid, correctly signed, and issued for a different door with a
+different allow list. `required: [prod]` on both is what makes a production deploy fail rather than
+start with SSO quietly off.
+
+**What Access does not do.** It answers "who is this", not "may they do this". A GitHub identity
+that passes Access but has no row in `admin_users` gets a 403 from GoGo-BE, not a session.
