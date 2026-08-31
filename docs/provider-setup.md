@@ -158,10 +158,20 @@ The tracking URL is built server-side and is never the public share URL
 | non-secret | GCP project id, enabled APIs | register |
 | secret | Places server key | `./scripts/secrets/put.sh <env> google/server-api-key` |
 | secret | Routes server key | `./scripts/secrets/put.sh <env> google/routes-api-key` |
+| secret | Sheets server key | `./scripts/secrets/put.sh <env> google/sheets-api-key` |
 
 One key per API, each with API and application restrictions, each with a quota alert. A single
 shared key means one leak takes down every Maps feature at once and there is no way to tell
 which surface caused a cost spike.
+
+Enable each API on the project before putting its key. A key belonging to a project where the
+API is disabled returns `403 PERMISSION_DENIED` with `reason=SERVICE_DISABLED`, and the adapters
+map 403 to "the caller may not read this resource" — so the console shows an editor a permission
+error about their own document when the actual fault is a GCP project setting.
+
+The Sheets key is read by the CMS bulk import only (`GOOGLE_SHEETS_API_KEY`). Without it GoGo-BE
+does not fail to start: it falls back to a fake Sheets provider that answers every real
+spreadsheet id with `SHEET_NOT_FOUND`.
 
 ## 8. Production VPS (INF-017, INF-018)
 

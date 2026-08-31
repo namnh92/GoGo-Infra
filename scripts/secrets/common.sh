@@ -80,9 +80,12 @@ param_hint() {
        account-wide and cannot send for a single app." ;;
     onesignal/identity-verification-key)
       echo "OneSignal → Settings → Keys & IDs → Identity Verification. Used to sign the ES256 JWT." ;;
-    google/server-api-key | google/routes-api-key)
+    google/server-api-key | google/routes-api-key | google/sheets-api-key)
       echo "Google Cloud → APIs & Services → Credentials → API keys. 39 characters starting AIza.
-       Not an OAuth client id and not a service-account field. One key per API." ;;
+       Not an OAuth client id and not a service-account field. One key per API.
+       Restrict the key to that one API, and enable the API on the project first —
+       a key for a disabled API answers 403 PERMISSION_DENIED, which reads exactly
+       like a sheet the key may not open." ;;
     auth/jwt-secret | auth/refresh-secret)
       echo "Generate: openssl rand -base64 48 | ./scripts/secrets/put.sh <env> $1" ;;
     observability/sentry-dsn)
