@@ -145,6 +145,11 @@ jobs:
           ./scripts/ci/check-workflow-auth.test.sh
           ./scripts/ci/check-workflow-auth.sh
 
+      # The quota check's exit code is the entire alert. A breach that returned
+      # 0 would be a silent alarm, and nothing else would notice.
+      - name: quota thresholds still fire
+        run: ./scripts/ops/check-quotas.test.sh
+
       - name: manifest parses
         run: |
           for env in dev staging prod; do
