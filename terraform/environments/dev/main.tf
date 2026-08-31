@@ -398,12 +398,36 @@ module "github_oidc" {
 
 # --- Infrastructure ----------------------------------------------------------
 
+# Private half: user media, review photos, import scratch. Read only through a
+# presigned GET the BFF signs per request, so a URL that leaks stops working.
 module "assets_bucket" {
   source = "../../modules/cloudflare-r2"
 
   account_id           = var.cloudflare_account_id
   bucket_name          = "${module.tags.name_prefix}-assets"
   cors_allowed_origins = var.cors_allowed_origins
+}
+
+# Public half: catalogue photos and banners, served over the CDN.
+#
+# A second bucket rather than a prefix, because an R2 custom domain publishes an
+# entire bucket. With one bucket, "public" would be a rule about key names that
+# nothing enforces, and a single upload to the wrong prefix would put a check-in
+# photo on the open internet with no error anywhere. Two buckets make the
+# boundary a thing you have to cross deliberately (ADR-0005).
+#
+# No lifecycle rules: everything here is permanent content the catalogue
+# references by object key. No CORS: the browser reads these with a plain image
+# request, which is not a CORS request at all.
+module "public_assets_bucket" {
+  source = "../../modules/cloudflare-r2"
+  count  = var.assets_host == "" || var.cloudflare_zone_id == "" ? 0 : 1
+
+  account_id       = var.cloudflare_account_id
+  bucket_name      = "${module.tags.name_prefix}-public"
+  public_domain    = var.assets_host
+  zone_id          = var.cloudflare_zone_id
+  manage_lifecycle = false
 }
 
 # The share-link edge. Off until share_host is set, so an environment without

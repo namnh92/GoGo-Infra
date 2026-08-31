@@ -5,25 +5,42 @@ Object storage buckets for assets. Implements INF-010.
 ## Rules this module enforces
 
 - Bucket names must match `gogo-<env>-<purpose>` so dev and prod can never collide.
-- Buckets are **private**. Public read access is never granted here; delivery is either a
-  custom domain in front of the bucket or a presigned GET issued by GoGo-BE — that decision
-  is tracked as an open decision in `GOGO_SRS.md` §17.
+- Buckets are **private by default**. `public_domain` is what makes one public, and leaving
+  it empty is the safe direction to be wrong in.
+- A custom domain publishes the **whole bucket** — R2 cannot scope one to a prefix. That is
+  why image delivery uses two buckets rather than two prefixes in one: with a single bucket,
+  "public" would be a rule about key names that nothing enforces, and one upload to the wrong
+  prefix would put a check-in photo on the open internet with no error anywhere. See
+  [ADR-0005](../../../docs/adr/0005-image-delivery.md).
 - Lifecycle rules only ever expire temporary prefixes. A variable validation rejects any
   rule targeting `places/`, `users/`, `reviews/` or `rooms/`, because those hold permanent
   content the catalog references by object key.
+
+## Two buckets per environment
+
+| Bucket | Holds | Read path |
+| --- | --- | --- |
+| `gogo-<env>-public` | `places/`, `banners/` | `https://assets-<env>.gogo.id.vn/<key>`, cached at the edge, immutable |
+| `gogo-<env>-assets` | `users/`, `reviews/`, `rooms/`, `imports/`, `tmp/` | presigned GET signed per request by GoGo-BE |
+
+Nothing that is not meant to be public may be written to the public bucket, and "be careful
+with prefixes" is not a control. The controls are the bucket split, separate credentials, and
+the upload endpoint choosing the bucket from the declared purpose rather than trusting a
+client-supplied key.
 
 ## Object key convention
 
 The application stores the **object key**, never an infrastructure URL (spec §7):
 
 ```
+places/{placeId}/...     # public bucket
+banners/{bannerId}/...   # public bucket
 users/{userId}/...
-places/{placeId}/...
 reviews/{reviewId}/...
-imports/{jobId}/...
 rooms/{roomId}/...
-tmp/...              # expires after 24h
-imports/tmp/...      # expires after 7d
+imports/{jobId}/...
+tmp/...                  # expires after 24h
+imports/tmp/...          # expires after 7d
 ```
 
 ## Credentials

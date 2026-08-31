@@ -165,3 +165,9 @@ variable "tunnel_read_connector_token" {
   type        = bool
   default     = false
 }
+
+variable "assets_host" {
+  description = "Public hostname serving catalogue images from R2. Empty leaves every bucket private."
+  type        = string
+  default     = ""
+}
