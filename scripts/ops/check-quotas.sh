@@ -168,7 +168,43 @@ else
 fi
 
 # ── Stated gaps, not silently skipped ────────────────────────────────────────
-record neon-compute unknown "needs a Neon API key; not stored (INF-008)"
+# ── Neon: compute hours against the free tier ────────────────────────────────
+#
+# The key lives under /gogo/ci/<env>/neon/*, not in the backend manifest: it is
+# an operations credential for the console API, not something the application
+# runs on. Optional on purpose — without it this reports unknown, which is what
+# it did before and is still better than a reassuring number nobody measured.
+neon_key="$(aws ssm get-parameter --name "/gogo/ci/${ENVIRONMENT}/neon/api-key" \
+  --with-decryption --query 'Parameter.Value' --output text 2>/dev/null || true)"
+neon_project="$(aws ssm get-parameter --name "/gogo/ci/${ENVIRONMENT}/neon/project-id" \
+  --query 'Parameter.Value' --output text 2>/dev/null || true)"
+
+if [[ -z "$neon_key" || -z "$neon_project" ]]; then
+  record neon-compute unknown "needs /gogo/ci/${ENVIRONMENT}/neon/{api-key,project-id} (INF-008)"
+elif ! command -v jq >/dev/null 2>&1; then
+  record neon-compute unknown "jq not installed"
+else
+  # The consumption endpoint reports the current billing period, which is the
+  # period the free allowance is measured over. Asking for a fixed window would
+  # answer a different question than the one the limit is about.
+  neon_body="$(curl -sS --max-time 15 -H "Authorization: Bearer ${neon_key}" \
+    "https://console.neon.tech/api/v2/projects/${neon_project}" 2>/dev/null || true)"
+  seconds="$(printf '%s' "$neon_body" | jq -r '.project.compute_time_seconds // empty' 2>/dev/null)"
+  if [[ -z "$seconds" ]]; then
+    record neon-compute unknown "consumption endpoint returned nothing usable"
+  else
+    hours=$(( seconds / 3600 ))
+    free_hours=191   # Neon free: 191.9 compute hours per month on the default branch
+    if [[ "$hours" -gt "$free_hours" ]]; then
+      record neon-compute breach "${hours}h of ~${free_hours}h free this billing period"
+    elif [[ "$hours" -gt $(( free_hours * 70 / 100 )) ]]; then
+      record neon-compute warn "${hours}h, over 70% of ~${free_hours}h free"
+    else
+      record neon-compute ok "${hours}h of ~${free_hours}h free this billing period"
+    fi
+  fi
+fi
+
 record google-quota unknown "needs Cloud Monitoring access; not stored (INF-015)"
 
 if [[ "$AS_JSON" == "yes" ]]; then

@@ -123,6 +123,45 @@ If a blocking consumer ever does burn the tier, the fallback stays what it was: 
 cache and rate limiting, a local Redis container for the worker — the connection string is the
 only thing that changes.
 
+### Neon free tier, and the branch strategy (INF-008)
+
+| Limit | Free tier | Where it is watched |
+| --- | --- | --- |
+| Storage | 0.5 GB | `check-quotas.sh` → `postgres` |
+| Compute | ~191.9 hours/month on the default branch | `check-quotas.sh` → `neon-compute`, once an API key is stored |
+| Auto-suspend | after 5 minutes idle | not watched — it is a latency property, not a quota |
+| Connections | pooled endpoint required; the direct endpoint runs out quickly | the `-pooler` host is what SSM stores |
+
+Compute hours need a key the repository does not hold. `check-quotas.sh` reads it from
+`/gogo/ci/<env>/neon/api-key` and `/gogo/ci/<env>/neon/project-id` — an operations credential for
+the console API, deliberately outside the backend manifest, which is for what the application runs
+on. Without it the line reports `unknown`, which is what it did before and still beats a
+reassuring number nobody measured:
+
+```bash
+./scripts/secrets/put.sh ci dev/neon/api-key      # console → Account settings → API keys
+./scripts/secrets/put.sh ci dev/neon/project-id
+```
+
+**Cold start.** The endpoint suspends after five minutes idle and the first query afterwards pays
+the wake-up. That is a property of the tier, not a fault, and it is why a health check that only
+pings the API says nothing about whether the database is warm. Do not tune it away by holding a
+connection open from a cron job: that converts idle time into compute hours, and compute hours are
+the limit that actually bites.
+
+**Branch strategy — decided 31/08/2026.**
+
+| Environment | Neon | Why |
+| --- | --- | --- |
+| dev | `main` branch of project `gogo-dev` | One shared database, seeded and disposable |
+| staging | its own project, not a branch of dev | A branch shares the parent's compute allowance, so a staging load test would spend dev's hours. Separate projects keep one environment from taking another down through a limit nobody was watching |
+| Per-PR | none | Branches are cheap to create and easy to leave behind; the free tier counts what is left behind. Contract tests run against dev, which is deployed |
+| prod | not Neon free — managed PostgreSQL with PITR (INF-041) | RPO ≤ 15 minutes is not reachable on a tier without point-in-time restore |
+
+Neon branches stay available for what they are good at: a throwaway copy to try a migration
+against real shape before it runs anywhere shared. Created by hand, deleted the same day, never
+part of a pipeline that can forget one.
+
 ## One Cloudflare zone, two environments
 
 `gogo.id.vn` is a single zone and both environments point at it. A Cloudflare token scoped to a
