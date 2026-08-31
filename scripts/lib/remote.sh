@@ -45,6 +45,7 @@ COMPOSE_EDGE="${COMPOSE_EDGE:?set COMPOSE_EDGE, e.g. docker/docker-compose.edge-
 # deployed the same way on the same host. The first DEV deploy landed beside an
 # unrelated `gogo-prod` stack on this machine, and both answered to names nobody
 # had chosen deliberately.
+# shellcheck disable=SC2034  # consumed by the scripts that source this file
 COMPOSE="COMPOSE_PROJECT_NAME=gogo-${ENVIRONMENT_NAME} ENV_FILE=${REMOTE_ENV_FILE} docker compose -f docker/docker-compose.prod.yml -f ${COMPOSE_EDGE} --env-file ${REMOTE_ENV_FILE}"
 
 # StrictHostKeyChecking with a pinned file: an unknown or changed host key
@@ -62,7 +63,7 @@ common_opts=(-i "$SSH_KEY_FILE"
 ssh_opts=("${common_opts[@]}" -p "$DEPLOY_PORT")
 # Used by deploy-vps.sh only; declared here so the two flag conventions stay
 # side by side, which is what stops the -p/-P confusion from coming back.
-# shellcheck disable=SC2034
+# shellcheck disable=SC2034  # consumed by the scripts that source this file
 scp_opts=("${common_opts[@]}" -P "$DEPLOY_PORT")
 
 # bash -lc, not a bare command.
