@@ -76,6 +76,19 @@ dns_records = {
 
 }
 
+# Public hostname for catalogue images. Turning this on creates a second bucket,
+# gogo-dev-public, and publishes it — an R2 custom domain serves a whole bucket,
+# which is exactly why the private half lives in a different one (ADR-0005).
+#
+# One label, same reason as share_host: Cloudflare Universal SSL covers the apex
+# and *.gogo.id.vn, and a wildcard matches exactly one label.
+#
+# Note this record does not pass through the dns module, so dns_record_suffix
+# above does not guard it — Cloudflare creates and proxies the record itself as
+# part of the custom domain. The name still follows the convention; nothing but
+# review enforces that here.
+assets_host = "assets-dev.gogo.id.vn"
+
 cors_allowed_origins = [
   "http://localhost:3000",
   "http://localhost:5173",

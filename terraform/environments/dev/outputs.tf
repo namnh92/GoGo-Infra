@@ -31,3 +31,8 @@ output "tunnel_token" {
   value       = try(module.tunnel[0].tunnel_token, "")
   sensitive   = true
 }
+
+output "assets_public_base_url" {
+  description = "Base URL for catalogue images, or empty while the public bucket is off."
+  value       = try(module.public_assets_bucket[0].public_base_url, "")
+}

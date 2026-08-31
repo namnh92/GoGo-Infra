@@ -84,3 +84,34 @@ variable "cors_max_age_seconds" {
   type        = number
   default     = 3600
 }
+
+# A custom domain publishes the WHOLE bucket, not a prefix under it. That is the
+# reason image delivery is split across two buckets rather than two prefixes in
+# one: the boundary between "anyone with the URL may read this" and "only a
+# signed URL may read this" has to be something the infrastructure enforces, not
+# a naming convention someone can break with a single upload to the wrong key.
+#
+# Leave empty for a private bucket, which is the default and the safe direction
+# to be wrong in. See docs/adr/0005-image-delivery.md.
+variable "public_domain" {
+  description = "Custom domain that serves this bucket publicly over the CDN. Empty keeps the bucket private."
+  type        = string
+  default     = ""
+}
+
+variable "zone_id" {
+  description = "Zone the public_domain belongs to. Required when public_domain is set."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.public_domain == "" || var.zone_id != ""
+    error_message = "zone_id is required when public_domain is set."
+  }
+}
+
+variable "public_domain_min_tls" {
+  description = "Minimum TLS version accepted on the public domain."
+  type        = string
+  default     = "1.2"
+}

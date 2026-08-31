@@ -77,3 +77,23 @@ resource "cloudflare_r2_bucket_cors" "this" {
     max_age_seconds = var.cors_max_age_seconds
   }]
 }
+
+# Public delivery, when this bucket is the public half.
+#
+# Cloudflare creates and proxies the DNS record for the domain itself, so there
+# is no record here to keep in step — and no window where the hostname resolves
+# before the bucket answers.
+#
+# `enabled` is the switch that matters: with the resource present and enabled
+# false, the domain exists and serves nothing, which is a far better failure
+# than a bucket that is public because a variable defaulted that way.
+resource "cloudflare_r2_custom_domain" "this" {
+  count = var.public_domain == "" ? 0 : 1
+
+  account_id  = var.account_id
+  bucket_name = cloudflare_r2_bucket.this.name
+  domain      = var.public_domain
+  zone_id     = var.zone_id
+  enabled     = true
+  min_tls     = var.public_domain_min_tls
+}
