@@ -62,6 +62,10 @@ check: fmt-check validate lint scan test check-workflow-auth ## Everything CI ru
 cf-scopes: ## Probe what the Cloudflare CI tokens can reach for $(ENV)
 	./scripts/ops/check-cf-token-scopes.sh $(ENV)
 
+.PHONY: provider-keys
+provider-keys: ## Call each Google API with the key $(ENV) actually deploys (INF-052)
+	./scripts/ops/check-provider-keys.sh $(ENV)
+
 .PHONY: secrets-list
 secrets-list: ## List SSM parameter names for $(ENV) (names only, no values)
 	./scripts/secrets/list.sh $(ENV)

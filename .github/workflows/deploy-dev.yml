@@ -81,6 +81,20 @@ jobs:
           echo "health check failed" >&2
           exit 1
 
+      # INF-052 — the deploy's own gate ("verify secrets match the manifest")
+      # compares SSM against a list of names. It cannot see a key Google
+      # refuses, which is how DEV served a fake-equivalent Places provider
+      # while every step above stayed green. This calls the real APIs with the
+      # keys this deploy just rendered.
+      #
+      # Not blocking: a Google-side outage must not stop a dev deploy, and the
+      # application degrades rather than failing to boot. It is here to be
+      # *read* — the failure was never that nobody could fix it, it was that
+      # nobody knew.
+      - name: provider credential smoke test
+        continue-on-error: true
+        run: ./scripts/ops/check-provider-keys.sh dev
+
       # No automatic rollback here. On dev, a broken deploy is information —
       # rolling it back silently would hide the thing the developer is trying to
       # see, and there is no traffic to protect.
