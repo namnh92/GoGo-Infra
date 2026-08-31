@@ -3,15 +3,15 @@ name: deploy-cms-dev
 # Deploys the GoGo-CMS Worker to dev.
 #
 # Dispatch-only, for the same reason deploy-dev.yml is: the dev CMS is what
-# Mobile and backend developers point their browser at, and a deploy on every
+# Mobile and backend developers point a browser at, and redeploying on every
 # push to develop would swap it under them several times an hour. It also means
-# no build runs unless somebody wanted one.
+# no build runs unless somebody asked for one.
 #
-# The split of responsibilities matches the backend deploy (SRS §163):
-# GoGo-CMS owns the build and hands over a ref; GoGo-Infra owns the credentials,
-# the ordering and the promotion. Terraform still owns the hostname and the
-# Access policy — this workflow only ever uploads a script and points traffic
-# at a version (modules/cloudflare-cms-hosting/README.md).
+# Responsibilities split the way the backend deploy does (SRS §163): GoGo-CMS
+# owns the build and hands over a ref; GoGo-Infra owns the credentials, the
+# ordering and the promotion. Terraform still owns the hostname and the Access
+# policy — this workflow only uploads a script and points traffic at a version
+# (terraform/modules/cloudflare-cms-hosting/README.md).
 
 on:
   workflow_dispatch:
@@ -22,8 +22,9 @@ on:
         default: develop
       promote_version_id:
         description: >-
-          Existing Worker version to promote instead of building. This is the
-          rollback path: no checkout, no build, no upload.
+          Promote this existing Worker version instead of building. The
+          rollback path: no build, no upload, so it does not depend on the old
+          ref still being buildable.
         required: false
         default: ''
 
@@ -44,22 +45,21 @@ jobs:
     environment: dev
 
     env:
-      # Non-secret. Named here so every step reads the same value and a missing
-      # one fails at the check below rather than halfway through a deploy.
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       CMS_BE_ORIGIN: ${{ vars.CMS_BE_ORIGIN }}
+      CMS_SCRIPT_NAME: ${{ vars.CMS_SCRIPT_NAME }}
 
     steps:
       - name: check deploy configuration
         run: |
           set -euo pipefail
-          # GoGo-CMS commits `"vars": { "BE_ORIGIN": "" }` in wrangler.jsonc,
-          # and plain-text vars in the config OVERRIDE the dashboard value.
-          # Uploading without passing it produces a CMS that loads and answers
-          # every /v1/* with 503 BACKEND_NOT_CONFIGURED — a deploy that looks
-          # successful and is not. Refuse before that can happen.
+          # GoGo-CMS commits `"vars": { "BE_ORIGIN": "" }` in wrangler.jsonc, and
+          # plain-text vars in the config OVERRIDE the dashboard value. Uploading
+          # without passing it produces a CMS that loads and answers every /v1/*
+          # with 503 BACKEND_NOT_CONFIGURED — a deploy that looks successful and
+          # is not. Refuse before that can happen.
           missing=0
-          for name in CLOUDFLARE_ACCOUNT_ID CMS_BE_ORIGIN; do
+          for name in CLOUDFLARE_ACCOUNT_ID CMS_BE_ORIGIN CMS_SCRIPT_NAME; do
             if [ -z "${!name}" ]; then
               echo "::error::repository variable ${name} is not set"
               missing=1
@@ -82,23 +82,18 @@ jobs:
           echo "::add-mask::${cf}"
           echo "CLOUDFLARE_API_TOKEN=${cf}" >> "$GITHUB_ENV"
 
-          # GoGo-CMS is private, so checkout needs a token of its own. Read-only
-          # on contents, and it never leaves this job.
+          # GoGo-CMS is private, so the checkout needs a token of its own:
+          # read-only on contents, and it never leaves this job.
           gh="$(aws ssm get-parameter --name "${SSM_PREFIX}/github-read-token" \
             --with-decryption --query 'Parameter.Value' --output text)"
           echo "::add-mask::${gh}"
           echo "CMS_READ_TOKEN=${gh}" >> "$GITHUB_ENV"
 
-      # ---- Rollback path: promote an existing version, build nothing --------
-      - name: promote an existing version
-        if: inputs.promote_version_id != ''
-        run: |
-          set -euo pipefail
-          npx --yes wrangler@4 versions deploy "${{ inputs.promote_version_id }}@100%" -y
-
-      # ---- Normal path: build the ref, upload, promote ----------------------
+      # Checked out on both paths, including rollback: `wrangler versions deploy`
+      # reads the Worker name from wrangler.jsonc, and the repository's own
+      # pinned wrangler is the one that should talk to the account. Only the
+      # build is skipped on a rollback, not the configuration.
       - name: check out GoGo-CMS
-        if: inputs.promote_version_id == ''
         uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/GoGo-CMS
@@ -107,25 +102,50 @@ jobs:
           path: cms
 
       - uses: pnpm/action-setup@v4
-        if: inputs.promote_version_id == ''
+        with:
+          package_json_file: cms/package.json
+
       - uses: actions/setup-node@v4
-        if: inputs.promote_version_id == ''
         with:
           node-version: 22
           cache: pnpm
           cache-dependency-path: cms/pnpm-lock.yaml
 
+      - name: install
+        working-directory: cms
+        run: pnpm install --frozen-lockfile
+
+      # The README of cloudflare-cms-hosting says nothing enforces that
+      # `cms_script_name` matches `name` in wrangler.jsonc, and that a mismatch
+      # binds the hostname to a script nobody deploys — a 404 that reads like
+      # DNS. Now that this repository does the deploying, it can enforce it.
+      - name: worker name matches what Terraform bound the hostname to
+        working-directory: cms
+        run: |
+          set -euo pipefail
+          declared="$(node -e "
+            const fs = require('fs');
+            const raw = fs.readFileSync('wrangler.jsonc', 'utf8')
+              .replace(/^\s*\/\/.*$/gm, '');
+            process.stdout.write(JSON.parse(raw).name ?? '');
+          ")"
+          if [ "$declared" != "${CMS_SCRIPT_NAME}" ]; then
+            echo "::error::wrangler.jsonc name is '${declared}', Terraform bound '${CMS_SCRIPT_NAME}'"
+            exit 1
+          fi
+          echo "worker name ${declared}"
+
+      # ---- Normal path -----------------------------------------------------
       - name: build
         if: inputs.promote_version_id == ''
         working-directory: cms
         run: |
           set -euo pipefail
-          pnpm install --frozen-lockfile
-          # The gates themselves live in GoGo-CMS's own CI and run on every PR
-          # and push. Re-running them here would double the compute and still
-          # not be the thing that decides mergeability. What this asserts is the
-          # one property CI cannot: that the committed client still matches the
-          # vendored contract at the ref being deployed.
+          # The quality gates live in GoGo-CMS's own CI and run on every PR and
+          # push; re-running them here would double the compute without being
+          # the thing that decides mergeability. What this asserts is the one
+          # property that CI cannot: the committed client still matches the
+          # vendored contract at the ref actually being deployed.
           pnpm api:check
           pnpm build
 
@@ -144,26 +164,30 @@ jobs:
           version_id="$(grep -oE 'Worker Version ID: [0-9a-f-]{36}' "${RUNNER_TEMP}/upload.log" \
             | tail -1 | awk '{ print $4 }')"
           if [ -z "$version_id" ]; then
-            # Nothing is promoted on a parse failure: an unpromoted upload
-            # changes nothing, while promoting a guessed id changes everything.
+            # Nothing is promoted on a parse failure. An unpromoted upload
+            # changes nothing; promoting a guessed id changes everything.
             echo "::error::could not read the version id from wrangler output"
             exit 1
           fi
           echo "version_id=${version_id}" >> "$GITHUB_OUTPUT"
           echo "sha=${sha}" >> "$GITHUB_OUTPUT"
 
+      # ---- Promotion, shared by both paths ---------------------------------
       - name: promote to 100% of traffic
-        if: inputs.promote_version_id == ''
         working-directory: cms
         run: |
           set -euo pipefail
-          pnpm exec wrangler versions deploy "${{ steps.upload.outputs.version_id }}@100%" -y
+          version_id="${{ inputs.promote_version_id || steps.upload.outputs.version_id }}"
+          if [ -z "$version_id" ]; then
+            echo "::error::no version to promote"
+            exit 1
+          fi
+          pnpm exec wrangler versions deploy "${version_id}@100%" -y
 
       # The hostname sits behind Cloudflare Access, so an unauthenticated probe
-      # can only prove that Access is in front — which is itself the thing that
-      # must never silently disappear. A 200 here would mean the admin console
-      # is open to the internet.
-      - name: verify Access still guards the hostname
+      # cannot check the app. What it can check is that Access is still in front
+      # — a 200 here would mean the admin console is open to the internet.
+      - name: Access still guards the hostname
         env:
           CMS_URL: ${{ vars.CMS_URL_DEV }}
         run: |
@@ -174,7 +198,7 @@ jobs:
           fi
           code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${CMS_URL}/")"
           case "$code" in
-            302|301) echo "Access is in front (HTTP ${code})" ;;
+            301 | 302) echo "Access is in front (HTTP ${code})" ;;
             200)
               echo "::error::${CMS_URL} answered 200 unauthenticated — Access is NOT in front"
               exit 1
@@ -190,12 +214,10 @@ jobs:
             echo
             echo "| | |"
             echo "| --- | --- |"
-            echo "| Worker | \`gogo-cms-dev\` |"
+            echo "| Worker | \`${CMS_SCRIPT_NAME}\` |"
             echo "| Ref | \`${{ inputs.release_ref }}\` |"
             echo "| Version | \`${{ inputs.promote_version_id || steps.upload.outputs.version_id }}\` |"
             echo "| Commit | \`${{ steps.upload.outputs.sha }}\` |"
             echo
-            echo "Rollback: dispatch this workflow again with **promote_version_id** set to the"
-            echo "previous version. It promotes without building, so it does not depend on the"
-            echo "old ref still being buildable."
+            echo "Rollback: dispatch again with **promote_version_id** set to the previous version."
           } >> "$GITHUB_STEP_SUMMARY"
