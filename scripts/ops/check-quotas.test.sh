@@ -11,8 +11,9 @@
 # script that failed on those would go red every morning until nobody read it —
 # taking the real breach with it.
 #
-# Everything external is stubbed. The arithmetic under test needs no network:
-# it is the poll intervals against the free-tier command budget.
+# Everything external is stubbed. The threshold under test is Redis memory
+# against the free tier; the command budget is measured by redis-diag.yml, not
+# estimated here.
 
 set -uo pipefail
 
@@ -22,23 +23,27 @@ trap 'rm -rf "$tmp"' EXIT
 
 mkdir -p "${tmp}/bin"
 
-# A stub aws that answers only what this test cares about: the two poll
-# intervals. Everything else comes back empty, which is what a missing parameter
-# looks like, so the other checks report unknown and stay out of the way.
+# A stub aws answering a redis/url so the memory check runs, and a stub
+# redis-cli whose INFO memory reports whatever the test sets. Nothing else is
+# on PATH, so every other check reports unknown and only memory can set the
+# exit code — which is what makes the assertions below exact.
 cat >"${tmp}/bin/aws" <<'STUB'
 #!/usr/bin/env bash
 case " $* " in
   *" sts "*) exit 0 ;;
-  *worker/outbox-poll-ms*) printf '%s' "${STUB_OUTBOX_MS:-5000}"; exit 0 ;;
-  *worker/ingest-poll-ms*) printf '%s' "${STUB_INGEST_MS:-5000}"; exit 0 ;;
+  *redis/url*) printf 'rediss://stub.invalid:6379'; exit 0 ;;   # no credentials: gitleaks reads a URL with a password as a leak, and it is right to
 esac
 exit 1
 STUB
-chmod +x "${tmp}/bin/aws"
+cat >"${tmp}/bin/redis-cli" <<'STUB'
+#!/usr/bin/env bash
+case " $* " in
+  *"INFO memory"*) printf 'used_memory:%s\r\n' "${STUB_USED_MEMORY:-0}"; exit 0 ;;
+esac
+exit 1
+STUB
+chmod +x "${tmp}/bin/aws" "${tmp}/bin/redis-cli"
 
-# redis-cli, psql, jq and curl are deliberately absent from PATH. Their checks
-# then report unknown, leaving the command-budget estimate as the only thing
-# that can set the exit code — which is what makes the assertion below exact.
 export PATH="${tmp}/bin:/usr/bin:/bin"
 
 pass=0
@@ -58,25 +63,18 @@ expect() {
   fi
 }
 
-# 100000ms on both, which is what DEV stores: ~10,368/day against a ~16,667/day
-# budget, 62%.
-STUB_OUTBOX_MS=100000 STUB_INGEST_MS=100000 \
-  expect 0 "poll intervals inside the budget exit 0"
+mib=$(( 1024 * 1024 ))
 
-# 70000ms: ~14,811/day, between the 70% warn line and the budget.
-STUB_OUTBOX_MS=70000 STUB_INGEST_MS=70000 \
-  expect 1 "approaching the budget exits 1, which the workflow reports without failing"
+STUB_USED_MEMORY=$(( 1 * mib )) \
+  expect 0 "memory well inside the free tier exits 0"
 
-# 5000ms is the application's built-in default (apps/worker/src/main.ts), and it
-# is ~207,360/day — twelve times the free budget. DEV is inside the budget only
-# because SSM overrides it, which is why the manifest marks both parameters
-# required rather than optional.
-STUB_OUTBOX_MS=5000 STUB_INGEST_MS=5000 \
-  expect 2 "the application default is over budget, and the check says so"
+STUB_USED_MEMORY=$(( 200 * mib )) \
+  expect 1 "memory over 70% of the free tier exits 1, which the workflow reports without failing"
 
-# No parameters stored at all. The estimate falls back to the same 5000ms the
-# worker would fall back to, so it reports a breach — which is a true statement
-# about what that environment would do, not a guess dressed up as one.
+STUB_USED_MEMORY=$(( 260 * mib )) \
+  expect 2 "memory over the free tier exits 2, which is what fails the run"
+
+# No redis/url at all: the memory check is unknown, and unknown is not an alarm.
 cat >"${tmp}/bin/aws" <<'STUB'
 #!/usr/bin/env bash
 case " $* " in
@@ -85,7 +83,7 @@ esac
 exit 1
 STUB
 chmod +x "${tmp}/bin/aws"
-expect 2 "missing intervals model the fallback the worker itself would use"
+expect 0 "checks that cannot run do not fail the build"
 
 echo
 if [[ "$fail" -gt 0 ]]; then

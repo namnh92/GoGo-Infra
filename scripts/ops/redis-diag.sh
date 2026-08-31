@@ -85,7 +85,7 @@ timeout 60 redis-cli "${tls[@]}" -u "$redis_url" MONITOR 2>/dev/null \
       END {
         for (k in count) printf "%8d  %s\n", count[k], k
         printf "%8d  TOTAL in 60s  (%.1f/s)\n", total, total / 60
-      }' | sort -rn | head -40
+      }' | sort -rn | head -40 || true   # timeout(1) exits 124 when the minute is up; that is the plan
 
 section "commands by type (since counter start)"
 # Not every provider supports commandstats; an error here is printed, not hidden.
