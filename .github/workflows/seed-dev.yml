@@ -1,0 +1,85 @@
+name: seed-dev
+
+# Seeds the dev database: reference data, service areas, a place corpus, and a
+# bootstrap CMS admin.
+#
+# Its own workflow rather than a step in deploy-dev, and dispatch-only, because
+# DEV is shared. A seed that ran on every deploy would overwrite whatever a
+# developer was in the middle of testing, several times a day, with no signal
+# that it had happened. The seed itself is idempotent — it matches on name and
+# skips what exists — so running this twice is safe; running it automatically is
+# not the same question.
+#
+# No env file is rendered here. The one on the host is already there from the
+# last deploy, so this needs the SSH key and nothing else — one credential
+# instead of eighteen.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  # Shares the deploy group on purpose: seeding while a deploy is recreating
+  # containers means the seed runs against a database the next migration is
+  # about to change.
+  group: gogo-deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  seed:
+    name: seed the dev database
+    runs-on: ubuntu-latest
+    environment: dev
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_DEV_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: fetch deploy key
+        run: |
+          set -euo pipefail
+          install -m 600 /dev/null "${RUNNER_TEMP}/deploy_key"
+          aws ssm get-parameter --name /gogo/ci/dev/deploy/ssh-private-key \
+            --with-decryption --query 'Parameter.Value' --output text \
+            > "${RUNNER_TEMP}/deploy_key"
+
+      - name: seed
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+          COMPOSE_EDGE: docker/docker-compose.edge-tunnel.yml
+          REMOTE_ENV_FILE: .env.dev
+          KNOWN_HOSTS_FILE: config/known_hosts.dev
+          SSH_KEY_FILE: ${{ runner.temp }}/deploy_key
+        run: ./scripts/deploy/seed-vps.sh
+
+      - name: confirm the corpus is reachable
+        env:
+          API_ORIGIN: ${{ vars.HEALTH_URL_DEV }}
+        run: |
+          set -euo pipefail
+          # The seed reporting success is not the same as the API serving what
+          # it wrote: a corpus that lands in the wrong schema, or behind a
+          # status filter, leaves search empty and every screen in an empty
+          # state that looks like a client bug.
+          search="${API_ORIGIN%/health}/places/search?q=a&limit=1"
+          body="$(curl -fsS --max-time 15 "$search")"
+          echo "$body"
+          if [[ "$body" == *'"results":[]'* ]]; then
+            echo "seed reported success but /places/search still returns nothing" >&2
+            exit 1
+          fi
+          echo "search returns results"
+
+      - name: shred temporary credentials
+        if: always()
+        run: shred -u "${RUNNER_TEMP}/deploy_key" 2>/dev/null || true
