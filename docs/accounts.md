@@ -62,14 +62,35 @@ convenience someone reaches for on a Friday.
 `scripts/ci/check-workflow-auth.test.sh` proves the checker fails on each of those four shapes.
 A checker nobody has watched turn red is a green light, not a check.
 
-## 3. Personal identity is a bus factor, and it is currently unresolved
+## 3. Personal identity is a bus factor — accepted, with a revisit trigger
 
 The accounts hang off one personal GitHub identity. If that account is lost, disabled, or the
 person leaves, GoGo loses console access to its database, queue, storage, push and attribution
 providers — while the running system keeps working on tokens nobody can rotate. That is the
 worst shape of failure: no outage to force the issue, and no way to fix anything.
 
-Fix before pilot (INF-024):
+### Decision, 31/08/2026 — accepted for now
+
+GoGo has one contributor. A second owner on each provider console would be the same person
+holding a second login, which buys nothing: it does not survive the account being lost, and it
+adds seven consoles to keep in sync for a fiction of redundancy. Deferred deliberately, on the
+same reasoning and the same revisit trigger as
+[`adr/0002-no-approval-gate-on-this-plan.md`](adr/0002-no-approval-gate-on-this-plan.md).
+
+What is **not** deferred, because it is the half a machine can hold:
+
+- Automation never authenticates as a person. Enforced by `scripts/ci/check-workflow-auth.sh`
+  (below), not by anyone remembering.
+- MFA and recovery codes on the GitHub account, per §1. One account being the root of trust is
+  the reason this is required, not a reason to skip it.
+
+### Revisit — do this before any of these, not after
+
+- A second person gets access to any provider console, or to `GoGo-Infra`.
+- The first production deploy is scheduled.
+- Real user data exists in any environment.
+
+Then:
 
 - Move each provider account to a team/organisation plan where the provider supports it, with at
   least two owners.
@@ -99,7 +120,8 @@ owner columns are deliberately not filled in from the git author: who holds an a
 about people, and guessing it produces a register that reads as complete while being wrong —
 worse than the blank it replaced.
 
-Every row has one owner and no backup. That is the finding, not an omission in the table.
+Every row has one owner and no backup. That is the accepted state as of 31/08/2026, not an
+omission in the table — see the decision above, and the trigger that ends it.
 
 ## App identity
 
@@ -109,7 +131,7 @@ three flavours from `max.gogo.{flavor}`.
 
 | Flavour | Bundle id / package | Scheme | Claims web links |
 | --- | --- | --- | --- |
-| dev | `max.gogo.dev` | `gogo-dev://` | no |
+| dev | `max.gogo.dev` | `gogo-dev://` | yes — `go-dev.gogo.id.vn` |
 | stag | `max.gogo.stag` | `gogo-stag://` | no |
 | prod | `max.gogo.prod` | `gogo://` | yes |
 
@@ -117,9 +139,14 @@ Better than one identity, and deliberately so: three flavours install side by si
 can run staging next to the store build. `bootstrap.env` therefore needs the suffixed form —
 `IOS_BUNDLE_ID_DEV`, `IOS_BUNDLE_ID_PROD` — and the bare key is dev's.
 
-Only production claims `https://` links. A dev build claiming a domain whose `assetlinks.json`
-never names it ships a claim that cannot verify: Android offers an unverified handler in the
-chooser and iOS ignores it, which is worse than not claiming at all.
+**Corrected 31/08/2026.** This section used to read "only production claims `https://` links".
+Dev claims them too, on its own host: `config/well-known/dev/` names `max.gogo.dev` and the debug
+keystore fingerprint, so `go-dev.gogo.id.vn` serves association files that name the dev build.
+`stag` still claims nothing, because no host serves its files yet.
+
+The rule that produced the old sentence still holds, and is why `stag` is empty: a build claiming
+a domain whose `assetlinks.json` never names it ships a claim that cannot verify — Android offers
+an unverified handler in the chooser and iOS ignores it, which is worse than not claiming at all.
 
 Permanent after the first store submission, and baked into `apple-app-site-association`,
 `assetlinks.json` and the APNs configuration in OneSignal — one OneSignal app per flavour that
@@ -127,9 +154,8 @@ receives push, each configured with that flavour's bundle id.
 
 ### Web link domain
 
-`gogo.id.vn`, decided 29/08/2026. `GoGo-MobileApp` currently claims `gogo.app`, a domain nobody
-here owns, so no link can verify regardless of the fingerprint. Tracked as GoGo-MobileApp
-work; the infrastructure side is `go.gogo.id.vn` throughout.
+`gogo.id.vn`, decided 29/08/2026. The infrastructure side is `go-dev` / `go-stag` /
+`go.gogo.id.vn`, one share host per flavour, each served by that environment's Worker.
 
 ## Offboarding
 
