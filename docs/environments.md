@@ -87,18 +87,41 @@ limit — is what runs out first.
 a plan can allow `PING` while refusing `BLPOP`, and BullMQ needs the second. Checked by
 `scripts/bootstrap/validate-services.sh`, so it stays checked rather than being remembered.
 
-Still open: the command budget. A blocking consumer polls continuously, so what runs out first
-is commands per month, not storage. Run the worker under normal dev load for a day and record
-the number here.
-
 **Decided (29/08/2026): Upstash stays.** Postgres does not substitute for it — Redis carries
 BullMQ, rate limiting, caching and idempotency, and Neon covers none of those.
 
-The command budget is still the open part, not the choice of provider. Run the worker under
-normal dev load for a day, read the command count from the console, and record it here. If a
-blocking consumer turns out to burn the free tier, the fallback is Upstash for cache and rate
-limiting with a local Redis container for the worker — the connection string is the only thing
-that changes. Wire the quota alert as part of INF-019 either way.
+**The command budget, measured (31/08/2026): ~10,368/day against ~16,667/day free — 62%.**
+
+The number is not read from a console. Upstash's command counter over the Redis protocol is
+per connection, not per month, so it cannot answer the question. What spends the budget is the
+poll interval, which is a value we set, so the estimate is arithmetic on it:
+
+```
+(86400000/OUTBOX_POLL_MS + 86400000/INGEST_POLL_MS) × 6 commands per tick
+```
+
+`scripts/ops/check-quotas.sh` recomputes it on every scheduled run, so it tracks the
+configuration rather than a number someone wrote down once.
+
+**Both intervals are 100000ms in DEV, and that is load-bearing.** The application's own default
+is 5000ms (`apps/worker/src/main.ts`), which is ~207,360/day — twelve times the budget. An
+environment that does not set these two parameters spends a month of free tier in about two
+days, and the way it shows up is the queue going quiet: no error, no log, jobs that never run.
+
+Two things keep that from happening silently, and neither is a person remembering:
+
+- `config/secrets.manifest.yml` marks `worker/outbox-poll-ms` and `worker/ingest-poll-ms`
+  **required**, so `validate.sh` fails a deploy that is missing them.
+- `scripts/ops/check-quotas.test.sh` pins the thresholds, including the case where the
+  parameters are absent and the estimate falls back to the same 5000ms the worker would.
+
+Changing an interval takes a redeploy, not just an SSM write: the value reaches the worker
+through the rendered env file. Until then the check reports the new number while the worker
+spends the old one.
+
+If a blocking consumer ever does burn the tier, the fallback stays what it was: Upstash for
+cache and rate limiting, a local Redis container for the worker — the connection string is the
+only thing that changes.
 
 ## One Cloudflare zone, two environments
 
