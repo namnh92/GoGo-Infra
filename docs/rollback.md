@@ -27,6 +27,34 @@ KNOWN_HOSTS_FILE=config/known_hosts.prod SSH_KEY_FILE=/tmp/deploy_key \
 
 The deploy workflow runs this automatically when the health check fails.
 
+## The CMS is a different shape
+
+The CMS is a Cloudflare Worker, not a container on a host, so neither of the
+mechanisms above applies. Cloudflare keeps every uploaded **version**; a deploy
+is two steps, and only the second one moves traffic:
+
+```
+wrangler versions upload   → a version exists, nothing serves it
+wrangler versions deploy   → that version takes 100% of traffic
+```
+
+Rolling back is therefore promoting a version that already exists — no build, no
+checkout of the old ref, nothing that depends on last month's dependency tree
+still resolving. Dispatch `deploy-cms-dev.yml` with **promote_version_id** set:
+
+```
+gh workflow run deploy-cms-dev.yml -f promote_version_id=<uuid>
+```
+
+List versions with `wrangler versions list` in GoGo-CMS, or read the summary of
+the run that deployed it — each deploy prints the version id it promoted.
+
+There is no automatic rollback and no health check that can prove the app works:
+the hostname sits behind Cloudflare Access, so an unauthenticated probe gets a
+redirect no matter what state the Worker is in. The workflow checks the one
+thing that probe *can* answer — that Access is still in front — and a `200`
+there fails the deploy, because it would mean the admin console is open.
+
 ## Three different things called "rollback"
 
 | Situation | Action |

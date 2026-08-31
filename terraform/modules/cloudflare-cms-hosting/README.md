@@ -6,9 +6,22 @@ Hostname and access control for the CMS. **Not** the deploy.
 
 | Thing | Owner | Trigger |
 | --- | --- | --- |
-| Worker script, assets, `vars` | GoGo-CMS | push to `main` → Cloudflare Workers Build |
+| Worker script, assets, `vars` | this repository | `deploy-cms-dev.yml`, dispatched by hand |
+| Build of that script | GoGo-CMS | its own CI gates the ref; the deploy builds it |
 | Hostname, TLS, binding | this module | `terraform apply` |
 | Who may reach it | this module | `terraform apply` |
+
+Deployment moved here from a Cloudflare Workers Build on the GoGo-CMS
+repository. That integration was configured against a `main` branch GoGo-CMS
+does not have — it uses `develop` and `master` — so it never fired, and every
+deploy was somebody running `wrangler` from a laptop with the one flag that
+must not be forgotten (`--var BE_ORIGIN:…`). A dispatched workflow makes that
+flag impossible to forget and puts the credential in SSM instead of a shell
+history.
+
+**If the Workers Build integration is ever reconnected, disconnect one of the
+two.** Two deployers racing on the same script is how a rollback gets undone by
+a build nobody remembered was still wired up.
 
 Terraform runs when infrastructure changes. Application code ships on its own
 cadence from the repository that owns it. Making Terraform the deployer turns

@@ -171,6 +171,27 @@ which surface caused a cost spike.
 | non-secret | pinned SSH host key | committed at `config/known_hosts.prod` — public, and a change should be a reviewable diff |
 | secret | deploy SSH private key | SSM `/gogo/ci/prod/deploy/ssh-private-key` |
 
+### CMS deploy (dev)
+
+`deploy-cms-dev.yml` deploys the CMS Worker and reads exactly two credentials,
+under a path no other role can reach:
+
+| Kind | What | Where |
+| --- | --- | --- |
+| secret | Cloudflare API token, **Account · Workers Scripts · Edit only** | SSM `/gogo/ci/dev/cms-deploy/cloudflare-token` |
+| secret | GitHub fine-grained PAT, read-only Contents on GoGo-CMS | SSM `/gogo/ci/dev/cms-deploy/github-read-token` |
+
+The Cloudflare token is deliberately **not** the Terraform write token. That one
+can also edit DNS, Access and R2, and a job whose whole purpose is uploading a
+Worker script should not be able to move a hostname. Verify the scope with
+`make cf-scopes` after creating it.
+
+```bash
+./scripts/secrets/put.sh ci dev/cms-deploy/cloudflare-token
+./scripts/secrets/put.sh ci dev/cms-deploy/github-read-token
+```
+
+
 The SSH key is itself a long-lived credential, which sits uneasily next to the
 no-static-credentials rule. Choosing between a scoped deploy key, a Cloudflare Tunnel and a
 pull-based agent is open work on INF-017.
