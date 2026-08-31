@@ -120,6 +120,7 @@ module "policy_monitor" {
   parameter_paths = [
     "${var.environment}/backend/*",
     "ci/${var.environment}/terraform/read/*",
+    "ci/${var.environment}/neon/*",
   ]
 
   kms_key_arn = data.aws_kms_key.ssm.arn
