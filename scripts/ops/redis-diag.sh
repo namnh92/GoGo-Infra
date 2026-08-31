@@ -13,6 +13,7 @@
 # the URL — which is the question being asked. The URL itself is never printed.
 
 set -uo pipefail
+[[ -n "${DIAG_TRACE:-}" ]] && set -x
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "${REPO_ROOT}/scripts/secrets/common.sh"
@@ -70,12 +71,12 @@ section "bullmq set sizes"
 # diagnosing. ZCARD/LLEN is one command per set.
 for q in gogo-outbox gogo-ingest gogo-privacy; do
   printf '%-14s' "$q"
-  for set in wait active delayed completed failed; do
-    case "$set" in
-      wait|active) n="$(r LLEN "bull:${q}:${set}")" ;;
-      *)           n="$(r ZCARD "bull:${q}:${set}")" ;;
+  for state in wait active delayed completed failed; do
+    case "$state" in
+      wait|active) n="$(r LLEN "bull:${q}:${state}")" ;;
+      *)           n="$(r ZCARD "bull:${q}:${state}")" ;;
     esac
-    printf ' %s=%s' "$set" "${n:-?}"
+    printf ' %s=%s' "$state" "${n:-?}"
   done
   echo
 done

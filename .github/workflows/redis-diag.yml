@@ -30,7 +30,7 @@ jobs:
       - name: diagnostics
         run: |
           set -uo pipefail
-          ./scripts/ops/redis-diag.sh dev | tee diag.txt
+          DIAG_TRACE=1 ./scripts/ops/redis-diag.sh dev 2>&1 | tee diag.txt || echo "diag exited $?"
           {
             echo '## Redis diagnostics — dev'
             echo
