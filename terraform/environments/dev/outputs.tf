@@ -41,3 +41,8 @@ output "monitor_role_arn" {
   description = "Role the scheduled quota check assumes."
   value       = module.github_oidc.role_arns["monitor"]
 }
+
+output "cms_access_aud" {
+  description = "Audience tag GoGo-BE verifies on the Access assertion. Put this in SSM as access/aud."
+  value       = try(module.cms_hosting[0].access_aud, "")
+}

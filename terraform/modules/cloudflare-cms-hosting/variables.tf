@@ -29,12 +29,36 @@ variable "script_name" {
 }
 
 variable "access_emails" {
-  description = "Email addresses allowed through Cloudflare Access. Each receives a one-time PIN; no external identity provider is required."
+  description = "Email addresses allowed through Cloudflare Access by one-time PIN. Used when no identity provider is configured, and as the break-glass path when one is."
   type        = list(string)
 
   validation {
     condition     = length(var.access_emails) > 0
     error_message = "At least one email is required. An Access application with no allow rule is not a locked door — it is an application that denies everyone, including the person who needs to fix it."
+  }
+}
+
+# The identity provider is created by hand in the Cloudflare dashboard, and only
+# its id is referenced here.
+#
+# Same rule as every other provider credential in this repository: a GitHub
+# OAuth app has a client secret, and declaring it in Terraform writes that secret
+# into state (docs/secrets.md, and the same reason R2 and Neon keys are created
+# by hand). An id is not a secret.
+variable "access_idp_id" {
+  description = "Cloudflare Access identity provider id. Empty keeps one-time PIN as the only method."
+  type        = string
+  default     = ""
+}
+
+variable "access_github_org" {
+  description = "GitHub organisation whose members may reach the CMS. Required when access_idp_id is set."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.access_idp_id == "" || var.access_github_org != ""
+    error_message = "access_github_org is required when access_idp_id is set: an identity provider with no organisation rule authenticates anyone with a GitHub account."
   }
 }
 

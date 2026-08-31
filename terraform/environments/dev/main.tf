@@ -508,12 +508,14 @@ module "cms_hosting" {
     length(var.cms_access_emails) == 0
   ) ? 0 : 1
 
-  account_id    = var.cloudflare_account_id
-  zone_id       = var.cloudflare_zone_id
-  environment   = var.environment
-  hostname      = var.cms_host
-  script_name   = var.cms_script_name
-  access_emails = var.cms_access_emails
+  account_id        = var.cloudflare_account_id
+  zone_id           = var.cloudflare_zone_id
+  environment       = var.environment
+  hostname          = var.cms_host
+  script_name       = var.cms_script_name
+  access_emails     = var.cms_access_emails
+  access_idp_id     = var.cms_access_idp_id
+  access_github_org = var.cms_access_github_org
 }
 
 # The dev API reaches the internet through a tunnel, not an open port.
