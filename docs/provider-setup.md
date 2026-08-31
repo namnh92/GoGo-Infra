@@ -169,9 +169,13 @@ API is disabled returns `403 PERMISSION_DENIED` with `reason=SERVICE_DISABLED`, 
 map 403 to "the caller may not read this resource" — so the console shows an editor a permission
 error about their own document when the actual fault is a GCP project setting.
 
-The Sheets key is read by the CMS bulk import only (`GOOGLE_SHEETS_API_KEY`). Without it GoGo-BE
-does not fail to start: it falls back to a fake Sheets provider that answers every real
-spreadsheet id with `SHEET_NOT_FOUND`.
+Each key is read under its own name and covers one API: `GOOGLE_PLACES_API_KEY`,
+`GOOGLE_ROUTES_API_KEY`, `GOOGLE_SHEETS_API_KEY`. None falls back to another (GoGo-BE#272) — a
+key restricted to one API cannot serve a second, so a fallback only turns a missing credential
+into a `403 API_KEY_SERVICE_BLOCKED` further downstream.
+
+Missing keys do not stop GoGo-BE booting. Places and Sheets bind fakes and log a warn naming the
+variable; the Sheets fake answers every import with `SHEET_PROVIDER_NOT_CONFIGURED`.
 
 ## 8. Production VPS (INF-017, INF-018)
 
