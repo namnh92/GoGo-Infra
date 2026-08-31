@@ -60,23 +60,43 @@ section "commands by type (since counter start)"
 r INFO commandstats | sed -E 's/^cmdstat_//; s/:calls=/ calls=/; s/,usec=[0-9]+//; s/,usec_per_call=[0-9.]+//; s/,rejected_calls=[0-9]+//; s/,failed_calls=[0-9]+//' \
   | sort -t= -k2 -rn | head -25 || true
 
-section "bullmq keys"
-r --scan --pattern 'bull:*' | sort || true
+section "keyspace size"
+r DBSIZE || true
+
+section "bullmq set sizes"
+# Counts, not contents. The first version of this script listed every key and
+# HGETALL'd every repeat iteration; on a keyspace of 1,700 job hashes Upstash
+# closed the connection on it — a diagnostic that burns the quota it is
+# diagnosing. ZCARD/LLEN is one command per set.
+for q in gogo-outbox gogo-ingest gogo-privacy; do
+  printf '%-14s' "$q"
+  for set in wait active delayed completed failed; do
+    case "$set" in
+      wait|active) n="$(r LLEN "bull:${q}:${set}")" ;;
+      *)           n="$(r ZCARD "bull:${q}:${set}")" ;;
+    esac
+    printf ' %s=%s' "$set" "${n:-?}"
+  done
+  echo
+done
 
 section "bullmq job schedulers (the interval Redis actually holds)"
 # The scheduler's `every` lives in Redis, not in the process. Two processes
 # upserting different values fight, and whichever restarted last wins — so the
 # value here is the truth, whatever the env file on any one host says.
-for key in $(r --scan --pattern 'bull:*:repeat:*' | sort); do
-  printf '%s\n' "$key"
-  r HGETALL "$key" | paste - - | sed 's/^/    /'
+for q in gogo-outbox gogo-ingest gogo-privacy; do
+  for key in $(r ZRANGE "bull:${q}:repeat" 0 -1); do
+    printf '%s\n' "bull:${q}:repeat:${key}"
+    r HGETALL "bull:${q}:repeat:${key}" | paste - - | sed 's/^/    /'
+  done
 done
 
-section "bullmq delayed (next ticks, unix ms in score)"
+section "newest failed job per queue (why it failed)"
 for q in gogo-outbox gogo-ingest gogo-privacy; do
-  printf '%s: ' "$q"
-  r ZRANGE "bull:${q}:delayed" 0 -1 WITHSCORES | paste - - | tr '\n' ';' || true
-  echo
+  id="$(r ZRANGE "bull:${q}:failed" -1 -1)"
+  [[ -n "$id" ]] || { printf '%s: none\n' "$q"; continue; }
+  printf '%s: %s\n' "$q" "$id"
+  r HGETALL "bull:${q}:${id}" | paste - - | grep -E '^(failedReason|attemptsMade|finishedOn|timestamp|processedOn|stacktrace)' | cut -c1-300 | sed 's/^/    /'
 done
 
 section "memory"
