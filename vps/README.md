@@ -58,3 +58,37 @@ obsolete assumption. The SRS target stands; the compose stack is what changes.
 
 Work: INF-039 moves `postgres`, `redis` and `backup` behind a `self-hosted` profile so they stop
 being mandatory; INF-041 provisions managed PostgreSQL with PITR for production.
+
+## Deploy order, and why it is that order
+
+`scripts/deploy/deploy-vps.sh` runs these steps and no others. The order is the part that
+matters; each step exists because reordering it breaks something specific.
+
+| # | Step | Why here |
+| --- | --- | --- |
+| 1 | Record the running revision to `.previous-revision` | Captured **before** anything changes. Without it a rollback has to guess, and guessing during an incident is how the wrong revision goes back out |
+| 2 | `git fetch`, resolve the ref to a commit, `checkout --detach` | Resolving first makes a branch, a tag and a SHA behave identically, and records what actually shipped rather than what a moving branch pointed at when the deploy started |
+| 3 | Ship the rendered env file, `install -m 600` into place | `install(1)` renames atomically. A process restarting mid-copy would otherwise read half a file and fail on a config error that looks like a code bug |
+| 4 | Build `api`, `worker` **and `migrate`** | `migrate` sits behind the `tools` profile, so a bare `build` skips it. Building only the long-running services left migrations running yesterday's code against today's schema — and the deploy reported success, because the container it ran did exactly what it was built to do |
+| 5 | Run migrations | **Before** the new containers take traffic, and expand-only, so the previous revision still runs against this schema if the health check fails |
+| 6 | `up -d --remove-orphans` | Traffic moves only after the schema it needs exists |
+| 7 | Health check, then prune | The check is the deploy's own verdict. On dev there is no automatic rollback: a broken deploy is information, and rolling it back silently hides the thing the developer is trying to see |
+
+Expand-then-contract is what makes step 5 safe to run before step 6. A destructive migration
+breaks that property — the old code can no longer read its own database — which is why
+`rollback.sh` rolls back **code only** and says so.
+
+## What never reaches a log
+
+The rendered env file is mode 0600, is never uploaded as an artifact, and is shredded in an
+`if: always()` step. `render-env.sh` prints a **count** of the variables it wrote, never their
+names paired with values, and it deletes the file rather than leaving a partial one when a
+required parameter is missing.
+
+The deploy job's other credential, the SSH key, is fetched into `$RUNNER_TEMP` with
+`install -m 600 /dev/null` before anything is written to it — created empty at the right mode,
+so it never exists world-readable even briefly — and is shredded in the same always-step.
+
+GitHub masks the values it injected, but masking is a display filter, not a control: it does not
+apply to anything the job derived from them. The controls are the file mode, the absence of an
+artifact upload, and printing counts instead of contents.
