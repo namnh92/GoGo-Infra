@@ -50,6 +50,7 @@ test: ## Run the shell unit tests
 	./scripts/ci/check-workflow-auth.test.sh
 	./scripts/ci/gitleaks-rules.test.sh
 	./scripts/ops/check-quotas.test.sh
+	./scripts/ops/check-provider-keys.test.sh
 
 .PHONY: check-workflow-auth
 check-workflow-auth: ## Assert CI authenticates as a machine, never as a person (INF-024)

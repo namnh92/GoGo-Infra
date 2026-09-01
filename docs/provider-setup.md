@@ -197,6 +197,18 @@ plus Google's `reason`, which is the only field separating "this API is not enab
 project" from "this credential is not allowed". It prints a SHA-256 prefix and the last 4
 characters, never the value. It also runs, non-blocking, at the end of `deploy-dev.yml`.
 
+Not every API sends a `reason`. Places API (New) answers a refused call with a bare
+`403 "The caller does not have permission"` and no `ErrorInfo` at all, so the probe reports
+exactly that rather than guessing a cause. Routes does send one, but wraps it in a JSON *array*
+because `computeRouteMatrix` streams its result — reading that as an object is how a live
+`BILLING_DISABLED` once surfaced as "no machine-readable reason", pointing an operator at key
+restrictions for a problem that was billing on the project. Both shapes are pinned in
+`check-provider-keys.test.sh`.
+
+When one key fails and another succeeds, compare the projects rather than the keys: a Maps
+Platform API needs billing on its project, while Sheets does not, so a working Sheets key proves
+the parameter store is fine and proves nothing about Maps entitlement.
+
 Run it after enabling an API, after rotating a key, and after changing a restriction.
 
 ## 8. Production VPS (INF-017, INF-018)

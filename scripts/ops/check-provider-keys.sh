@@ -116,6 +116,14 @@ try:
     body = json.load(open(sys.argv[1]))
 except Exception:
     sys.exit()
+# computeRouteMatrix streams its result, so an error arrives as a one-element
+# JSON *array*, not an object. Reading it as an object raised AttributeError,
+# stderr went to /dev/null, and the reason silently came back empty — which is
+# how a live BILLING_DISABLED was reported as a bare 403 with no cause.
+if isinstance(body, list):
+    body = next((e for e in body if isinstance(e, dict) and e.get("error")), {})
+if not isinstance(body, dict):
+    sys.exit()
 for d in (body.get("error") or {}).get("details") or []:
     if str(d.get("@type", "")).endswith("google.rpc.ErrorInfo") and d.get("reason"):
         print(d["reason"]); break

@@ -150,6 +150,13 @@ jobs:
       - name: quota thresholds still fire
         run: ./scripts/ops/check-quotas.test.sh
 
+      # The provider probe's whole value is the reason code it reports. Routes
+      # errors arrive as a JSON array, and reading them as an object turned a
+      # live BILLING_DISABLED into "no machine-readable reason" — a confident
+      # wrong diagnosis pointing at the key instead of the project's billing.
+      - name: provider probe still reports Google's reason
+        run: ./scripts/ops/check-provider-keys.test.sh
+
       - name: manifest parses
         run: |
           for env in dev staging prod; do
