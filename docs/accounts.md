@@ -114,7 +114,7 @@ Fill in as accounts are created. "Owner" is a person; "backup" must not be the s
 | OneSignal | `GoGo Production` | GitHub OAuth | | **none** | | |
 | Tenjin | | GitHub OAuth | | **none** | | |
 | Google Cloud | project number `186055730568` — every DEV server key | Google | | **none** | | |
-| Grafana Cloud | free-tier stack, dev and prod share it via an `env` label | GitHub OAuth | | **none** | | |
+| Grafana Cloud | Free stack `prometheus-prod-37-prod-ap-southeast-1`, instance id `3553140` — dev and prod share it via an `env` label | GitHub OAuth | | **none** | | 01/09/2026 |
 | AWS | account `477020169756` | IAM / SSO | | **none** | | |
 
 The account identifiers are filled from `config/global.tfvars` and `config/dev.tfvars`. The
