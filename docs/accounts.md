@@ -112,7 +112,7 @@ Fill in as accounts are created. "Owner" is a person; "backup" must not be the s
 | OneSignal | `GoGo Development` | GitHub OAuth | | **none** | | |
 | OneSignal | `GoGo Production` | GitHub OAuth | | **none** | | |
 | Tenjin | | GitHub OAuth | | **none** | | |
-| Google Cloud | | Google | | **none** | | |
+| Google Cloud | project number `186055730568` — every DEV server key | Google | | **none** | | |
 | AWS | account `477020169756` | IAM / SSO | | **none** | | |
 
 The account identifiers are filled from `config/global.tfvars` and `config/dev.tfvars`. The
@@ -122,6 +122,51 @@ worse than the blank it replaced.
 
 Every row has one owner and no backup. That is the accepted state as of 31/08/2026, not an
 omission in the table — see the decision above, and the trigger that ends it.
+
+### Which Google Cloud project owns a DEV credential
+
+**Recorded 01/09/2026.** All three DEV server keys live in **project number
+`186055730568`**, one key per API, each restricted to that API and nothing else:
+
+| DEV credential | SSM path | API it may call |
+| --- | --- | --- |
+| Places | `/gogo/dev/backend/google/server-api-key` | Places API (New) |
+| Routes | `/gogo/dev/backend/google/routes-api-key` | Routes API |
+| Sheets | `/gogo/dev/backend/google/sheets-api-key` | Google Sheets API |
+
+Verified by calling each API with each key: every key answers `200` on its own
+API and `403 API_KEY_SERVICE_BLOCKED` on the other two. All three APIs are
+enabled on the project, so those refusals are the key restriction doing its job
+and not a disabled service.
+
+**Troubleshooting a Google credential starts by identifying which project owns
+it, not which key it is.** Billing, API enablement, quota and org policy are all
+project-scoped, so a check run against the wrong project answers a question
+nobody asked — confidently, and in the affirmative.
+
+That is not hypothetical. DEV Places and Routes returned `403` for weeks while
+Sheets returned `200` from the same SSM prefix, and the console was checked
+repeatedly. The keys were right and SSM was right: Maps Platform billing was not
+enabled on `186055730568`, and Sheets does not require billing. The working
+Sheets key proved SSM was fine and proved nothing whatsoever about Maps
+entitlement. During triage the Maps keys were briefly moved to a second project
+(`512985002900`) to isolate the fault; once billing was enabled they were
+reverted, and that project holds nothing DEV depends on.
+
+Ask Google which project a key belongs to rather than inferring it. Calling an
+API the key is not entitled to returns an `ErrorInfo` whose `metadata.consumer`
+names the project:
+
+```bash
+curl -s -X POST https://vision.googleapis.com/v1/images:annotate \
+  -H "X-Goog-Api-Key: ${key}" -H 'Content-Type: application/json' -d '{"requests":[]}'
+# -> error.details[].metadata.consumer = projects/<number>
+```
+
+The key goes in a header, never in the URL query string: a URL reaches access
+logs, a header does not. No key value belongs in this file, in a ticket, or in
+any command output — identify a credential by the `sha256:… last4:…` fingerprint
+`scripts/ops/check-provider-keys.sh` prints.
 
 ## App identity
 
