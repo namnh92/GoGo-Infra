@@ -19,7 +19,10 @@ require_env_arg "$ENVIRONMENT" allow-ci
 [[ -n "$PARAM_PATH" ]] || die "usage: get.sh <env|ci> <path> [--show]"
 require_aws
 
-full_path="$(ssm_prefix "$ENVIRONMENT")/${PARAM_PATH}"
+# Resolved from the manifest, so `get.sh dev google/maps-ios-api-key --show`
+# reaches the mobile namespace without the caller having to know it exists.
+PARAM_NAMESPACE="$(param_namespace "$PARAM_PATH" "$ENVIRONMENT")"
+full_path="$(ssm_prefix "$ENVIRONMENT" "${PARAM_NAMESPACE:-backend}")/${PARAM_PATH}"
 
 if [[ "$SHOW" != "--show" ]]; then
   aws ssm get-parameter --name "$full_path" \

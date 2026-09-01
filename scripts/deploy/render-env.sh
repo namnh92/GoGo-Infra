@@ -33,7 +33,7 @@ chmod 600 "$OUT_FILE"
 
 missing=()
 
-while IFS=$'\t' read -r path env_var _type required; do
+while IFS=$'\t' read -r path env_var _type required _namespace; do
   [[ -n "$env_var" ]] || continue
 
   if value="$(aws ssm get-parameter --name "${prefix}/${path}" --with-decryption --query 'Parameter.Value' --output text 2>/dev/null)"; then
@@ -42,7 +42,11 @@ while IFS=$'\t' read -r path env_var _type required; do
   elif [[ ",${required}," == *",${ENVIRONMENT},"* ]]; then
     missing+=("${prefix}/${path}")
   fi
-done < <(python3 "$MANIFEST_READER" "$ENVIRONMENT")
+# Explicitly the backend namespace. This renders the production process
+# environment, and the deploy role's IAM grants `<env>/backend/*` only — a row
+# from another namespace would look up a path it may not read, and a value it
+# should not hold.
+done < <(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace backend)
 
 if [[ "${#missing[@]}" -gt 0 ]]; then
   rm -f "$OUT_FILE"

@@ -147,14 +147,28 @@ module "policy_monitor" {
   tags        = module.tags.tags
 }
 
+# The only role that reads `<env>/mobile/*`. Mobile builds run on developer
+# machines — there is no EAS or CI build job yet — so a developer is the only
+# principal that needs the Maps SDK key (INF-055, INF-056).
+#
+# Deliberately not added to policy_deploy or policy_monitor. A client key is of
+# no use to the API or to a quota job, and the deploy role's grant is what stops
+# a mobile build credential from being rendered into the server's environment by
+# accident. When a mobile build job exists it gets its own role and this path,
+# not a widened deploy policy.
 module "policy_developer" {
   source = "../../modules/aws-ssm-iam"
 
-  name            = "${module.tags.name_prefix}-developer"
-  description     = "Developer read access to dev runtime secrets. No CI paths, no production."
-  parameter_paths = ["${var.environment}/backend/*"]
-  kms_key_arn     = data.aws_kms_key.ssm.arn
-  tags            = module.tags.tags
+  name        = "${module.tags.name_prefix}-developer"
+  description = "Developer read access to dev runtime secrets and mobile build keys. No CI paths, no production."
+
+  parameter_paths = [
+    "${var.environment}/backend/*",
+    "${var.environment}/mobile/*",
+  ]
+
+  kms_key_arn = data.aws_kms_key.ssm.arn
+  tags        = module.tags.tags
 }
 
 # Developers authenticate through IAM Identity Center and assume this role for a
@@ -179,7 +193,7 @@ resource "aws_iam_role" "developer" {
   count = var.developer_sso_principal_arn == "" ? 0 : 1
 
   name                 = "${module.tags.name_prefix}-developer"
-  description          = "Developer access to /gogo/dev/backend/* through AWS SSO"
+  description          = "Developer access to /gogo/dev/{backend,mobile}/* through AWS SSO"
   assume_role_policy   = data.aws_iam_policy_document.developer_assume[0].json
   max_session_duration = 3600
   permissions_boundary = module.boundary.arn

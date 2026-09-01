@@ -23,7 +23,7 @@ require_env_arg "$ENVIRONMENT" allow-ci
 # round trip to be reported.
 PARAM_TYPE="${3:-}"
 if [[ -z "$PARAM_TYPE" && "$ENVIRONMENT" != "ci" ]]; then
-  PARAM_TYPE="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" | awk -F'\t' -v p="$PARAM_PATH" '$1 == p { print $3 }')"
+  PARAM_TYPE="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace all | awk -F'\t' -v p="$PARAM_PATH" '$1 == p { print $3 }')"
   if [[ -z "$PARAM_TYPE" ]]; then
     # A typo in the path writes a parameter nothing reads, nothing validates and
     # nobody rotates — while the real one stays empty and the application fails
@@ -31,7 +31,8 @@ if [[ -z "$PARAM_TYPE" && "$ENVIRONMENT" != "ci" ]]; then
     echo "'${PARAM_PATH}' is not declared in config/secrets.manifest.yml." >&2
     echo >&2
     echo "Declared paths for ${ENVIRONMENT}:" >&2
-    python3 "$MANIFEST_READER" "$ENVIRONMENT" | cut -f1 | sed 's/^/  /' >&2
+    python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace all \
+      | awk -F'\t' '{ printf "  %s\t(%s)\n", $1, $5 }' >&2
     echo >&2
 
     if [[ "${GOGO_ALLOW_UNDECLARED:-}" != "1" ]]; then
@@ -56,7 +57,12 @@ esac
 
 confirm_prod "$ENVIRONMENT" "write ${PARAM_PATH}"
 
-full_path="$(ssm_prefix "$ENVIRONMENT")/${PARAM_PATH}"
+# The manifest decides which namespace this path lives in, not the caller.
+# An undeclared path falls back to `backend`, which is where it would have gone
+# before namespaces existed and is the only namespace the confirmation above
+# describes.
+PARAM_NAMESPACE="$(param_namespace "$PARAM_PATH" "$ENVIRONMENT")"
+full_path="$(ssm_prefix "$ENVIRONMENT" "${PARAM_NAMESPACE:-backend}")/${PARAM_PATH}"
 
 hint="$(param_hint "$PARAM_PATH")"
 [[ -n "$hint" ]] && echo "       ${hint}"
