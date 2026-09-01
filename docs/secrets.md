@@ -236,12 +236,32 @@ Store them, plus the two non-secret identifiers, with `put.sh`:
 ./scripts/secrets/put.sh dev observability/grafana-read-token   # paste the metrics:read token
 ```
 
-All four are `required: []` in the manifest, so a deploy is not blocked before
-they exist. That is deliberate and it is also the risk: an empty value means
-metrics are being shipped nowhere, and nothing about the running system looks
-different. `scripts/ops/check-quotas.sh` reports `grafana-series` as `unknown`
-until they are set, which is what makes the gap visible rather than silent —
-the same failure INF-053 hit with `METRICS_TOKEN`.
+All four are `required: [dev]` since 01/09/2026, when the account was created
+and the values landed. They were optional for exactly as long as they did not
+exist; leaving them optional afterwards would mean a missing value ships
+metrics nowhere while nothing about the running system looks different — the
+same failure INF-053 hit with `METRICS_TOKEN`.
+
+`scripts/ops/check-quotas.sh` reads the live active-series count against the
+10 000 free allowance, so the budget is watched rather than assumed:
+
+```
+  ok    grafana-series   64 active series of 10000 free
+```
+
+**Verify the scopes after creating the tokens**, in both directions. One token
+carrying both scopes passes any check that only tries the happy path, and
+quietly defeats the split:
+
+```bash
+BASE=https://prometheus-prod-37-prod-ap-southeast-1.grafana.net
+# read token: query 200, push 401
+curl -s -o /dev/null -w '%{http_code}\n' -u "$USER:$READ"  --get --data-urlencode 'query=up' "$BASE/api/prom/api/v1/query"
+curl -s -o /dev/null -w '%{http_code}\n' -u "$USER:$READ"  -X POST --data-binary x "$BASE/api/prom/push"
+# write token: query 401, push 400 (auth accepted, body rejected)
+curl -s -o /dev/null -w '%{http_code}\n' -u "$USER:$WRITE" --get --data-urlencode 'query=up' "$BASE/api/prom/api/v1/query"
+curl -s -o /dev/null -w '%{http_code}\n' -u "$USER:$WRITE" -X POST --data-binary x "$BASE/api/prom/push"
+```
 
 **Never in a browser.** Neither token, and neither identifier, may appear in a
 CMS bundle, a `VITE_*` variable or an API response. The CMS reads product-level
