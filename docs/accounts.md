@@ -154,18 +154,20 @@ leaked key would be spent on — and requiring a refusal. Both answered `403` fr
 | Maps SDK for iOS | `API_KEY_IOS_APP_BLOCKED`, then `API_KEY_SERVICE_BLOCKED` when sent `X-Ios-Bundle-Identifier: max.gogo.dev` | **both** restrictions active |
 | Maps SDK for Android | `API_KEY_SERVICE_BLOCKED` with and without `X-Android-Package` | API restriction active; **app restriction not observable over HTTP** |
 
-Two things this surfaced, both recorded rather than assumed:
+Two things this surfaced. The first was an open question when the probe ran and has since been
+answered; the second is still open.
 
-- The iOS key's bundle-id allowlist holds **`max.gogo.dev` only**. `max.gogo.stag` and
-  `max.gogo.prod` are refused, exactly as `com.example.attacker` is. That is consistent with the
-  per-flavour key option in `provider-setup.md` §7 — one key per bundle id, revocable per
-  flavour — and the DEV key is then correct as it stands, with `staging` and `prod` keys still to
-  be created under their own environment paths. It is equally consistent with a shared key whose
-  other two ids were never added. **The choice needs recording in §7 either way.**
+- The iOS key's bundle-id allowlist holds **`max.gogo.dev` only** — `max.gogo.stag` and
+  `max.gogo.prod` are refused exactly as `com.example.attacker` is. **Resolved 02/09/2026: this
+  is intentional.** Scope for this phase is DEV only; staging and production Maps keys are
+  deferred, and the one-key-per-flavour-or-shared question goes with them
+  (`provider-setup.md` §7). A staging or production build failing against these keys is deferred
+  work, not a misconfiguration.
 - The Android **app** restriction (package + signing SHA-1) cannot be confirmed from outside,
   because the API restriction short-circuits every probe. Absence of evidence is not evidence:
   that restriction is the only thing stopping an extracted key from being used by any app, so it
-  is checked in the console, not here.
+  is checked in the console, not here. **Still unverified** — it is the one DEV acceptance item
+  on GoGo-Infra#102 that no automated check can close.
 
 The three server keys were verified by calling each API with each key: every key answers `200` on its own
 API and `403 API_KEY_SERVICE_BLOCKED` on the other two. All three APIs are
