@@ -28,11 +28,18 @@ mkdir -p "${tmp}/bin" "${tmp}/resp"
 # repository, and a realistic-looking one would be a secret-scanner finding
 # forever after.
 FAKE_KEY='stub-not-a-real-credential-000000000'
+# The client keys need to be distinguishable from the server keys, because both
+# probes now call the same host: the server probe wants Places to answer 200 and
+# the client probe wants Places to refuse. Keying the stubs off the host alone
+# cannot express both at once, and a test that cannot express the healthy state
+# would have forced the success case to assert something false.
+FAKE_CLIENT_KEY='stub-not-a-real-client-cred-00000000'
 
 cat >"${tmp}/bin/aws" <<STUB
 #!/usr/bin/env bash
 case " \$* " in
   *" sts "*) exit 0 ;;
+  */mobile/*) printf '%s' '${FAKE_CLIENT_KEY}'; exit 0 ;;
   *get-parameter*) printf '%s' '${FAKE_KEY}'; exit 0 ;;
 esac
 exit 1
@@ -42,20 +49,28 @@ STUB
 # way the script uses them.
 cat >"${tmp}/bin/curl" <<'STUB'
 #!/usr/bin/env bash
-out=""; url=""
+out=""; url=""; key=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -o) out="$2"; shift 2 ;;
+    -H) [[ "$2" == X-Goog-Api-Key:* ]] && key="${2#X-Goog-Api-Key: }"; shift 2 ;;
     http*) url="$1"; shift ;;
     *) shift ;;
   esac
 done
-case "$url" in
-  *places.googleapis.com*) name=places ;;
-  *routes.googleapis.com*) name=routes ;;
-  *sheets.googleapis.com*) name=sheets ;;
-  *) name=unknown ;;
-esac
+# A client key is answered from its own file whatever host it is pointed at:
+# the restriction probe deliberately calls a server API, so host is not what
+# distinguishes the two callers here — the credential is.
+if [[ -n "$STUB_CLIENT_KEY" && "$key" == "$STUB_CLIENT_KEY" ]]; then
+  name=client
+else
+  case "$url" in
+    *places.googleapis.com*) name=places ;;
+    *routes.googleapis.com*) name=routes ;;
+    *sheets.googleapis.com*) name=sheets ;;
+    *) name=unknown ;;
+  esac
+fi
 [[ -n "$out" ]] && cat "${STUB_RESP}/${name}.json" >"$out" 2>/dev/null
 cat "${STUB_RESP}/${name}.code" 2>/dev/null || printf '000'
 STUB
@@ -63,6 +78,7 @@ STUB
 chmod +x "${tmp}/bin/aws" "${tmp}/bin/curl"
 export PATH="${tmp}/bin:/usr/bin:/bin"
 export STUB_RESP="${tmp}/resp"
+export STUB_CLIENT_KEY="$FAKE_CLIENT_KEY"
 
 pass=0
 fail=0
@@ -73,6 +89,11 @@ reset_responses() {
     printf '{"spreadsheetId":"x"}' >"${tmp}/resp/${name}.json"
     printf '200' >"${tmp}/resp/${name}.code"
   done
+  # The healthy state for a client key is a REFUSAL. Defaulting it to 200 would
+  # make every unrelated test run with a live security alarm in the output.
+  printf '%s' '{"error":{"code":403,"status":"PERMISSION_DENIED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"API_KEY_SERVICE_BLOCKED"}]}}' \
+    >"${tmp}/resp/client.json"
+  printf '403' >"${tmp}/resp/client.code"
 }
 
 # assert_contains <needle> <name>
@@ -162,25 +183,53 @@ run
 assert_absent "$FAKE_KEY" "the credential never reaches the output, even on failure"
 assert_contains 'last4:0000' "identity is published as fingerprint and last4 only"
 
-# --- client SDK keys are listed, and never probed --------------------------
-# INF-055. A key restricted to an iOS bundle id refuses curl by design, so a
-# probe result would carry no information about the key's health. Reporting
-# nothing at all is the other trap: a board showing places/routes/sheets green
-# reads as "Maps is fine" to everyone who did not write this script.
+# --- client SDK keys: a refusal is the pass ---------------------------------
+# INF-055. These keys ship inside the app binary, so the security question is a
+# negative one — what is this key DENIED — and that is a question HTTP can
+# answer. The default client response is a refusal, because that is the healthy
+# state; each case below overrides it to drive one outcome.
 reset_responses
 run
-assert_contains 'Client SDK keys (not probeable from here)' \
+assert_contains 'Client SDK keys (restriction probe' \
   "client SDK keys get their own section rather than being omitted"
-assert_contains 'maps-ios PRESENT' "a stored iOS client key is reported present"
-assert_contains 'maps-and PRESENT' "and the Android one too — both platforms, or neither is covered"
-assert_contains 'verify by building the app, not with curl' \
-  "and says what does verify it, since this script cannot"
-assert_absent "$FAKE_KEY" "the client key is not printed either"
+assert_contains 'API restriction refused Places' \
+  "a key the API restriction refuses is a pass, not a failure"
+assert_contains 'not that a map renders' \
+  "and the section still says what the probe cannot answer"
+assert_absent "$FAKE_CLIENT_KEY" "the client key is never printed"
 
-# The probe list itself must not have grown a maps entry: the curl stub answers
-# an unrecognised host with 000, which would surface as a permanent FAILED line
-# for a key that is working.
-assert_absent 'maps-ios FAILED' "no HTTP probe is attempted against an SDK key"
+# The iOS app gate answers before the API gate. That looks like a worse result
+# and is not — but it does leave the API restriction untested, and saying so is
+# the whole point of distinguishing the two reasons.
+reset_responses
+cat >"${tmp}/resp/client.json" <<'JSON'
+{"error":{"code":403,"status":"PERMISSION_DENIED","details":[
+{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"API_KEY_IOS_APP_BLOCKED"}]}}
+JSON
+printf '403' >"${tmp}/resp/client.code"
+run
+assert_contains 'app restriction refused this caller' "an app-gate refusal is also a pass"
+assert_contains 'API restriction is' "and is reported as leaving the API restriction untested"
+
+# --- the alarm this probe exists for ---------------------------------------
+# A client key that Places ANSWERS is spendable by anyone who extracts it from a
+# published binary. This must be loud and must set the exit status: it is the
+# one outcome here that is a live security problem rather than a note.
+reset_responses
+printf '%s' '{"places":[{"id":"x"}]}' >"${tmp}/resp/client.json"
+printf '200' >"${tmp}/resp/client.code"
+run
+assert_contains 'maps-ios ALARM' "a client key Places answers is an alarm"
+assert_contains 'can spend' "and the report says what an attacker gets, not just that a check failed"
+assert_absent "$FAKE_CLIENT_KEY" "even the alarm path does not print the key"
+
+if "$SCRIPT" dev --strict >/dev/null 2>&1; then
+  echo "  FAIL  an answering client key did not set a non-zero exit under --strict"
+  fail=$(( fail + 1 ))
+else
+  echo "  ok    an answering client key fails --strict"
+  pass=$(( pass + 1 ))
+fi
 
 # --- an absent parameter is not a failed call ------------------------------
 cat >"${tmp}/bin/aws" <<'STUB'

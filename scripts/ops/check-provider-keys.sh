@@ -19,9 +19,9 @@
 # environments, confirming a rotation landed — the last 4 characters and a
 # SHA-256 prefix are enough and are all this emits.
 #
-# Server keys are probed. Client SDK keys are reported as present or absent and
-# never probed — see the section at the bottom for why an HTTP call cannot
-# answer the question for them.
+# Server keys are probed for a 200. Client SDK keys are probed for a REFUSAL —
+# see the section at the bottom. Their defence is the restriction, so the useful
+# question is what the key is denied, not what it is allowed.
 
 source "$(dirname "${BASH_SOURCE[0]}")/../secrets/common.sh"
 
@@ -146,21 +146,32 @@ for d in (body.get("error") or {}).get("details") or []:
   unset key
 done <<<"$PROBES"
 
-# ── client SDK keys: deliberately not probed ────────────────────────────────
+# ── client SDK keys: the restriction is probed, the rendering is not ────────
 #
-# A Maps SDK key is restricted to an app (bundle id on iOS, package name + SHA-1
-# on Android). curl is not that app, so every probe from here comes back refused
-# no matter how healthy the key is — a check whose failure carries no
-# information, which is worse than no check because someone will eventually act
-# on it.
+# These keys ship inside the app binary, so their whole defence is the
+# restriction on the key. That makes the security question here a NEGATIVE one,
+# and a negative is exactly what an HTTP call can answer: point the key at a
+# server API it must not be allowed to call, and require a refusal.
 #
-# It is listed anyway. Printing places/routes/sheets and nothing else invites
-# the reading that Maps is covered, and INF-052 exists because a green board
-# over an unverified credential is exactly how DEV ran broken for weeks. Here
-# the honest report is the parameter's presence plus the fact that only a build
-# can confirm it.
+# A 200 is the alarm. It means an extracted key — and every published binary
+# hands one out — can be spent on Places, whose quota is real money and whose
+# restriction model assumed the key never left our hosts.
+#
+# What curl cannot answer is whether the map renders. The SDK is not a REST API,
+# so `PASS` below means "the restrictions hold", never "iOS shows a map". That
+# still takes a build.
+#
+# Note the asymmetry in which gate answers first, because it looks like a bug
+# and is not:
+#   iOS      the app restriction is evaluated first, so a call with no
+#            X-Ios-Bundle-Identifier returns API_KEY_IOS_APP_BLOCKED. Send an
+#            allowed bundle id and the API restriction answers instead.
+#   Android  the API restriction short-circuits, so every call returns
+#            API_KEY_SERVICE_BLOCKED regardless of X-Android-Package. The app
+#            restriction is therefore NOT observable from here — only the
+#            console shows it. Absence of evidence, and this says so.
 echo
-echo "Client SDK keys (not probeable from here):"
+echo "Client SDK keys (restriction probe — a refusal is the pass):"
 while IFS='|' read -r name path platform; do
   [[ -n "$name" ]] || continue
 
@@ -170,14 +181,64 @@ while IFS='|' read -r name path platform; do
 
   if [[ -z "$key" || "$key" == "None" ]]; then
     printf '%-8s ABSENT     %s falls back to the platform map (INF-055 / INF-056)\n' "$name" "$platform"
-  else
-    printf '%-8s PRESENT    %s — verify by building the app, not with curl\n' "$name" "$(fingerprint "$key")"
+    unset key
+    continue
   fi
+
+  # Places is the right target: it is the most expensive API on the project and
+  # the one a leaked key would be abused against.
+  http="$(curl -s -o /tmp/gogo-probe.$$ -w '%{http_code}' -X POST \
+    'https://places.googleapis.com/v1/places:searchText' \
+    -H "X-Goog-Api-Key: ${key}" -H 'Content-Type: application/json' \
+    -H 'X-Goog-FieldMask: places.id' \
+    -d '{"textQuery":"restriction probe","maxResultCount":1}' --max-time 15 2>/dev/null || echo 000)"
+  reason="$(python3 -c '
+import json, sys
+try:
+    body = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit()
+if isinstance(body, list):
+    body = next((e for e in body if isinstance(e, dict) and e.get("error")), {})
+if not isinstance(body, dict):
+    sys.exit()
+for d in (body.get("error") or {}).get("details") or []:
+    if str(d.get("@type", "")).endswith("google.rpc.ErrorInfo") and d.get("reason"):
+        print(d["reason"]); break
+' /tmp/gogo-probe.$$ 2>/dev/null || true)"
+  rm -f /tmp/gogo-probe.$$
+
+  case "$reason" in
+    API_KEY_SERVICE_BLOCKED)
+      printf '%-8s PASS       %s — API restriction refused Places\n' "$name" "$(fingerprint "$key")" ;;
+    API_KEY_IOS_APP_BLOCKED | API_KEY_ANDROID_APP_BLOCKED)
+      printf '%-8s PASS       %s — app restriction refused this caller\n' "$name" "$(fingerprint "$key")"
+      echo "        The app gate answered before the API gate, so the API restriction is"
+      echo "        untested here. Confirm it in the console, or re-probe sending this"
+      echo "        platform's app header with an allowed id." ;;
+    '')
+      if [[ "$http" == "200" ]]; then
+        printf '%-8s ALARM      %s — Places ANSWERED this client key\n' "$name" "$(fingerprint "$key")"
+        echo "        This key ships in the app binary. Anyone who extracts it can spend"
+        echo "        Places quota. Add an API restriction limiting it to the ${platform} Maps"
+        echo "        SDK, in the console, now."
+        status=1
+      else
+        printf '%-8s ?          %s — HTTP %s, no reason code\n' "$name" "$(fingerprint "$key")" "$http"
+        echo "        Refused, but not in a way that identifies which restriction fired."
+      fi ;;
+    *)
+      printf '%-8s ?          %s — refused: reason=%s\n' "$name" "$(fingerprint "$key")" "$reason"
+      echo "        $(explain "$http" "$reason")" ;;
+  esac
   unset key
 done <<'EOF'
 maps-ios|google/maps-ios-api-key|iOS
 maps-and|google/maps-android-api-key|Android
 EOF
+
+echo "        A pass means the restrictions hold, not that a map renders. Only a build"
+echo "        shows that (docs/provider-setup.md §7)."
 
 echo
 if [[ "$status" -eq 0 ]]; then
