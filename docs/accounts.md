@@ -145,6 +145,28 @@ Android. Same project, same one-key-one-API rule, different protection model
 (`docs/provider-setup.md` §7). Neither can be verified the way the three above were, because a key
 restricted to an app refuses every caller that is not that app; a build is the only test.
 
+**Client key restrictions, verified 02/09/2026** by pointing each key at Places — the API a
+leaked key would be spent on — and requiring a refusal. Both answered `403` from project
+`186055730568`, so neither can spend Places quota:
+
+| Key | Result | What it proves |
+| --- | --- | --- |
+| Maps SDK for iOS | `API_KEY_IOS_APP_BLOCKED`, then `API_KEY_SERVICE_BLOCKED` when sent `X-Ios-Bundle-Identifier: max.gogo.dev` | **both** restrictions active |
+| Maps SDK for Android | `API_KEY_SERVICE_BLOCKED` with and without `X-Android-Package` | API restriction active; **app restriction not observable over HTTP** |
+
+Two things this surfaced, both recorded rather than assumed:
+
+- The iOS key's bundle-id allowlist holds **`max.gogo.dev` only**. `max.gogo.stag` and
+  `max.gogo.prod` are refused, exactly as `com.example.attacker` is. That is consistent with the
+  per-flavour key option in `provider-setup.md` §7 — one key per bundle id, revocable per
+  flavour — and the DEV key is then correct as it stands, with `staging` and `prod` keys still to
+  be created under their own environment paths. It is equally consistent with a shared key whose
+  other two ids were never added. **The choice needs recording in §7 either way.**
+- The Android **app** restriction (package + signing SHA-1) cannot be confirmed from outside,
+  because the API restriction short-circuits every probe. Absence of evidence is not evidence:
+  that restriction is the only thing stopping an extracted key from being used by any app, so it
+  is checked in the console, not here.
+
 The three server keys were verified by calling each API with each key: every key answers `200` on its own
 API and `403 API_KEY_SERVICE_BLOCKED` on the other two. All three APIs are
 enabled on the project, so those refusals are the key restriction doing its job

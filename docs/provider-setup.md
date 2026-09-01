@@ -269,18 +269,57 @@ release spends the budget without anything firing. `make quotas` reports `google
 billed inside the app, so nothing this repository can reach counts them. That is recorded as a
 measurement gap on purpose: the frozen cost plan forbids reporting an unmeasured SKU as zero.
 
-#### Verifying an SDK key: build the app, do not curl it
+#### Verifying an SDK key: probe the restriction, build for the map
 
-`make provider-keys` lists these keys and deliberately does **not** probe them:
+There are two different questions here, and only one of them needs a build.
+
+**Does the restriction hold?** `make provider-keys` answers this, and a **refusal is the pass**:
 
 ```
-Client SDK keys (not probeable from here):
-maps-ios PRESENT    sha256:1a2b3c4d5e6f… last4:7h8i — verify by building the app, not with curl
+Client SDK keys (restriction probe — a refusal is the pass):
+maps-ios PASS       sha256:1a2b3c4d5e6f… last4:7h8i — app restriction refused this caller
+maps-and PASS       sha256:9j8k7l6m5n4o… last4:3p2q — API restriction refused Places
 ```
 
-An HTTP probe from a laptop is not a signed app with our bundle id, so the key refuses it
-**whether the key is healthy or broken**. A green probe would be impossible and a red one would
-mean nothing. The only real verification is a build:
+The key ships in the binary, so its whole defence is the restriction — which makes the security
+question a **negative** one, and a negative is exactly what an HTTP call can answer. The probe
+points each client key at Places, the most expensive API on the project and the one a leaked key
+would be spent on, and requires a refusal. A `200` there is an alarm, not a pass: it means anyone
+who extracts the key from a published binary can spend Places quota.
+
+Which gate answers first differs per platform, and it looks like a bug when it is not:
+
+| | First gate to answer | So what stays untested |
+| --- | --- | --- |
+| iOS | **app** restriction — a call with no `X-Ios-Bundle-Identifier` gets `API_KEY_IOS_APP_BLOCKED` | the API restriction, until you send an allowed bundle id |
+| Android | **API** restriction — short-circuits, so every call gets `API_KEY_SERVICE_BLOCKED` regardless of `X-Android-Package` | the app restriction, which **no HTTP probe can reach**. Confirm it in the console. |
+
+To test the far side of the iOS gate, send the header the app would send. This also enumerates
+the bundle-id allowlist, which is worth doing after any restriction edit:
+
+```bash
+KEY=$(./scripts/secrets/get.sh dev google/maps-ios-api-key --show)
+for b in max.gogo.dev max.gogo.stag max.gogo.prod; do
+  printf '%-16s ' "$b"
+  curl -s -X POST 'https://places.googleapis.com/v1/places:searchText' \
+    -H "X-Goog-Api-Key: $KEY" -H "X-Ios-Bundle-Identifier: $b" \
+    -H 'Content-Type: application/json' -H 'X-Goog-FieldMask: places.id' \
+    -d '{"textQuery":"x","maxResultCount":1}' \
+    | grep -o '"reason": *"[^"]*"'
+done
+unset KEY
+```
+
+`API_KEY_SERVICE_BLOCKED` means that bundle id **is** on the allowlist and the API restriction
+then refused — both gates working. `API_KEY_IOS_APP_BLOCKED` means the bundle id is **not** on
+the allowlist. A `200` from any of them means the API restriction is missing.
+
+Spoofing that header is trivial, which is the point: the header is not a security boundary, the
+**pair** of restrictions is. A key with an app restriction and no API restriction is one forged
+header away from being a Places key.
+
+**Does the map render?** Only a build answers this. A passing probe says the restrictions hold,
+never that the SDK draws anything:
 
 ```bash
 cd ../GoGo-MobileApp
