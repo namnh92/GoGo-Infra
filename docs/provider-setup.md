@@ -174,8 +174,42 @@ Each key is read under its own name and covers one API: `GOOGLE_PLACES_API_KEY`,
 key restricted to one API cannot serve a second, so a fallback only turns a missing credential
 into a `403 API_KEY_SERVICE_BLOCKED` further downstream.
 
-Missing keys do not stop GoGo-BE booting. Places and Sheets bind fakes and log a warn naming the
-variable; the Sheets fake answers every import with `SHEET_PROVIDER_NOT_CONFIGURED`.
+Missing keys do not stop GoGo-BE booting, and since GoGo-BE#279 they no longer pretend either.
+In a deployed build (`PLACE_PROVIDER_MODE` defaults to `google` there) a missing Places key binds
+a provider that refuses, so place resolution answers `503 PLACE_PROVIDER_UNAVAILABLE` instead of
+telling a user their place does not exist; the boot log carries `port`, `mode`, `ready` and a
+reason code. Sheets binds a fake that answers every import with `SHEET_PROVIDER_NOT_CONFIGURED`.
+Travel time falls back to straight-line estimates.
+
+### Verify the key, not just the parameter (INF-052)
+
+```bash
+make provider-keys ENV=dev        # or ./scripts/ops/check-provider-keys.sh dev
+```
+
+`make secrets-validate` checks that SSM matches this manifest — names, types, no drift. It
+cannot check that Google will *accept* the value, and that gap is not hypothetical: DEV ran with
+a key Google refused on every call while every deploy gate stayed green, and the first report was
+a user being told a real café did not exist.
+
+`make provider-keys` calls each API with the key that environment deploys and prints the status
+plus Google's `reason`, which is the only field separating "this API is not enabled on our
+project" from "this credential is not allowed". It prints a SHA-256 prefix and the last 4
+characters, never the value. It also runs, non-blocking, at the end of `deploy-dev.yml`.
+
+Not every API sends a `reason`. Places API (New) answers a refused call with a bare
+`403 "The caller does not have permission"` and no `ErrorInfo` at all, so the probe reports
+exactly that rather than guessing a cause. Routes does send one, but wraps it in a JSON *array*
+because `computeRouteMatrix` streams its result — reading that as an object is how a live
+`BILLING_DISABLED` once surfaced as "no machine-readable reason", pointing an operator at key
+restrictions for a problem that was billing on the project. Both shapes are pinned in
+`check-provider-keys.test.sh`.
+
+When one key fails and another succeeds, compare the projects rather than the keys: a Maps
+Platform API needs billing on its project, while Sheets does not, so a working Sheets key proves
+the parameter store is fine and proves nothing about Maps entitlement.
+
+Run it after enabling an API, after rotating a key, and after changing a restriction.
 
 ## 8. Production VPS (INF-017, INF-018)
 

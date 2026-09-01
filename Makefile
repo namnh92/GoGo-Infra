@@ -50,6 +50,7 @@ test: ## Run the shell unit tests
 	./scripts/ci/check-workflow-auth.test.sh
 	./scripts/ci/gitleaks-rules.test.sh
 	./scripts/ops/check-quotas.test.sh
+	./scripts/ops/check-provider-keys.test.sh
 
 .PHONY: check-workflow-auth
 check-workflow-auth: ## Assert CI authenticates as a machine, never as a person (INF-024)
@@ -61,6 +62,10 @@ check: fmt-check validate lint scan test check-workflow-auth ## Everything CI ru
 .PHONY: cf-scopes
 cf-scopes: ## Probe what the Cloudflare CI tokens can reach for $(ENV)
 	./scripts/ops/check-cf-token-scopes.sh $(ENV)
+
+.PHONY: provider-keys
+provider-keys: ## Call each Google API with the key $(ENV) actually deploys (INF-052)
+	./scripts/ops/check-provider-keys.sh $(ENV)
 
 .PHONY: secrets-list
 secrets-list: ## List SSM parameter names for $(ENV) (names only, no values)
