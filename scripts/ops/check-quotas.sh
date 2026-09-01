@@ -201,6 +201,44 @@ fi
 
 record google-quota unknown "needs Cloud Monitoring access; not stored (INF-015)"
 
+# ── Grafana Cloud: active series against the free tier ───────────────────────
+#
+# Free is 10 000 active series. The failure mode is the one this whole script
+# exists for: a free tier stops rather than degrades, and metrics arriving
+# nowhere looks exactly like a system with nothing to report.
+#
+# The read token is the right credential here — usage is a read, and this runs
+# unattended. Absent, this reports unknown, which is the honest answer while
+# INF-054's account does not exist yet.
+grafana_url="$(get observability/grafana-prom-url)"
+grafana_user="$(get observability/grafana-prom-user)"
+grafana_token="$(get observability/grafana-read-token)"
+
+if [[ -z "$grafana_url" || -z "$grafana_user" || -z "$grafana_token" ]]; then
+  record grafana-series unknown "needs observability/grafana-{prom-url,prom-user,read-token} (INF-054)"
+elif ! command -v jq >/dev/null 2>&1; then
+  record grafana-series unknown "jq not installed"
+else
+  # `count({__name__=~".+"})` over the query endpoint: the number of series
+  # carrying a sample right now, which is what the allowance is measured in.
+  # The write URL ends in /api/prom/push; the query API is its sibling.
+  query_url="${grafana_url%/push}"
+  query_url="${query_url%/api/prom}/api/prom/api/v1/query"
+  body="$(curl -sS --max-time 20 -u "${grafana_user}:${grafana_token}" \
+    --data-urlencode 'query=count({__name__=~".+"})' "$query_url" 2>/dev/null || true)"
+  series="$(printf '%s' "$body" | jq -r '.data.result[0].value[1] // empty' 2>/dev/null)"
+  free_series=10000
+  if [[ -z "$series" ]]; then
+    record grafana-series unknown "query endpoint returned nothing usable"
+  elif [[ "${series%.*}" -gt "$free_series" ]]; then
+    record grafana-series breach "${series%.*} active series of ${free_series} free"
+  elif [[ "${series%.*}" -gt $(( free_series * 70 / 100 )) ]]; then
+    record grafana-series warn "${series%.*} active series, over 70% of ${free_series} free"
+  else
+    record grafana-series ok "${series%.*} active series of ${free_series} free"
+  fi
+fi
+
 if [[ "$AS_JSON" == "yes" ]]; then
   printf '{"environment":"%s","results":[' "$ENVIRONMENT"
   sep=""

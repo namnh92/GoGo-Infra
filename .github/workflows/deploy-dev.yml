@@ -64,7 +64,19 @@ jobs:
           REMOTE_ENV_FILE: .env.dev
           KNOWN_HOSTS_FILE: config/known_hosts.dev
           SSH_KEY_FILE: ${{ runner.temp }}/deploy_key
-        run: ./scripts/deploy/deploy-vps.sh "${{ inputs.release_ref }}" "${RUNNER_TEMP}/gogo.env"
+        run: |
+          set -euo pipefail
+          # INF-054 — the collector joins the stack only when it has somewhere
+          # to write. Read from the env this deploy just rendered, not from a
+          # workflow variable, so the two cannot disagree: the container and
+          # the credential arrive together or neither does.
+          if grep -qE '^GRAFANA_PROM_URL=.+' "${RUNNER_TEMP}/gogo.env"; then
+            export COMPOSE_OBSERVABILITY=docker/docker-compose.observability.yml
+            echo "==> metrics collector enabled"
+          else
+            echo "==> no GRAFANA_PROM_URL in SSM — deploying without the collector"
+          fi
+          ./scripts/deploy/deploy-vps.sh "${{ inputs.release_ref }}" "${RUNNER_TEMP}/gogo.env"
 
       - name: health check
         env:
