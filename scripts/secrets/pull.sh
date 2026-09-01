@@ -9,6 +9,8 @@
 # is written with mode 0600 and is gitignored.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+# shellcheck source=../lib/place-refresh-budget.sh
+source "${REPO_ROOT}/scripts/lib/place-refresh-budget.sh"
 
 ENVIRONMENT="${1:-}"
 require_env_arg "$ENVIRONMENT"
@@ -72,3 +74,14 @@ fi
 install -m 600 "$tmp_file" "$OUT_FILE"
 variable_count=$(grep -cE '^[A-Z_]+=' "$OUT_FILE")
 echo "wrote ${OUT_FILE} (mode 0600, ${variable_count} variables)"
+
+# INF-057. Same default-deny budget as a deploy, same silence: a local API with
+# four of the five ceilings set refreshes nothing and says nothing about it.
+#
+# Unlike render-env.sh this keeps the file it just wrote. A deploy shreds a
+# broken env file because nothing should run on it; a developer is usually here
+# *because* the environment is wrong, and taking the evidence away is not help.
+if ! place_refresh_budget_report "$OUT_FILE"; then
+  echo "${OUT_FILE} was written and kept — fix the ceilings in SSM, then pull again." >&2
+  exit 1
+fi

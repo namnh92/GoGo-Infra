@@ -241,6 +241,99 @@ provider that only exposes usage through an API key this repository does not sto
 INF-008 (Neon) and INF-015 (Google), not an incident.
 
 
+## Google spend has two switches, and they fail in opposite directions
+
+INF-057, for GoGo-BE#335 (merged) and GoGo-BE#340 (PR7, not started). Two groups of parameters
+sit next to each other in `config/secrets.manifest.yml` and behave in opposite ways when nobody
+sets them. Reading them as one group is how an environment ends up measuring spend it is not
+allowed to make, or allowed to make spend it is not measuring.
+
+### The ledger defaults on
+
+| Parameter | Env var | Code default | Effect when absent |
+| --- | --- | --- | --- |
+| `cost/ledger-enabled` | `COST_LEDGER_ENABLED` | `true` | ledger writes anyway |
+| `cost/ledger-flush-ms` | `COST_LEDGER_FLUSH_MS` | `5000` | flushes every 5s anyway |
+
+DEV has been writing `provider_usage_daily` since GoGo-BE#335 merged, without a parameter in
+this repository. Declaring them changes nothing about that. It makes the running values
+**visible and changeable without a code deploy**, and gives the PR2 rollback — stop writing the
+ledger — somewhere to be performed from.
+
+`COST_LEDGER_FLUSH_MS=5000` is a guess that has never been measured. ADR-0012's
+`POST-MERGE VALIDATION REQUIRED` owes three DEV numbers: flush duration, freshness lag
+(`now() - max(updated_at)` on `provider_usage_daily`), and whether five seconds is the right
+window. That measurement needs a route into DEV Postgres, which is behind the Cloudflare tunnel
+and not configured for a developer session today, plus Grafana query credentials — so it is
+still owed. If the answer moves the number, it moves a parameter rather than a constant.
+
+### The budget defaults closed, and says nothing about it
+
+| Parameter | Env var |
+| --- | --- |
+| `budget/place-refresh-daily-max-calls` | `PLACE_REFRESH_DAILY_MAX_CALLS` |
+| `budget/place-refresh-daily-max-list-cost-usd` | `PLACE_REFRESH_DAILY_MAX_LIST_COST_USD` |
+| `budget/place-refresh-daily-max-units-google-details-liveness` | `PLACE_REFRESH_DAILY_MAX_UNITS_GOOGLE_DETAILS_LIVENESS` |
+| `budget/place-refresh-daily-max-units-google-details-core` | `PLACE_REFRESH_DAILY_MAX_UNITS_GOOGLE_DETAILS_CORE` |
+| `budget/place-refresh-daily-max-units-google-details-quality` | `PLACE_REFRESH_DAILY_MAX_UNITS_GOOGLE_DETAILS_QUALITY` |
+
+**Unset means refuse. It does not mean unlimited.** GoGo-BE's guard is default-deny
+(`libs/modules/cost/application/provider-budget.service.ts`): a missing ceiling returns
+`not_configured`, on the grounds that an absent environment variable is the most likely way a
+guard ever disappears from production, and a guard that defaults open is not a guard.
+
+The two scope-wide ceilings — calls and list cost — refuse the **whole**
+`google.places.refresh` scope on their own. Each `_UNITS_` ceiling gates one operation. Empty,
+negative and unparseable values are all read as unset, so a typo is not a tighter ceiling, it is
+no ceiling.
+
+That produces a state worth naming, because its symptom points at the wrong repository: with the
+ceilings unset, PR7's refresh job **runs, reserves nothing, refreshes nothing and logs no
+error**. It reads like a bug in the job. It is a gap in the environment. It is also a different
+state from the kill switch (`FLAG_PLACE_REFRESH` / the `place_refresh.enabled` feature flag)
+being off — that one is a decision, this one is an omission.
+
+Today every environment is in exactly that state, and that is correct: PR7 has not shipped and
+no ceiling has been decided. **No values are proposed here.** GoGo-BE's `.env.example` carries a
+commented illustration — 2000 calls, $5, 2000 liveness, 200 core, 50 quality — which is an
+example, not a decision. The real numbers belong to GoGo-BE#340, together with the Places API
+(New) per-day quota that has to sit slightly **above** them (INF-015, #15) and the billing alert
+beside it. A billing alert is an alert; the Postgres reservation is the limit.
+
+### What stops it from being silent
+
+`scripts/deploy/render-env.sh` prints the budget state on every deploy, and
+`scripts/lib/place-refresh-budget.test.sh` pins the three cases in CI:
+
+```text
+place-refresh budget: REFUSE-ALL     nothing set — expected until PR7, exit 0
+place-refresh budget: CONFIGURED     both scope ceilings + ≥1 operation, exit 0
+place-refresh budget: MISCONFIGURED  something set, nothing authorised, exit 1 → deploy aborts
+```
+
+`MISCONFIGURED` is the case this exists for: four of the five values in SSM renders a clean env
+file, passes `validate.sh`, and authorises nothing. The gate never prints a value — it runs
+beside a `0600` env file whose contract is that nothing in it is echoed.
+
+`CONFIGURED` deliberately accepts a liveness-only budget. PR7 phase 1 calls
+`google.details.liveness` and nothing else, so core and quality refusing individually is the
+intended shape, not a half-finished one.
+
+### The rest of GoGo-BE#340 and #337
+
+| Parameter | Env var | Value | Source |
+| --- | --- | --- | --- |
+| `worker/place-refresh-poll-ms` | `PLACE_REFRESH_POLL_MS` | DEV 900000 | plan §2.5 — same Upstash per-command budget as the outbox and ingest intervals |
+| `flags/place-refresh` | `FLAG_PLACE_REFRESH` | deploy-time default only | plan §2.5 — the audited `FEATURE_FLAGS` row is authoritative |
+| `places/resolution-attestation-secret` | `PLACE_RESOLUTION_ATTESTATION_SECRET` | generated, see `docs/secrets.md` | plan §2.8 |
+| `places/resolution-ttl-s` | `PLACE_RESOLUTION_TTL_S` | 600 | plan §2.8 default |
+
+None of these four names is read by GoGo-BE on `develop` yet, so all four are optional in every
+environment. Each becomes `required` in an environment on the day its value lands there — the
+same rule `google/maps-ios-api-key` follows, and for the reason INF-053 exists: once a value is
+real, a missing one has to break something visible.
+
+
 ## Terraform state
 
 One bucket, one key per environment:

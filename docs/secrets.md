@@ -88,15 +88,31 @@ validates it, and it quietly survives long after it should have been rotated.
 
 ## Generated values
 
-Two of these are ours to invent rather than to collect from a provider: the auth signing pair
-and the metrics scrape token. Generate them locally and pipe them straight into SSM so the value
-never reaches a terminal, a shell history or a log.
+Three of these are ours to invent rather than to collect from a provider: the auth signing pair,
+the metrics scrape token, and the place-resolution attestation key. Generate them locally and
+pipe them straight into SSM so the value never reaches a terminal, a shell history or a log.
 
 ```bash
 ./scripts/secrets/generate-auth.sh dev                    # jwt + refresh, skips if already set
 openssl rand -base64 48 | tr -d '\n' \
   | ./scripts/secrets/put.sh dev observability/metrics-token
+openssl rand -base64 48 | tr -d '\n' \
+  | ./scripts/secrets/put.sh dev places/resolution-attestation-secret
 ```
+
+`PLACE_RESOLUTION_ATTESTATION_SECRET` (INF-057, for GoGo-BE#337) signs the short-lived
+attestation that lets `POST /v1/place-submissions` trust a Place ID the resolve step already
+verified, instead of paying for a second Google Details call. Write it only when GoGo-BE reads
+it — the value is not in SSM today and the parameter is optional in every environment until it
+is.
+
+What it protects is a *capability*, not data. The token proves "GoGo verified this Google Place
+ID within the last `PLACE_RESOLUTION_TTL_S` seconds" and carries no name, address, rating, hours
+or coordinates (plan §2.8). So a leak does not expose Google content; it lets someone submit a
+Place ID GoGo never resolved, which is why the key is `SecureString`, lives in the `backend`
+namespace only, and never reaches a CMS or a mobile build. Rotation is cheap by construction —
+the payload carries a `version` field for exactly that — and every attestation in flight expires
+within the TTL.
 
 `METRICS_TOKEN` guards `GET /v1/metrics`. GoGo-BE answers that route with **404 when the token is
 empty**, on the grounds that an unconfigured endpoint should not advertise that it exists and is
