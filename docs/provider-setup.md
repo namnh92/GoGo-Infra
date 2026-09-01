@@ -255,16 +255,34 @@ So each SDK key gets, and must keep, both restrictions:
 
   Without an application restriction the key is simply public and billable by anyone.
 
-**One key across the three bundle ids, or one key each?** One key per flavour can be revoked per
-flavour — a dev build leaking does not force a production rebuild — at the cost of three keys,
-three restrictions and three parameters to keep aligned. One shared key is less to maintain and
-makes any revocation a production rebuild. Decide before the first key is created and record the
-choice here; the SSM path is per-environment either way, so switching later means adding keys,
-not renaming parameters.
+**Scope decision, 02/09/2026: DEV only for this phase.** The keys that exist are restricted to
+`max.gogo.dev` alone, and `staging` / `prod` Maps keys are **intentionally deferred** — not
+missing, not an oversight, and not an acceptance criterion for INF-055 or INF-056.
 
-Give each SDK key its **own quota alert**, per platform. Dynamic Maps on mobile has its own free
-allowance (10k loads/month) and its own SKU; folding it into the Places alert means a map-heavy
-release spends the budget without anything firing. `make quotas` reports `google-maps-sdk` as
+This is what a DEV-only probe looks like, and it is the expected result rather than a defect:
+
+```
+max.gogo.dev    API_KEY_SERVICE_BLOCKED   ← on the allowlist; API restriction then refused
+max.gogo.stag   API_KEY_IOS_APP_BLOCKED   ← deferred, by decision
+max.gogo.prod   API_KEY_IOS_APP_BLOCKED   ← deferred, by decision
+```
+
+Do not read the last two lines as a broken restriction. Anyone triaging a staging or production
+build against these keys is looking at deferred work, not a misconfiguration.
+
+**When staging and production come into scope**, the open question is one key across the three
+bundle ids or one key each. One key per flavour can be revoked per flavour — a dev build leaking
+does not force a production rebuild — at the cost of three keys, three restrictions and three
+parameters to keep aligned. One shared key is less to maintain and makes any revocation a
+production rebuild. The SSM path is per-environment either way, so deciding later means adding
+keys, not renaming parameters — which is why deferring costs nothing here. Record the choice in
+this paragraph when it is made.
+
+Give each SDK key its **own quota alert**, per platform, **when INF-015 lands** — quota
+monitoring for Dynamic Maps is deferred there by the same 02/09/2026 decision and does not block
+DEV acceptance. Dynamic Maps on mobile has its own free allowance (10k loads/month) and its own
+SKU; folding it into the Places alert means a map-heavy release spends the budget without
+anything firing. `make quotas` reports `google-maps-sdk` as
 `unknown` and will keep doing so until INF-015 lands Cloud Monitoring access — map loads are
 billed inside the app, so nothing this repository can reach counts them. That is recorded as a
 measurement gap on purpose: the frozen cost plan forbids reporting an unmeasured SKU as zero.
