@@ -226,10 +226,20 @@ else
   query_url="${query_url%/api/prom}/api/prom/api/v1/query"
   body="$(curl -sS --max-time 20 -u "${grafana_user}:${grafana_token}" \
     --data-urlencode 'query=count({__name__=~".+"})' "$query_url" 2>/dev/null || true)"
-  series="$(printf '%s' "$body" | jq -r '.data.result[0].value[1] // empty' 2>/dev/null)"
+  # A successful query over an empty stack returns `result: []`, and that is an
+  # answer — zero series — not a failed measurement. Reading only
+  # `.result[0]` reported `unknown` for it, which is the one thing this script
+  # is careful not to do: `unknown` means nobody looked.
+  status="$(printf '%s' "$body" | jq -r '.status // empty' 2>/dev/null)"
+  if [[ "$status" == "success" ]]; then
+    series="$(printf '%s' "$body" | jq -r '.data.result[0].value[1] // "0"' 2>/dev/null)"
+  else
+    series=""
+  fi
   free_series=10000
   if [[ -z "$series" ]]; then
-    record grafana-series unknown "query endpoint returned nothing usable"
+    reason="$(printf '%s' "$body" | jq -r '.error // "query endpoint returned nothing usable"' 2>/dev/null)"
+    record grafana-series unknown "${reason}"
   elif [[ "${series%.*}" -gt "$free_series" ]]; then
     record grafana-series breach "${series%.*} active series of ${free_series} free"
   elif [[ "${series%.*}" -gt $(( free_series * 70 / 100 )) ]]; then
