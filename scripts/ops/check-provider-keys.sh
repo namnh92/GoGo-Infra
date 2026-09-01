@@ -176,6 +176,7 @@ while IFS='|' read -r name path platform; do
   unset key
 done <<'EOF'
 maps-ios|google/maps-ios-api-key|iOS
+maps-and|google/maps-android-api-key|Android
 EOF
 
 echo

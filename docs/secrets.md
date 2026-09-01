@@ -60,6 +60,7 @@ open a pull request — see `docs/adr/0001`.
 /gogo/<env>/backend/observability/metrics-token
 
 /gogo/<env>/mobile/google/maps-ios-api-key      client key — ships in the app binary
+/gogo/<env>/mobile/google/maps-android-api-key  client key — ships in the app binary
 ```
 
 The `mobile` branch holds client keys. They are `SecureString` like everything else — public in

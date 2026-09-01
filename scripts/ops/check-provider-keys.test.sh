@@ -171,7 +171,8 @@ reset_responses
 run
 assert_contains 'Client SDK keys (not probeable from here)' \
   "client SDK keys get their own section rather than being omitted"
-assert_contains 'maps-ios PRESENT' "a stored client key is reported present"
+assert_contains 'maps-ios PRESENT' "a stored iOS client key is reported present"
+assert_contains 'maps-and PRESENT' "and the Android one too — both platforms, or neither is covered"
 assert_contains 'verify by building the app, not with curl' \
   "and says what does verify it, since this script cannot"
 assert_absent "$FAKE_KEY" "the client key is not printed either"
@@ -192,7 +193,8 @@ STUB
 chmod +x "${tmp}/bin/aws"
 run
 assert_contains 'ABSENT' "a missing SSM parameter is reported as missing, not as a refusal"
-assert_contains 'maps-ios ABSENT' "an unset client key is reported absent, not silently skipped"
+assert_contains 'maps-ios ABSENT' "an unset iOS client key is reported absent, not silently skipped"
+assert_contains 'maps-and ABSENT' "and an unset Android one is too"
 assert_contains 'falls back to the platform map' "and names the consequence rather than just the gap"
 
 echo
