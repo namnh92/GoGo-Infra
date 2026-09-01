@@ -50,6 +50,7 @@ open a pull request — see `docs/adr/0001`.
 /gogo/<env>/backend/onesignal/{app-id,rest-api-key,identity-verification-key}
 /gogo/<env>/backend/google/{server-api-key,routes-api-key,sheets-api-key}
 /gogo/<env>/backend/observability/sentry-dsn
+/gogo/<env>/backend/observability/metrics-token
 ```
 
 `SecureString`, Standard tier. One parameter per independently permissioned value — a single
@@ -66,6 +67,27 @@ require each value. It contains no values. It is the contract for three things:
 
 Adding a secret means editing the manifest first. Otherwise the value exists in SSM, nothing
 validates it, and it quietly survives long after it should have been rotated.
+
+## Generated values
+
+Two of these are ours to invent rather than to collect from a provider: the auth signing pair
+and the metrics scrape token. Generate them locally and pipe them straight into SSM so the value
+never reaches a terminal, a shell history or a log.
+
+```bash
+./scripts/secrets/generate-auth.sh dev                    # jwt + refresh, skips if already set
+openssl rand -base64 48 | tr -d '\n' \
+  | ./scripts/secrets/put.sh dev observability/metrics-token
+```
+
+`METRICS_TOKEN` guards `GET /v1/metrics`. GoGo-BE answers that route with **404 when the token is
+empty**, on the grounds that an unconfigured endpoint should not advertise that it exists and is
+merely locked — which is also why its absence produced no error anywhere and dev ran for weeks
+publishing provider metrics nobody could read (INF-053).
+
+It is read by a monitoring collector, server to server. It never reaches a browser: the series
+names and label values describe which providers get called and which admin actions happen. A CMS
+dashboard consumes a permissioned admin API on GoGo-BE, never this endpoint and never this token.
 
 ## Writing a value
 
