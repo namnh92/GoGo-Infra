@@ -92,6 +92,51 @@ else
   ok "--namespace with no value is rejected"
 fi
 
+# --- INF-057 names match the schema GoGo-BE validates on startup -----------
+# This is the INF-052 failure written down as a test. A manifest whose names
+# match a document rather than apps/api/src/config/env.ts renders a complete env
+# file that the application reads none of: SSM holds the value, render-env.sh
+# emits it under a name nothing consumes, and validate.sh reports the
+# environment healthy throughout. It happened once with GOOGLE_MAPS_API_KEY and
+# cost DEV weeks of FakePlaceProvider.
+#
+# Two of these fail loudly if they drift (the ledger pair changes a running
+# behaviour). Five of them fail silently — a budget ceiling under the wrong name
+# is an unset ceiling, and an unset ceiling refuses without saying so.
+inf057_backend=(
+  COST_LEDGER_ENABLED
+  COST_LEDGER_FLUSH_MS
+  PLACE_REFRESH_DAILY_MAX_CALLS
+  PLACE_REFRESH_DAILY_MAX_LIST_COST_USD
+  PLACE_REFRESH_DAILY_MAX_UNITS_GOOGLE_DETAILS_LIVENESS
+  PLACE_REFRESH_DAILY_MAX_UNITS_GOOGLE_DETAILS_CORE
+  PLACE_REFRESH_DAILY_MAX_UNITS_GOOGLE_DETAILS_QUALITY
+  PLACE_REFRESH_POLL_MS
+  FLAG_PLACE_REFRESH
+  PLACE_RESOLUTION_ATTESTATION_SECRET
+  PLACE_RESOLUTION_TTL_S
+)
+backend_vars="$(python3 "$READER" dev --namespace backend | cut -f2)"
+missing_inf057=()
+for var in "${inf057_backend[@]}"; do
+  grep -qx "$var" <<<"$backend_vars" || missing_inf057+=("$var")
+done
+if [[ "${#missing_inf057[@]}" -eq 0 ]]; then
+  ok "every INF-057 parameter is in the backend namespace (${#inf057_backend[@]} rows)"
+else
+  bad "an INF-057 parameter is missing from the backend namespace" "${missing_inf057[*]}"
+fi
+
+# The attestation key signs a server-issued capability. A mobile build has no
+# use for it and every reason not to hold it — a key shipped in a binary can be
+# extracted, and this one mints attestations POST /v1/place-submissions trusts.
+if python3 "$READER" dev --namespace mobile | grep -q "PLACE_RESOLUTION_ATTESTATION_SECRET"; then
+  bad "the attestation secret reached the mobile namespace" \
+      "it would be baked into an app binary that can be unpacked"
+else
+  ok "the attestation secret stays out of the mobile namespace"
+fi
+
 echo
 if [[ "$failures" -gt 0 ]]; then
   echo "${failures} test(s) failed."

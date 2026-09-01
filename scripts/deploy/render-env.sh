@@ -17,6 +17,8 @@ OUT_FILE="${2:?usage: render-env.sh <env> <output-file>}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MANIFEST_READER="${REPO_ROOT}/scripts/lib/manifest.py"
+# shellcheck source=../lib/place-refresh-budget.sh
+source "${REPO_ROOT}/scripts/lib/place-refresh-budget.sh"
 prefix="/gogo/${ENVIRONMENT}/backend"
 
 command -v aws >/dev/null || { echo "aws CLI required" >&2; exit 1; }
@@ -58,3 +60,17 @@ fi
 # Only the count is logged. Never the names of failed lookups with values, and
 # never the file contents.
 echo "rendered $(grep -cE '^[A-Z_]+=' "$OUT_FILE") variables into ${OUT_FILE} (mode 0600)"
+
+# INF-057. The hard budget for `google.places.refresh` is default-deny in
+# GoGo-BE: an unset ceiling refuses, and the two scope-wide ceilings refuse the
+# whole scope on their own. A deploy that renders four of the five values would
+# otherwise finish clean, and the refresh job would spend its life reserving
+# nothing without logging a thing.
+#
+# The state is printed on every deploy, including the "nothing configured" one.
+# A guard nobody can see is indistinguishable from a guard nobody set.
+if ! place_refresh_budget_report "$OUT_FILE"; then
+  rm -f "$OUT_FILE"
+  echo "deploy aborted: place-refresh budget is set but authorises nothing" >&2
+  exit 1
+fi

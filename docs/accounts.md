@@ -203,6 +203,36 @@ logs, a header does not. No key value belongs in this file, in a ticket, or in
 any command output — identify a credential by the `sha256:… last4:…` fingerprint
 `scripts/ops/check-provider-keys.sh` prints.
 
+### Places API (New) per-day quota cap — deliberately not set yet
+
+**Recorded 02/09/2026 (INF-057).** GoGo-Infra#103 carries an item to put a per-day quota cap on
+Places API (New) in the Cloud Console, below the internal ceiling, with a billing alert beside
+it (INF-015, #15). **No cap has been set, and none should be yet.** No value is recorded in this
+file because there is no value to record — an invented number here would read like a decision.
+
+The ordering is the reason, and it only runs one way. Three controls, three different jobs:
+
+| Control | Role | Where |
+| --- | --- | --- |
+| Postgres reservation (`provider_budget_daily`) | **hard internal guard** — refuses the call | GoGo-BE, ceilings from `PLACE_REFRESH_DAILY_MAX_*` |
+| Google per-day quota | **external safety net** — catches what the guard missed | Cloud Console, this project |
+| Cloud Billing budget | **alert only** — tells a person, stops nothing | Cloud Console |
+
+The quota is specified as sitting *slightly above* the internal ceiling. That ceiling belongs to
+GoGo-BE#340 (PR7), which has not started and has decided no numbers. Setting the console cap
+first means picking the outer bound before the inner one exists, and then either the internal
+ceiling gets reverse-engineered from a number chosen in a console, or the net sits somewhere
+arbitrary relative to the guard it is meant to back up.
+
+A cap set too low is also not a safe error. It is a hard stop on every Places call the product
+makes — resolve, import, search — not only the refresh job the ceiling is scoped to, because
+quota is per project and per API while the internal ceiling is per scope.
+
+So: set it when PR7 sets the internal ceiling, in the same change, and record the value and the
+date in this table. Until then `scripts/ops/check-quotas.sh` continues to report `google-quota`
+as `unknown`, which is accurate — it needs Cloud Monitoring access this repository does not
+store — and an unknown deliberately does not fail the run.
+
 ## App identity
 
 **Corrected 29/08/2026.** An earlier version of this section recorded one identity,
