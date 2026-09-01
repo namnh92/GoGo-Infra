@@ -3,11 +3,18 @@
 AWS SSM Parameter Store is the source of truth. Not `terraform.tfstate`, not the repository,
 not a committed `.env`.
 
-## Two namespaces
+## Three namespaces
 
 `/gogo/ci/*` holds the credentials that drive the pipeline. `/gogo/<env>/backend/*` holds what
-the application reads at runtime. A role with access to one has no access to the other unless
-an ADR says why.
+the application reads at runtime. `/gogo/<env>/mobile/*` holds what a mobile **build** bakes into
+a binary. A role with access to one has no access to the others unless an ADR says why.
+
+`mobile` was split out in INF-055 rather than filed under `backend/google/` for a mechanical
+reason, not a tidiness one: `scripts/deploy/render-env.sh` writes **every** `backend` parameter
+into GoGo-BE's process environment, and the deploy role's IAM grants `<env>/backend/*`. A client
+key placed there would be handed to the API — which has no use for it — as a side effect of
+where it was filed. Namespaces are blast radius, so the reader defaults to `backend` and every
+caller that predates the field keeps exactly the scope it was written with.
 
 ```
 /gogo/ci/<env>/terraform/read/    read-only  — assumable from a pull request
@@ -51,15 +58,25 @@ open a pull request — see `docs/adr/0001`.
 /gogo/<env>/backend/google/{server-api-key,routes-api-key,sheets-api-key}
 /gogo/<env>/backend/observability/sentry-dsn
 /gogo/<env>/backend/observability/metrics-token
+
+/gogo/<env>/mobile/google/maps-ios-api-key      client key — ships in the app binary
 ```
+
+The `mobile` branch holds client keys. They are `SecureString` like everything else — public in
+a shipped app is not the same as public in a parameter store an offboarded operator can list —
+but their protection model is the restriction on the key, not secrecy. See
+`docs/provider-setup.md` §7. Read by the developer role only; the deploy and monitor roles are
+not granted the path.
 
 `SecureString`, Standard tier. One parameter per independently permissioned value — a single
 JSON blob would force every consumer to hold every secret.
 
 ## The manifest
 
-`secrets.manifest.yaml` declares names, environment variables, types and which environments
-require each value. It contains no values. It is the contract for three things:
+`secrets.manifest.yaml` declares names, namespaces, environment variables, types and which
+environments require each value. It contains no values. `namespace:` is omitted for `backend`,
+which is the default the reader emits — the tooling contract is pinned by
+`scripts/lib/manifest.test.sh`. It is the contract for three things:
 
 1. `scripts/secrets/validate.sh` diffs it against SSM.
 2. `scripts/secrets/pull.sh` and `scripts/deploy/render-env.sh` render env files from it.
@@ -113,6 +130,14 @@ Terraform creates the IAM and the infrastructure. A bootstrap script writes the 
 
 ```bash
 ./scripts/secrets/pull.sh dev          # writes .env.runtime, mode 0600
+```
+
+`pull.sh` renders the `backend` namespace and only that: `.env.runtime` is GoGo-BE's environment,
+and a mobile build key has no business in a server process. A mobile build key is fetched one at
+a time, and the manifest resolves its namespace so the caller does not have to know one exists:
+
+```bash
+./scripts/secrets/get.sh dev google/maps-ios-api-key --show
 ```
 
 Fetched once per session, not per request. `.env.runtime` is gitignored. Pulling `prod` onto a

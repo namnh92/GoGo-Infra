@@ -40,7 +40,7 @@ for env in "${ENVS[@]}"; do
   echo
   echo "## 2. Application credentials (${env}) — /gogo/${env}/backend/"
   echo
-  while IFS=$'\t' read -r path env_var type _required; do
+  while IFS=$'\t' read -r path env_var type _required _namespace; do
     [[ -z "$path" ]] && continue
     [[ "$type" == "SecureString" ]] || continue
     # The signing secrets have no provider to rotate at — they are generated
@@ -55,7 +55,7 @@ for env in "${ENVS[@]}"; do
 
   echo
   echo "   Not credentials, no rotation needed:"
-  while IFS=$'\t' read -r path env_var type _required; do
+  while IFS=$'\t' read -r path env_var type _required _namespace; do
     [[ -z "$path" ]] && continue
     [[ "$type" == "SecureString" ]] && continue
     printf -- '   - `%s` (%s)\n' "$path" "$env_var"

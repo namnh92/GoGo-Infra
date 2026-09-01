@@ -162,6 +162,25 @@ run
 assert_absent "$FAKE_KEY" "the credential never reaches the output, even on failure"
 assert_contains 'last4:0000' "identity is published as fingerprint and last4 only"
 
+# --- client SDK keys are listed, and never probed --------------------------
+# INF-055. A key restricted to an iOS bundle id refuses curl by design, so a
+# probe result would carry no information about the key's health. Reporting
+# nothing at all is the other trap: a board showing places/routes/sheets green
+# reads as "Maps is fine" to everyone who did not write this script.
+reset_responses
+run
+assert_contains 'Client SDK keys (not probeable from here)' \
+  "client SDK keys get their own section rather than being omitted"
+assert_contains 'maps-ios PRESENT' "a stored client key is reported present"
+assert_contains 'verify by building the app, not with curl' \
+  "and says what does verify it, since this script cannot"
+assert_absent "$FAKE_KEY" "the client key is not printed either"
+
+# The probe list itself must not have grown a maps entry: the curl stub answers
+# an unrecognised host with 000, which would surface as a permanent FAILED line
+# for a key that is working.
+assert_absent 'maps-ios FAILED' "no HTTP probe is attempted against an SDK key"
+
 # --- an absent parameter is not a failed call ------------------------------
 cat >"${tmp}/bin/aws" <<'STUB'
 #!/usr/bin/env bash
@@ -173,6 +192,8 @@ STUB
 chmod +x "${tmp}/bin/aws"
 run
 assert_contains 'ABSENT' "a missing SSM parameter is reported as missing, not as a refusal"
+assert_contains 'maps-ios ABSENT' "an unset client key is reported absent, not silently skipped"
+assert_contains 'falls back to the platform map' "and names the consequence rather than just the gap"
 
 echo
 if [[ "$fail" -gt 0 ]]; then

@@ -347,7 +347,7 @@ echo "    R2_BUCKET   = $(env_value R2_BUCKET)"
 echo
 echo "==> Parameters for ${ENVIRONMENT}"
 
-while IFS=$'\t' read -r path env_var type required; do
+while IFS=$'\t' read -r path env_var type required _namespace; do
   [[ -n "$path" ]] || continue
 
   is_required="no"

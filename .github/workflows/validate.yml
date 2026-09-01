@@ -157,8 +157,12 @@ jobs:
       - name: provider probe still reports Google's reason
         run: ./scripts/ops/check-provider-keys.test.sh
 
-      - name: manifest parses
+      # The namespace default decides what render-env.sh writes into the
+      # production process environment. A client key drifting into that default
+      # would hand the API a credential it cannot read and must not hold.
+      - name: manifest parses, and namespaces stay separated
         run: |
+          ./scripts/lib/manifest.test.sh
           for env in dev staging prod; do
             python3 scripts/lib/manifest.py "$env" >/dev/null
             echo "${env}: $(python3 scripts/lib/manifest.py "$env" --required | wc -l) required parameters"

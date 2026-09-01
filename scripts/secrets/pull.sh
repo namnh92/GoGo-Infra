@@ -47,7 +47,7 @@ chmod 600 "$tmp_file"
 } >"$tmp_file"
 
 missing=0
-while IFS=$'\t' read -r path env_var _type required; do
+while IFS=$'\t' read -r path env_var _type required _namespace; do
   [[ -n "$env_var" ]] || continue
 
   if ! value="$(aws ssm get-parameter --name "${prefix}/${path}" --with-decryption --query 'Parameter.Value' --output text 2>/dev/null)"; then
@@ -60,7 +60,10 @@ while IFS=$'\t' read -r path env_var _type required; do
 
   printf '%s=%s\n' "$env_var" "$value" >>"$tmp_file"
   unset value
-done < <(python3 "$MANIFEST_READER" "$ENVIRONMENT")
+# `backend` is stated rather than inherited. This file becomes GoGo-BE's
+# environment; a mobile build key belongs in a mobile build, not in the API's
+# process env, and it lives under a prefix this prefix cannot even reach.
+done < <(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace backend)
 
 if [[ "$missing" -gt 0 ]]; then
   die "${missing} required parameter(s) missing. Run ./scripts/secrets/validate.sh ${ENVIRONMENT} for the full diff."

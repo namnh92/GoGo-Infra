@@ -18,6 +18,10 @@
 # Values are never printed. Where a key has to be identified — comparing two
 # environments, confirming a rotation landed — the last 4 characters and a
 # SHA-256 prefix are enough and are all this emits.
+#
+# Server keys are probed. Client SDK keys are reported as present or absent and
+# never probed — see the section at the bottom for why an HTTP call cannot
+# answer the question for them.
 
 source "$(dirname "${BASH_SOURCE[0]}")/../secrets/common.sh"
 
@@ -98,7 +102,7 @@ while IFS='|' read -r name path method url body mask; do
     --query 'Parameter.Value' --output text 2>/dev/null || true)"
 
   if [[ -z "$key" || "$key" == "None" ]]; then
-    printf '%-7s ABSENT     %s\n' "$name" "${prefix}/${path}"
+    printf '%-8s ABSENT     %s\n' "$name" "${prefix}/${path}"
     echo "        Nothing in SSM. deploy-dev.yml aborts before this point for a required key."
     status=1
     continue
@@ -131,9 +135,9 @@ for d in (body.get("error") or {}).get("details") or []:
   rm -f /tmp/gogo-probe.$$
 
   if [[ "$http" == "200" ]]; then
-    printf '%-7s OK         %s\n' "$name" "$(fingerprint "$key")"
+    printf '%-8s OK         %s\n' "$name" "$(fingerprint "$key")"
   else
-    printf '%-7s FAILED     HTTP %s%s\n' "$name" "$http" \
+    printf '%-8s FAILED     HTTP %s%s\n' "$name" "$http" \
       "$([[ -n "$reason" ]] && printf ' reason=%s' "$reason")"
     echo "        $(explain "$http" "$reason")"
     echo "        key: $(fingerprint "$key")"
@@ -141,6 +145,38 @@ for d in (body.get("error") or {}).get("details") or []:
   fi
   unset key
 done <<<"$PROBES"
+
+# ── client SDK keys: deliberately not probed ────────────────────────────────
+#
+# A Maps SDK key is restricted to an app (bundle id on iOS, package name + SHA-1
+# on Android). curl is not that app, so every probe from here comes back refused
+# no matter how healthy the key is — a check whose failure carries no
+# information, which is worse than no check because someone will eventually act
+# on it.
+#
+# It is listed anyway. Printing places/routes/sheets and nothing else invites
+# the reading that Maps is covered, and INF-052 exists because a green board
+# over an unverified credential is exactly how DEV ran broken for weeks. Here
+# the honest report is the parameter's presence plus the fact that only a build
+# can confirm it.
+echo
+echo "Client SDK keys (not probeable from here):"
+while IFS='|' read -r name path platform; do
+  [[ -n "$name" ]] || continue
+
+  namespace="$(param_namespace "$path" "$ENVIRONMENT")"
+  key="$(aws ssm get-parameter --name "$(ssm_prefix "$ENVIRONMENT" "${namespace:-backend}")/${path}" \
+    --with-decryption --query 'Parameter.Value' --output text 2>/dev/null || true)"
+
+  if [[ -z "$key" || "$key" == "None" ]]; then
+    printf '%-8s ABSENT     %s falls back to the platform map (INF-055 / INF-056)\n' "$name" "$platform"
+  else
+    printf '%-8s PRESENT    %s — verify by building the app, not with curl\n' "$name" "$(fingerprint "$key")"
+  fi
+  unset key
+done <<'EOF'
+maps-ios|google/maps-ios-api-key|iOS
+EOF
 
 echo
 if [[ "$status" -eq 0 ]]; then

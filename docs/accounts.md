@@ -34,6 +34,7 @@ automation credential be rotated without touching anyone's login.
 | OneSignal | GitHub OAuth | REST API key + identity verification key, per app | `/gogo/<env>/backend/onesignal/*` |
 | Tenjin | GitHub OAuth | SDK Key per app | mobile build config — nothing in SSM |
 | Google Cloud | Google account | server API keys, split per API | `/gogo/<env>/backend/google/*` |
+| Google Cloud (client) | Google account | Maps SDK keys, one per platform — ship in the app binary, restricted by app id | `/gogo/<env>/mobile/google/*` |
 | Grafana Cloud | GitHub OAuth | access policy tokens, one per scope (`metrics:write` for the collector, `metrics:read` for the admin API) | `/gogo/<env>/backend/observability/grafana-*` |
 | AWS | IAM / SSO | GitHub OIDC, no static keys | n/a — roles are assumed, nothing is stored |
 
@@ -135,8 +136,15 @@ omission in the table — see the decision above, and the trigger that ends it.
 | Places | `/gogo/dev/backend/google/server-api-key` | Places API (New) |
 | Routes | `/gogo/dev/backend/google/routes-api-key` | Routes API |
 | Sheets | `/gogo/dev/backend/google/sheets-api-key` | Google Sheets API |
+| Maps SDK for iOS | `/gogo/dev/mobile/google/maps-ios-api-key` | Maps SDK for iOS (INF-055) |
 
-Verified by calling each API with each key: every key answers `200` on its own
+The last row is a **client** key on the same project: it ships inside the app binary and is held
+to one API and to the bundle ids `max.gogo.{dev,stag,prod}`. Same project, same one-key-one-API
+rule, different protection model — `docs/provider-setup.md` §7. It cannot be verified the way the
+three above were, because a key restricted to an iOS app refuses every caller that is not that
+app; a build is the only test.
+
+The three server keys were verified by calling each API with each key: every key answers `200` on its own
 API and `403 API_KEY_SERVICE_BLOCKED` on the other two. All three APIs are
 enabled on the project, so those refusals are the key restriction doing its job
 and not a disabled service.

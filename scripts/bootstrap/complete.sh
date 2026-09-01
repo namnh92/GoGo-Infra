@@ -138,7 +138,7 @@ total=0
 # hides anything an environment does not demand yet — a prod-only parameter
 # never appears in a dev run, which makes it look like an omission rather than a
 # deliberate scope decision.
-while IFS=$'\t' read -r path env_var _type required; do
+while IFS=$'\t' read -r path env_var _type required _namespace; do
   [[ -n "$path" ]] || continue
 
   if [[ ",${required}," == *",${ENVIRONMENT},"* ]]; then

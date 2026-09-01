@@ -159,6 +159,7 @@ The tracking URL is built server-side and is never the public share URL
 | secret | Places server key | `./scripts/secrets/put.sh <env> google/server-api-key` |
 | secret | Routes server key | `./scripts/secrets/put.sh <env> google/routes-api-key` |
 | secret | Sheets server key | `./scripts/secrets/put.sh <env> google/sheets-api-key` |
+| client key | Maps SDK for iOS key | `./scripts/secrets/put.sh <env> google/maps-ios-api-key` (INF-055) |
 
 One key per API, each with API and application restrictions, each with a quota alert. A single
 shared key means one leak takes down every Maps feature at once and there is no way to tell
@@ -210,6 +211,77 @@ Platform API needs billing on its project, while Sheets does not, so a working S
 the parameter store is fine and proves nothing about Maps entitlement.
 
 Run it after enabling an API, after rotating a key, and after changing a restriction.
+
+### Client keys are a different kind of credential (INF-055, INF-056)
+
+Every key above is a server key: it never leaves a host we control, and leaking it is the
+incident. The Maps SDK keys are not. The SDK renders the map **on the device**, so the device
+has to hold the key — it is compiled into the binary at `expo prebuild`, and anyone who
+downloads the app can read it out of the `.ipa` or the `.apk`. That is the design, not a defect.
+
+What protects it is the **restriction**, not secrecy:
+
+| | Server key | Client key |
+| --- | --- | --- |
+| Where it lives | SSM → deploy → process env | SSM → developer → app binary |
+| Who can read it | the API process | anyone with the app |
+| The control | keeping it secret | app restriction + one-API restriction |
+| A leak means | rotate at Google, treat as an incident | nothing new — tighten the restriction, watch the quota |
+
+So each SDK key gets, and must keep, both restrictions:
+
+- **API restriction** — `Maps SDK for iOS` and nothing else. Not merged with Places, Routes or
+  Sheets: those are server APIs, and putting them on a key that ships in a binary would publish
+  the ability to spend Places quota to every user who cares to look.
+- **Application restriction** — iOS apps, bundle ids `max.gogo.dev`, `max.gogo.stag`,
+  `max.gogo.prod`. Without this the key is simply public and billable by anyone.
+
+**One key across the three bundle ids, or one key each?** One key per flavour can be revoked per
+flavour — a dev build leaking does not force a production rebuild — at the cost of three keys,
+three restrictions and three parameters to keep aligned. One shared key is less to maintain and
+makes any revocation a production rebuild. Decide before the first key is created and record the
+choice here; the SSM path is per-environment either way, so switching later means adding keys,
+not renaming parameters.
+
+Give each SDK key its **own quota alert**. Dynamic Maps on mobile has its own free allowance
+(10k loads/month) and its own SKU; folding it into the Places alert means a map-heavy release
+spends the budget without anything firing.
+
+#### Verifying an SDK key: build the app, do not curl it
+
+`make provider-keys` lists these keys and deliberately does **not** probe them:
+
+```
+Client SDK keys (not probeable from here):
+maps-ios PRESENT    sha256:1a2b3c4d5e6f… last4:7h8i — verify by building the app, not with curl
+```
+
+An HTTP probe from a laptop is not a signed app with our bundle id, so the key refuses it
+**whether the key is healthy or broken**. A green probe would be impossible and a red one would
+mean nothing. The only real verification is a build:
+
+```bash
+cd ../GoGo-MobileApp
+./scripts/secrets/get.sh dev google/maps-ios-api-key --show   # from GoGo-Infra
+# paste into .env as GOOGLE_MAPS_IOS_API_KEY=…  (gitignored)
+npx expo prebuild --platform ios && pnpm ios
+```
+
+Then open Saved, Active date and Place detail. A working key renders a Google map with the
+Google logo; a broken or missing one leaves Apple Maps and logs a `GMSServices` authorization
+failure. There is no third outcome, which is why the build is the acceptance test.
+
+The key is read once, at prebuild, by the `react-native-maps` config plugin — never by
+JavaScript, which is why it is not an `EXPO_PUBLIC_` variable. **Changing it requires a
+rebuild.** A new value in `.env` changes nothing in an already-built binary.
+
+#### Distribution today
+
+Mobile builds run locally (`pnpm ios`); there is no EAS or CI build job. So the developer role
+is the only principal granted `/gogo/<env>/mobile/*`, and a developer copies the value into
+`GoGo-MobileApp/.env` by hand. When an iOS build job exists it gets its own role and that same
+path — not a widened deploy policy, which exists to keep client keys out of the server's
+environment.
 
 ## 8. Production VPS (INF-017, INF-018)
 

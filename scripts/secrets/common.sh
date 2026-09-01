@@ -53,12 +53,36 @@ require_aws() {
   die "not authenticated to AWS. Run your SSO or assume-role login first."
 }
 
+# ssm_prefix <env> [namespace]
+#
+# Namespace defaults to `backend`, so every caller written before namespaces
+# existed keeps the exact scope it had. `ci` has no namespace: it is a separate
+# top-level tree for pipeline credentials, not an environment.
 ssm_prefix() {
   if [[ "$1" == "ci" ]]; then
     printf '/gogo/ci'
   else
-    printf '/gogo/%s/backend' "$1"
+    printf '/gogo/%s/%s' "$1" "${2:-backend}"
   fi
+}
+
+# Which namespace the manifest declares a path in. Callers do not pass it: the
+# manifest already knows, and a second place to state it is a second place for
+# it to be wrong — put.sh writing a mobile key under /backend/ would create a
+# parameter the mobile build cannot find and the deploy role can read, which is
+# both halves of the mistake namespaces exist to prevent.
+#
+# Prints nothing for an undeclared path; the caller decides what that means.
+param_namespace() {
+  local path="$1" env="${2:-dev}"
+  python3 "$MANIFEST_READER" "$env" --namespace all \
+    | awk -F'\t' -v p="$path" '$1 == p { print $5; exit }'
+}
+
+# Every namespace the manifest declares, one per line.
+manifest_namespaces() {
+  local env="${1:-dev}"
+  python3 "$MANIFEST_READER" "$env" --namespace all | cut -f5 | sort -u
 }
 
 # Where a value comes from. Defined once: put.sh and setup-env.sh both prompt
@@ -80,6 +104,13 @@ param_hint() {
        account-wide and cannot send for a single app." ;;
     onesignal/identity-verification-key)
       echo "OneSignal → Settings → Keys & IDs → Identity Verification. Used to sign the ES256 JWT." ;;
+    google/maps-ios-api-key)
+      echo "Google Cloud → APIs & Services → Credentials → API keys. 39 characters starting AIza.
+       A CLIENT key: Application restriction = iOS apps with bundle ids max.gogo.dev,
+       max.gogo.stag, max.gogo.prod; API restriction = Maps SDK for iOS and nothing
+       else. It ships inside the binary, so the restriction is the control — an
+       unrestricted key here is a key anyone who downloads the app can spend.
+       Enable Maps SDK for iOS on the project first (INF-055)." ;;
     google/server-api-key | google/routes-api-key | google/sheets-api-key)
       echo "Google Cloud → APIs & Services → Credentials → API keys. 39 characters starting AIza.
        Not an OAuth client id and not a service-account field. One key per API.
