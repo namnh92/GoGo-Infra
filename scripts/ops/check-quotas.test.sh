@@ -85,6 +85,40 @@ STUB
 chmod +x "${tmp}/bin/aws"
 expect 0 "checks that cannot run do not fail the build"
 
+# --- the Maps SDK row is a stated gap, not an omission (INF-056) ------------
+#
+# Dynamic Maps on mobile is billed by map loads inside the app, so nothing this
+# script can reach counts them. The frozen cost plan (Cost-Spec §0.2 C1) is
+# explicit that this is reported as a MEASUREMENT GAP and never as zero-cost
+# usage — and a row missing from a cost board is read as a SKU that costs
+# nothing. So it must be present, and it must be `unknown`: an `ok` here would
+# be a claim nobody measured.
+out="$("$SCRIPT" dev 2>/dev/null)"
+if printf '%s' "$out" | grep -q 'google-maps-sdk'; then
+  echo "  ok    the Maps SDK SKU is listed rather than omitted"
+  pass=$(( pass + 1 ))
+else
+  echo "  FAIL  google-maps-sdk is missing: an unlisted SKU reads as a free one"
+  fail=$(( fail + 1 ))
+fi
+
+if printf '%s' "$out" | grep -E '^  \?     google-maps-sdk' >/dev/null; then
+  echo "  ok    and is reported unknown, which is what 'nobody measured this' looks like"
+  pass=$(( pass + 1 ))
+else
+  echo "  FAIL  google-maps-sdk is not reported as unknown"
+  fail=$(( fail + 1 ))
+fi
+
+# JSON is what a dashboard consumes, so the gap has to survive that path too.
+if "$SCRIPT" dev --json 2>/dev/null | grep -qF '"service":"google-maps-sdk","status":"unknown"'; then
+  echo "  ok    the gap survives --json, which is the machine-readable path"
+  pass=$(( pass + 1 ))
+else
+  echo "  FAIL  --json does not carry google-maps-sdk as unknown"
+  fail=$(( fail + 1 ))
+fi
+
 echo
 if [[ "$fail" -gt 0 ]]; then
   echo "${fail} failed, ${pass} passed" >&2

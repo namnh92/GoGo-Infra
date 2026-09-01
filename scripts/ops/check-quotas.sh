@@ -201,6 +201,20 @@ fi
 
 record google-quota unknown "needs Cloud Monitoring access; not stored (INF-015)"
 
+# ── Google Maps SDK on mobile: a measurement gap, stated as one ─────────────
+#
+# Dynamic Maps on mobile is its own SKU with its own free allowance (10k map
+# loads/month), and it is billed by map loads inside the app — no request leaves
+# a host we control, so nothing here can count it. Cloud Monitoring can, and
+# INF-015 is where that access lands.
+#
+# It is listed rather than left out because the alternative is worse than a
+# blank. A cost board that omits a SKU is read as a SKU costing nothing, and the
+# frozen plan (Cost-Spec §0.2 C1) is explicit that Maps SDK usage is reported as
+# a MEASUREMENT GAP and never as zero-cost usage. `unknown` means nobody looked,
+# which is exactly true here, and it does not set the exit code.
+record google-maps-sdk unknown "iOS + Android map loads are billed in-app; needs Cloud Monitoring (INF-015, INF-055, INF-056)"
+
 # ── Grafana Cloud: active series against the free tier ───────────────────────
 #
 # Free is 10 000 active series. The failure mode is the one this whole script

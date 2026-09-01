@@ -160,6 +160,7 @@ The tracking URL is built server-side and is never the public share URL
 | secret | Routes server key | `./scripts/secrets/put.sh <env> google/routes-api-key` |
 | secret | Sheets server key | `./scripts/secrets/put.sh <env> google/sheets-api-key` |
 | client key | Maps SDK for iOS key | `./scripts/secrets/put.sh <env> google/maps-ios-api-key` (INF-055) |
+| client key | Maps SDK for Android key | `./scripts/secrets/put.sh <env> google/maps-android-api-key` (INF-056) |
 
 One key per API, each with API and application restrictions, each with a quota alert. A single
 shared key means one leak takes down every Maps feature at once and there is no way to tell
@@ -212,7 +213,7 @@ the parameter store is fine and proves nothing about Maps entitlement.
 
 Run it after enabling an API, after rotating a key, and after changing a restriction.
 
-### Client keys are a different kind of credential (INF-055, INF-056)
+### Client keys are a different kind of credential (INF-055 iOS, INF-056 Android)
 
 Every key above is a server key: it never leaves a host we control, and leaking it is the
 incident. The Maps SDK keys are not. The SDK renders the map **on the device**, so the device
@@ -228,13 +229,31 @@ What protects it is the **restriction**, not secrecy:
 | The control | keeping it secret | app restriction + one-API restriction |
 | A leak means | rotate at Google, treat as an incident | nothing new — tighten the restriction, watch the quota |
 
+**One key per platform**, never one key for both. `Maps SDK for iOS` and `Maps SDK for Android`
+are separate APIs, and the one-key-one-API rule is not relaxed because both keys happen to draw a
+map. A shared key would also have to carry both application restrictions, which means an Android
+package's fingerprint would be enough to use the key that ships on iOS.
+
 So each SDK key gets, and must keep, both restrictions:
 
-- **API restriction** — `Maps SDK for iOS` and nothing else. Not merged with Places, Routes or
-  Sheets: those are server APIs, and putting them on a key that ships in a binary would publish
-  the ability to spend Places quota to every user who cares to look.
-- **Application restriction** — iOS apps, bundle ids `max.gogo.dev`, `max.gogo.stag`,
-  `max.gogo.prod`. Without this the key is simply public and billable by anyone.
+- **API restriction** — that one SDK and nothing else. Not merged with Places, Routes or Sheets:
+  those are server APIs, and putting them on a key that ships in a binary would publish the
+  ability to spend Places quota to every user who cares to look. Not merged with the other
+  platform's SDK either.
+- **Application restriction** —
+  - *iOS*: iOS apps, bundle ids `max.gogo.dev`, `max.gogo.stag`, `max.gogo.prod`.
+  - *Android*: Android apps, one entry per **package name paired with a signing certificate
+    SHA-1**. This is the difference that catches people: Android identifies the caller by package
+    *and signature*, so a debug build and a release build of the same package are two different
+    callers, and so is the same app built on a colleague's machine with their own debug keystore.
+    Register every signing path that has to work.
+
+    ```bash
+    keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey \
+      -storepass android -keypass android | grep SHA1
+    ```
+
+  Without an application restriction the key is simply public and billable by anyone.
 
 **One key across the three bundle ids, or one key each?** One key per flavour can be revoked per
 flavour — a dev build leaking does not force a production rebuild — at the cost of three keys,
@@ -243,9 +262,12 @@ makes any revocation a production rebuild. Decide before the first key is create
 choice here; the SSM path is per-environment either way, so switching later means adding keys,
 not renaming parameters.
 
-Give each SDK key its **own quota alert**. Dynamic Maps on mobile has its own free allowance
-(10k loads/month) and its own SKU; folding it into the Places alert means a map-heavy release
-spends the budget without anything firing.
+Give each SDK key its **own quota alert**, per platform. Dynamic Maps on mobile has its own free
+allowance (10k loads/month) and its own SKU; folding it into the Places alert means a map-heavy
+release spends the budget without anything firing. `make quotas` reports `google-maps-sdk` as
+`unknown` and will keep doing so until INF-015 lands Cloud Monitoring access — map loads are
+billed inside the app, so nothing this repository can reach counts them. That is recorded as a
+measurement gap on purpose: the frozen cost plan forbids reporting an unmeasured SKU as zero.
 
 #### Verifying an SDK key: build the app, do not curl it
 
@@ -271,17 +293,31 @@ Then open Saved, Active date and Place detail. A working key renders a Google ma
 Google logo; a broken or missing one leaves Apple Maps and logs a `GMSServices` authorization
 failure. There is no third outcome, which is why the build is the acceptance test.
 
+Android is the same shape with a different symptom, and a more legible one:
+
+```bash
+./scripts/secrets/get.sh dev google/maps-android-api-key --show   # from GoGo-Infra
+# paste into .env as GOOGLE_MAPS_ANDROID_API_KEY=…
+npx expo prebuild --platform android && pnpm android
+adb logcat -s Google\ Maps\ Android\ API
+```
+
+A refused Android key renders a **grey grid with the Google logo** — a map frame with no tiles,
+which reads as a network problem rather than a credential one. logcat is where it says otherwise:
+an `Authorization failure` block naming the package and the SHA-1 to add. The usual cause is not
+a wrong key but a signing certificate that was never registered, so check the fingerprint in that
+log against the console before touching the key.
+
 The key is read once, at prebuild, by the `react-native-maps` config plugin — never by
 JavaScript, which is why it is not an `EXPO_PUBLIC_` variable. **Changing it requires a
 rebuild.** A new value in `.env` changes nothing in an already-built binary.
 
 #### Distribution today
 
-Mobile builds run locally (`pnpm ios`); there is no EAS or CI build job. So the developer role
+Mobile builds run locally (`pnpm ios`, `pnpm android`); there is no EAS or CI build job. So the developer role
 is the only principal granted `/gogo/<env>/mobile/*`, and a developer copies the value into
-`GoGo-MobileApp/.env` by hand. When an iOS build job exists it gets its own role and that same
-path — not a widened deploy policy, which exists to keep client keys out of the server's
-environment.
+`GoGo-MobileApp/.env` by hand. When a mobile build job exists it gets its own role and that same path
+— not a widened deploy policy, which exists to keep client keys out of the server's environment.
 
 ## 8. Production VPS (INF-017, INF-018)
 

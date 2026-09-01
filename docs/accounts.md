@@ -137,12 +137,13 @@ omission in the table — see the decision above, and the trigger that ends it.
 | Routes | `/gogo/dev/backend/google/routes-api-key` | Routes API |
 | Sheets | `/gogo/dev/backend/google/sheets-api-key` | Google Sheets API |
 | Maps SDK for iOS | `/gogo/dev/mobile/google/maps-ios-api-key` | Maps SDK for iOS (INF-055) |
+| Maps SDK for Android | `/gogo/dev/mobile/google/maps-android-api-key` | Maps SDK for Android (INF-056) |
 
-The last row is a **client** key on the same project: it ships inside the app binary and is held
-to one API and to the bundle ids `max.gogo.{dev,stag,prod}`. Same project, same one-key-one-API
-rule, different protection model — `docs/provider-setup.md` §7. It cannot be verified the way the
-three above were, because a key restricted to an iOS app refuses every caller that is not that
-app; a build is the only test.
+The last two rows are **client** keys on the same project: they ship inside the app binary and are
+held to one API each and to the app — bundle ids on iOS, package name plus signing SHA-1 on
+Android. Same project, same one-key-one-API rule, different protection model
+(`docs/provider-setup.md` §7). Neither can be verified the way the three above were, because a key
+restricted to an app refuses every caller that is not that app; a build is the only test.
 
 The three server keys were verified by calling each API with each key: every key answers `200` on its own
 API and `403 API_KEY_SERVICE_BLOCKED` on the other two. All three APIs are

@@ -104,6 +104,16 @@ param_hint() {
        account-wide and cannot send for a single app." ;;
     onesignal/identity-verification-key)
       echo "OneSignal → Settings → Keys & IDs → Identity Verification. Used to sign the ES256 JWT." ;;
+    google/maps-android-api-key)
+      echo "Google Cloud → APIs & Services → Credentials → API keys. 39 characters starting AIza.
+       A CLIENT key: Application restriction = Android apps, one entry per package
+       (max.gogo.dev, max.gogo.stag, max.gogo.prod) paired with the SIGNING
+       CERTIFICATE SHA-1 — debug and release keystores are different callers, so
+       both need registering or a colleague's debug build gets a grey grid.
+         keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey \\
+           -storepass android -keypass android | grep SHA1
+       API restriction = Maps SDK for Android and nothing else. Enable Maps SDK
+       for Android on the project first (INF-056)." ;;
     google/maps-ios-api-key)
       echo "Google Cloud → APIs & Services → Credentials → API keys. 39 characters starting AIza.
        A CLIENT key: Application restriction = iOS apps with bundle ids max.gogo.dev,
