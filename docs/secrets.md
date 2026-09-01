@@ -202,3 +202,49 @@ start with SSO quietly off.
 
 **What Access does not do.** It answers "who is this", not "may they do this". A GitHub identity
 that passes Access but has no row in `admin_users` gets a 403 from GoGo-BE, not a session.
+
+## Grafana Cloud (INF-054)
+
+The time-series destination. Decided 01/09/2026: **Grafana Cloud Free** on dev —
+10 000 active series, 14 days of retention, no cost — and Grafana Cloud Pro when
+production needs 30 days of history. Not provisioned for production yet; that
+needs its own approval.
+
+The account is created by hand, like every other provider account here: a
+GitHub OAuth signup at grafana.com. Terraform does not create it, for the same
+reason it creates no other provider API key — the token would land in state.
+
+Then, in the stack's **Access Policies** page, two policies and one token each:
+
+| Policy | Scope | Held by | Why separate |
+| --- | --- | --- | --- |
+| `gogo-collector` | `metrics:write` | the Alloy container | Cannot read a series back, so a leak spends quota rather than exposing telemetry |
+| `gogo-admin-api` | `metrics:read` | GoGo-BE, for the CMS monitoring API | Cannot write, so a compromised API cannot poison the data it reports on |
+
+One token with both scopes would be smaller to manage and strictly worse: the
+collector runs unattended on a host that also holds application credentials,
+and the admin API is reachable from a browser session. Neither should be able
+to do the other's job.
+
+Store them, plus the two non-secret identifiers, with `put.sh`:
+
+```bash
+# From the stack's "Details" page → Prometheus → "Remote Write Endpoint" and "Username / Instance ID"
+./scripts/secrets/put.sh dev observability/grafana-prom-url  'https://prometheus-prod-XX-prod-<region>.grafana.net/api/prom/push'
+./scripts/secrets/put.sh dev observability/grafana-prom-user '1234567'
+./scripts/secrets/put.sh dev observability/grafana-write-token  # paste the metrics:write token
+./scripts/secrets/put.sh dev observability/grafana-read-token   # paste the metrics:read token
+```
+
+All four are `required: []` in the manifest, so a deploy is not blocked before
+they exist. That is deliberate and it is also the risk: an empty value means
+metrics are being shipped nowhere, and nothing about the running system looks
+different. `scripts/ops/check-quotas.sh` reports `grafana-series` as `unknown`
+until they are set, which is what makes the gap visible rather than silent —
+the same failure INF-053 hit with `METRICS_TOKEN`.
+
+**Never in a browser.** Neither token, and neither identifier, may appear in a
+CMS bundle, a `VITE_*` variable or an API response. The CMS reads product-level
+aggregates from `/v1/cms/ops/*` (GoGo-BE#315); it never reaches Grafana, and it
+never reads `/v1/metrics`.
+

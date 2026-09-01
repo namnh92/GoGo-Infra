@@ -34,6 +34,7 @@ automation credential be rotated without touching anyone's login.
 | OneSignal | GitHub OAuth | REST API key + identity verification key, per app | `/gogo/<env>/backend/onesignal/*` |
 | Tenjin | GitHub OAuth | SDK Key per app | mobile build config — nothing in SSM |
 | Google Cloud | Google account | server API keys, split per API | `/gogo/<env>/backend/google/*` |
+| Grafana Cloud | GitHub OAuth | access policy tokens, one per scope (`metrics:write` for the collector, `metrics:read` for the admin API) | `/gogo/<env>/backend/observability/grafana-*` |
 | AWS | IAM / SSO | GitHub OIDC, no static keys | n/a — roles are assumed, nothing is stored |
 
 Provider API keys are **not** created by Terraform. Creating them there would write the value
@@ -113,6 +114,7 @@ Fill in as accounts are created. "Owner" is a person; "backup" must not be the s
 | OneSignal | `GoGo Production` | GitHub OAuth | | **none** | | |
 | Tenjin | | GitHub OAuth | | **none** | | |
 | Google Cloud | project number `186055730568` — every DEV server key | Google | | **none** | | |
+| Grafana Cloud | free-tier stack, dev and prod share it via an `env` label | GitHub OAuth | | **none** | | |
 | AWS | account `477020169756` | IAM / SSO | | **none** | | |
 
 The account identifiers are filled from `config/global.tfvars` and `config/dev.tfvars`. The
