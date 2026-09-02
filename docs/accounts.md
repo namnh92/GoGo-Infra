@@ -203,35 +203,66 @@ logs, a header does not. No key value belongs in this file, in a ticket, or in
 any command output — identify a credential by the `sha256:… last4:…` fingerprint
 `scripts/ops/check-provider-keys.sh` prints.
 
-### Places API (New) per-day quota cap — deliberately not set yet
+### Places API (New) quota — dimensions inspected, cap still not set
 
-**Recorded 02/09/2026 (INF-057).** GoGo-Infra#103 carries an item to put a per-day quota cap on
-Places API (New) in the Cloud Console, below the internal ceiling, with a billing alert beside
-it (INF-015, #15). **No cap has been set, and none should be yet.** No value is recorded in this
-file because there is no value to record — an invented number here would read like a decision.
+**Recorded 02/09/2026 (INF-015, after GoGo-BE#340 / PR7 merged).** Read from the project with
+`gcloud` + the Service Usage and Cloud Quotas APIs, read-only, project `gogo-dev-32632`
+(number `186055730568`). This replaces the earlier note that there was "no value to record":
+there are values, they are Google's defaults, and nothing has been changed yet.
 
-The ordering is the reason, and it only runs one way. Three controls, three different jobs:
+**What actually exists.** Places API (New) exposes **three limits per method**, and one of them
+is per day — an earlier draft of this work assumed only per-minute quotas existed, and a
+still-earlier one proposed "5,000/day" without checking; both were wrong and are withdrawn.
+Every limit is `containerType: PROJECT`, not fixed, and eligible for adjustment; **no consumer
+or admin override exists on any of them** (all three `consumerOverrides` collections for
+`GetPlaceRequest` are empty).
 
-| Control | Role | Where |
+| Method (quotaId prefix) | per day / project | per minute / project | per minute / user |
+| --- | --- | --- | --- |
+| `GetPlaceRequest` — Place Details: what `liveness`, `core`, `quality` all call | **125,000** | **600** | unlimited |
+| `SearchTextRequest` — Text Search | 75,000 | 600 | unlimited |
+| `SearchNearbyRequest` | 75,000 | 600 | unlimited |
+| `AutocompletePlacesRequest` | 175,000 | 12,000 | unlimited |
+| `GetPhotoMediaRequest` | 175,000 | 600 | unlimited |
+| `SearchMediaRequest`, `SearchReviewPostsRequest` | unlimited | 600 | unlimited |
+
+Two consequences for the refresh job:
+
+- The dimension the plan wanted (§2.2 "Google per-day quota") **does exist**:
+  `GetPlaceRequestPerDayPerProject`. It can be lowered with a consumer override (Service Usage
+  `consumerOverrides`, or Cloud Quotas `quotaPreferences`); lowering below the default never
+  needs approval.
+- It is **per project, per method** — it caps every Place Details call the product makes
+  (resolve, submit, CMS approve, bulk import, refresh) as one number. Refresh's own ceiling is
+  per scope (`google.places.refresh`, `PLACE_REFRESH_DAILY_MAX_*`), so the console cap has to
+  sit above the *sum* of all Details traffic, never at the refresh ceiling.
+
+**Sizing basis, for when the override is set (not set yet).** DEV refresh ceiling is being
+tightened to 50/day (2 refreshable rows, ≈1 call/day steady state). The frozen cost baseline
+(GoGo-BE `docs/cost-baselines/`) measures a full A–E run at ~45 Details calls; a 200-row bulk
+import can cost up to 3 Details per row. A `GetPlaceRequest` per-day override in the
+**1,000–2,000** range therefore backs the guard without being able to break add-by-link or a
+normal import day. Pick the number when setting it, write it in this table with the date, and
+keep `SearchTextRequest` / `AutocompletePlacesRequest` at their defaults — refresh never
+touches them.
+
+**Billing alert: unverifiable from the CLI today.** Billing account `GoGo billing account`
+(`0137D6-…-A91B4A`) is open and attached to the project, but the **Cloud Billing Budget API is
+not enabled** on `gogo-dev-32632`, so `gcloud billing budgets list` cannot even read whether a
+budget exists. Earlier notes on #15 say none was ever configured. Enabling that API is a
+prerequisite for both reading and setting one; it is free and reversible, and it has not been
+done because this inspection was read-only.
+
+| Control | Role | State 02/09/2026 |
 | --- | --- | --- |
-| Postgres reservation (`provider_budget_daily`) | **hard internal guard** — refuses the call | GoGo-BE, ceilings from `PLACE_REFRESH_DAILY_MAX_*` |
-| Google per-day quota | **external safety net** — catches what the guard missed | Cloud Console, this project |
-| Cloud Billing budget | **alert only** — tells a person, stops nothing | Cloud Console |
+| Postgres reservation (`provider_budget_daily`) | **hard internal guard** — refuses the call | CONFIGURED on DEV (`500 / $0 / 500`, being tightened to `50 / $0 / 50`) |
+| `GetPlaceRequestPerDayPerProject` consumer override | **external safety net** — catches what the guard missed | default 125,000, **no override set** |
+| Cloud Billing budget | **alert only** — tells a person, stops nothing | **unknown** — Budget API disabled |
 
-The quota is specified as sitting *slightly above* the internal ceiling. That ceiling belongs to
-GoGo-BE#340 (PR7), which has not started and has decided no numbers. Setting the console cap
-first means picking the outer bound before the inner one exists, and then either the internal
-ceiling gets reverse-engineered from a number chosen in a console, or the net sits somewhere
-arbitrary relative to the guard it is meant to back up.
-
-A cap set too low is also not a safe error. It is a hard stop on every Places call the product
-makes — resolve, import, search — not only the refresh job the ceiling is scoped to, because
-quota is per project and per API while the internal ceiling is per scope.
-
-So: set it when PR7 sets the internal ceiling, in the same change, and record the value and the
-date in this table. Until then `scripts/ops/check-quotas.sh` continues to report `google-quota`
-as `unknown`, which is accurate — it needs Cloud Monitoring access this repository does not
-store — and an unknown deliberately does not fail the run.
+A cap set too low is still not a safe error: it is a hard stop on every Place Details call the
+product makes, not only the refresh job. `scripts/ops/check-quotas.sh` keeps reporting
+`google-quota` as `unknown` until it is taught to read `quotaInfos` — an unknown deliberately
+does not fail the run.
 
 ## App identity
 
