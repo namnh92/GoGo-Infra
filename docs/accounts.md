@@ -203,7 +203,7 @@ logs, a header does not. No key value belongs in this file, in a ticket, or in
 any command output — identify a credential by the `sha256:… last4:…` fingerprint
 `scripts/ops/check-provider-keys.sh` prints.
 
-### Places API (New) quota — dimensions inspected, cap still not set
+### Places API (New) quota — dimensions inspected, DEV cap and budget set
 
 **Recorded 02/09/2026 (INF-015, after GoGo-BE#340 / PR7 merged).** Read from the project with
 `gcloud` + the Service Usage and Cloud Quotas APIs, read-only, project `gogo-dev-32632`
@@ -237,32 +237,39 @@ Two consequences for the refresh job:
   per scope (`google.places.refresh`, `PLACE_REFRESH_DAILY_MAX_*`), so the console cap has to
   sit above the *sum* of all Details traffic, never at the refresh ceiling.
 
-**Sizing basis, for when the override is set (not set yet).** DEV refresh ceiling is being
-tightened to 50/day (2 refreshable rows, ≈1 call/day steady state). The frozen cost baseline
-(GoGo-BE `docs/cost-baselines/`) measures a full A–E run at ~45 Details calls; a 200-row bulk
-import can cost up to 3 Details per row. A `GetPlaceRequest` per-day override in the
-**1,000–2,000** range therefore backs the guard without being able to break add-by-link or a
-normal import day. Pick the number when setting it, write it in this table with the date, and
-keep `SearchTextRequest` / `AutocompletePlacesRequest` at their defaults — refresh never
-touches them.
+**Set 02/09/2026 — one consumer override, one budget, nothing else touched.**
 
-**Billing alert: unverifiable from the CLI today.** Billing account `GoGo billing account`
-(`0137D6-…-A91B4A`) is open and attached to the project, but the **Cloud Billing Budget API is
-not enabled** on `gogo-dev-32632`, so `gcloud billing budgets list` cannot even read whether a
-budget exists. Earlier notes on #15 say none was ever configured. Enabling that API is a
-prerequisite for both reading and setting one; it is free and reversible, and it has not been
-done because this inspection was read-only.
+| What | Value | Proof (read back from Google after the write) |
+| --- | --- | --- |
+| `GetPlaceRequest` per day / project | **2,000** (consumer override; default 125,000) | `effectiveLimit=2000`, `consumerOverride=2000`; operation `quf.p33-…-a450dda3f618` done |
+| `GetPlaceRequest` per minute / project | **600, unchanged** | `effectiveLimit=600`, no override |
+| every other Places method and limit | **default, no override** | full `consumerQuotaMetrics` read-back shows exactly one override in the service |
+| Cloud Billing budget, project-scoped | **$10 USD / month**, thresholds **50 / 80 / 100 %** of current spend, filter `projects/186055730568` | `billingAccounts/0137D6-…-A91B4A/budgets/9858964f-…-0ad4401b7de3` |
+
+Why 2,000 and not the refresh ceiling: this quota covers **every** Place Details call the
+product makes — resolve, submit, CMS approve, bulk import, refresh — as one per-project number,
+while the refresh ceiling is per scope and is 50/day. A full A–E cost-baseline run is ~45
+Details; a 200-row bulk import is ≤ 600. 2,000 leaves DEV room for a real import day and still
+cuts the default blast radius by ~60×. `SearchTextRequest` / `AutocompletePlacesRequest` stay at
+their defaults — refresh never touches them.
+
+The budget is **alerting only** — it stops nothing. A second budget already existed on the
+billing account, `$20 Monthly Budget Alert`, account-wide (no project filter) with thresholds
+50/90/100/150 %; it was left as is. The new one has no `notificationsRule`, so it uses Google's
+default and emails the billing account's admins/users; no Pub/Sub channel is wired.
+`billingbudgets.googleapis.com` was enabled on the project on 02/09/2026 to read and create it.
 
 | Control | Role | State 02/09/2026 |
 | --- | --- | --- |
-| Postgres reservation (`provider_budget_daily`) | **hard internal guard** — refuses the call | CONFIGURED on DEV (`500 / $0 / 500`, being tightened to `50 / $0 / 50`) |
-| `GetPlaceRequestPerDayPerProject` consumer override | **external safety net** — catches what the guard missed | default 125,000, **no override set** |
-| Cloud Billing budget | **alert only** — tells a person, stops nothing | **unknown** — Budget API disabled |
+| Postgres reservation (`provider_budget_daily`) | **hard internal guard** — refuses the call | CONFIGURED on DEV: `50 / $0 / 50 liveness`, core/quality absent → refuse; gate reads `CONFIGURED — 1 of 3` on the real pull path |
+| `GetPlaceRequestPerDayPerProject` consumer override | **external safety net** — catches what the guard missed | **2,000/day** (default 125,000); 600/min unchanged |
+| Cloud Billing budget | **alert only** — tells a person, stops nothing | **$10/month**, project-scoped, 50/80/100 % |
 
 A cap set too low is still not a safe error: it is a hard stop on every Place Details call the
-product makes, not only the refresh job. `scripts/ops/check-quotas.sh` keeps reporting
-`google-quota` as `unknown` until it is taught to read `quotaInfos` — an unknown deliberately
-does not fail the run.
+product makes, not only the refresh job — which is why the override is 2,000 and not 50.
+`scripts/ops/check-quotas.sh` keeps reporting `google-quota` as `unknown` until it is taught to
+read `quotaInfos` — an unknown deliberately does not fail the run. The refresh worker itself is
+**still off** (`FLAG_PLACE_REFRESH` absent); this section records the net, not the switch.
 
 ## App identity
 
