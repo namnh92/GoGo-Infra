@@ -1,0 +1,108 @@
+name: gogo-local-observability
+
+# ADR-0007 §E1/§E2/§E3: this stack runs on 192.168.68.168, never on the BE host
+# at 192.168.68.68. Two machines is what makes self-hosting admissible at all —
+# a dashboard hosted on the machine it watches goes dark exactly when it is
+# needed.
+#
+# §E8: `prometheus_data` and `grafana_data` are persistent DEV state, so
+# `docker compose down -v` here is a DESTRUCTIVE operation. On the BE host the
+# equivalent costs a few minutes of unshipped samples; here it costs the
+# history. Take a backup first — `bin/backup.sh`.
+
+services:
+  prometheus:
+    image: ${PROMETHEUS_IMAGE:?set PROMETHEUS_IMAGE in .env}
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.config.file=/etc/prometheus/web.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION_TIME:-15d}
+      - --storage.tsdb.retention.size=${PROMETHEUS_RETENTION_SIZE:-10GB}
+      - --web.enable-remote-write-receiver
+      # Snapshots are how a backup becomes consistent instead of merely
+      # recent. Reachable only through web.yml's basic auth, and only from the
+      # addresses the firewall admits.
+      - --web.enable-admin-api
+      - --web.listen-address=0.0.0.0:9090
+    ports:
+      # Never 0.0.0.0. `OBS_BIND_IP` has no default here on purpose: an
+      # unset variable must stop the stack, not silently publish it to every
+      # interface the host has.
+      - ${OBS_BIND_IP:?set OBS_BIND_IP in .env — never 0.0.0.0}:${PROMETHEUS_HTTP_PORT:-9090}:9090
+    environment:
+      # web.yml holds only the bcrypt hash. The probe below needs the cleartext
+      # to authenticate against it, and Grafana needs it to scrape — so it
+      # lives in .env, on the host, and nowhere in Git.
+      PROMETHEUS_BASIC_AUTH_USER: ${PROMETHEUS_BASIC_AUTH_USER:?set PROMETHEUS_BASIC_AUTH_USER in .env}
+      PROMETHEUS_BASIC_AUTH_PASSWORD: ${PROMETHEUS_BASIC_AUTH_PASSWORD:?set PROMETHEUS_BASIC_AUTH_PASSWORD in .env}
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # Generated from .env by bin/render-web-config.sh; never committed.
+      - ./prometheus/web.yml:/etc/prometheus/web.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - obs
+    healthcheck:
+      # Basic auth covers every endpoint, `/-/healthy` included, so the probe
+      # authenticates too. `-q -O /dev/null`: it must not print the response
+      # and must not write the credential into a log.
+      test:
+        - CMD-SHELL
+        - >-
+          wget -q -O /dev/null
+          --user="$$PROMETHEUS_BASIC_AUTH_USER"
+          --password="$$PROMETHEUS_BASIC_AUTH_PASSWORD"
+          http://127.0.0.1:9090/-/healthy || exit 1
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  grafana:
+    image: ${GRAFANA_IMAGE:?set GRAFANA_IMAGE in .env}
+    restart: unless-stopped
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_SECURITY_SECRET_KEY: ${GRAFANA_SECRET_KEY:?set GRAFANA_SECRET_KEY in .env}
+      GF_SERVER_ROOT_URL: http://${OBS_PUBLIC_HOST:-192.168.68.168}:${GRAFANA_HTTP_PORT:-3000}/
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+      GF_ANALYTICS_REPORTING_ENABLED: 'false'
+      GF_LOG_MODE: console
+      GF_LOG_LEVEL: warn
+      # The datasource provisioning file reads these, so the scrape credential
+      # is never written into a committed YAML.
+      PROMETHEUS_BASIC_AUTH_USER: ${PROMETHEUS_BASIC_AUTH_USER:?set PROMETHEUS_BASIC_AUTH_USER in .env}
+      PROMETHEUS_BASIC_AUTH_PASSWORD: ${PROMETHEUS_BASIC_AUTH_PASSWORD:?set PROMETHEUS_BASIC_AUTH_PASSWORD in .env}
+    ports:
+      - ${OBS_BIND_IP:?set OBS_BIND_IP in .env — never 0.0.0.0}:${GRAFANA_HTTP_PORT:-3000}:3000
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks:
+      - obs
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O- http://127.0.0.1:3000/api/health >/dev/null || exit 1']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+networks:
+  # Grafana reaches Prometheus over this, at `http://prometheus:9090` — never
+  # back out through the host address. The published port exists for one
+  # writer on another machine; it is not the way this stack talks to itself.
+  obs:
+    driver: bridge
+
+volumes:
+  # Named, because `docker compose down -v` must be an obviously destructive
+  # act rather than a tidy-up that happens to delete the history.
+  prometheus_data:
+  grafana_data:
