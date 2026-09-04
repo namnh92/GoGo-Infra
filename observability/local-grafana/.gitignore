@@ -1,0 +1,10 @@
+.docker/
+.env
+# Generated from .env by bin/render-web-config.sh. web.yml carries a bcrypt
+# hash and basic_auth_password carries the cleartext the self-scrape needs;
+# neither belongs in Git.
+prometheus/web.yml
+prometheus/basic_auth_password
+# Backup artifacts are host state, not source. They are also the one thing here
+# that would be a real leak: a TSDB holds every label value BE has emitted.
+backups/

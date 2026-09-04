@@ -150,6 +150,12 @@ jobs:
       - name: quota thresholds still fire
         run: ./scripts/ops/check-quotas.test.sh
 
+      # A health check whose exit code is wrong is an alarm wired to nothing,
+      # and the DEV observability host is a desktop: asleep, it looks exactly
+      # like a system with nothing to report (ADR-0007 §E4).
+      - name: the observability probe reports unknown, never zero
+        run: ./scripts/ops/check-observability.test.sh
+
       # The provider probe's whole value is the reason code it reports. Routes
       # errors arrive as a JSON array, and reading them as an object turned a
       # live BILLING_DISABLED into "no machine-readable reason" — a confident

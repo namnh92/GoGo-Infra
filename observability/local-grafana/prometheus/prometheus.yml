@@ -1,0 +1,26 @@
+global:
+  scrape_interval: 60s
+  evaluation_interval: 60s
+  external_labels:
+    stack: gogo-local-observability
+
+# No alerting rules here, on purpose. ADR-0006 §D3 stands: MVP paging is Better
+# Stack + healthchecks.io + Sentry, and ADR-0007 changed only where samples
+# live, not what wakes a human. A rule with a guessed threshold on a system
+# with no baseline teaches the team to ignore alerts.
+scrape_configs:
+  # Prometheus watching itself. This is what makes E6's disk/retention check
+  # possible — `prometheus_tsdb_*` and the storage series come from here, and
+  # a self-hosted store's cliff is disk, not a vendor's quota.
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - prometheus:9090
+    basic_auth:
+      # Prometheus does not expand environment variables in this file, so the
+      # username is literal and the password is read from a file that
+      # `bin/render-web-config.sh` writes out of `.env`. That script refuses to
+      # run if `.env` names a different user than this line, so the two cannot
+      # drift into a self-scrape that 401s in silence.
+      username: gogo-obs
+      password_file: /etc/prometheus/basic_auth_password

@@ -1,0 +1,5 @@
+# Local observability host key. Public — pinned, not secret.
+# SHA256:W3alyiQ+wsEw4Ih47f2PD8okMLxNxLfFPkFE6Ewd31w
+# Verified out of band against 192.168.68.168 by the host owner, 2026-09-04.
+192.168.68.168 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICqV9yoSSjD1E1vkuc3k552pr/2iffNhV0QiBTivFVxD
+

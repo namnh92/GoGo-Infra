@@ -1,0 +1,21 @@
+apiVersion: 1
+
+# Grafana reaches Prometheus over the internal `obs` network. Never through
+# ${OBS_BIND_IP}: the published host port exists for one writer on another
+# machine, and routing this stack's own traffic back out through the host would
+# make an internal dependency look like LAN traffic to any firewall rule.
+datasources:
+  - name: GoGo Prometheus Local
+    uid: gogo-prometheus-local
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+    basicAuth: true
+    basicAuthUser: ${PROMETHEUS_BASIC_AUTH_USER}
+    secureJsonData:
+      basicAuthPassword: ${PROMETHEUS_BASIC_AUTH_PASSWORD}
+    jsonData:
+      httpMethod: POST
+      timeInterval: 60s
