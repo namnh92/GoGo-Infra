@@ -1,6 +1,7 @@
 # ADR 0006 — Grafana Cloud holds the samples; Better Stack and Sentry hold the alerts
 
-**Status:** proposed — 04/09/2026
+**Status:** accepted — 04/09/2026
+**Deciders:** product owner + platform
 **Issues:** INF-061. Answers **GoGo-BE ADR-0013 §D3**, which deliberately left this
 open. Constrains gap **G-24** / GoGo-BE#331 (alerts-as-code) and confirms
 GoGo-BE#389's Grafana half stays withdrawn.
