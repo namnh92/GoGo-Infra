@@ -228,8 +228,35 @@ grafana_url="$(get observability/grafana-prom-url)"
 grafana_user="$(get observability/grafana-prom-user)"
 grafana_token="$(get observability/grafana-read-token)"
 
+# Is the configured endpoint actually Grafana Cloud?
+#
+# It stopped being so. ADR-0007 moved the DEV store to a self-hosted Prometheus
+# and `observability/grafana-prom-url` was repurposed to point at it, so this
+# probe was about to run `count({__name__=~".+"})` against a box with no
+# allowance and report the answer as free-tier usage. A number measured against
+# a quota that does not exist is worse than no number: it reads as headroom.
+#
+# `.grafana.net` is a vendor's domain, and shared application code must never
+# branch on one — GoGo-BE's query adapter had exactly that removed under §E7.
+# The asymmetry is the point: this is not shared code, it is a probe of *one
+# vendor's* quota, and a quota is a fact about a vendor. When the endpoint is
+# not theirs, the honest answer is that the question does not apply.
+#
+# §E6: the Grafana Cloud check retires when the Cloud tokens are revoked, not
+# before. Until then it stays here and stays accurate — accurate now including
+# the case where there is nothing of theirs left to measure.
+grafana_host="${grafana_url#*://}"
+grafana_host="${grafana_host%%/*}"
+grafana_host="${grafana_host%%:*}"
+
 if [[ -z "$grafana_url" || -z "$grafana_user" || -z "$grafana_token" ]]; then
   record grafana-series unknown "needs observability/grafana-{prom-url,prom-user,read-token} (INF-054)"
+elif [[ "$grafana_host" != *.grafana.net ]]; then
+  # Deliberately `unknown`, never `ok` and never a count. The free tier is not
+  # in use, so there is no cliff to guard and nothing here to reassure anyone
+  # about.
+  record grafana-series unknown \
+    "not a Grafana Cloud endpoint (${grafana_host:-unset}) — free-tier quota does not apply (ADR-0007 §E1/§E6)"
 elif ! command -v jq >/dev/null 2>&1; then
   record grafana-series unknown "jq not installed"
 else
