@@ -32,7 +32,8 @@ and domain. It does not change the architecture.
                   Cloudflare (DNS / CDN / WAF)
                        │
         ┌──────────────┴───────────────┐
-        │   VPS: docker compose stack  │  GoGo-BE/docker/docker-compose.prod.yml
+        │  DEV host: docker compose    │  GoGo-BE/docker/docker-compose.prod.yml
+        │  192.168.68.68 (LAN)         │  metrics ship to 192.168.68.168
         │   caddy ─┬─ api              │
         │          └─ worker           │
         │   postgres · redis · backup  │
@@ -49,8 +50,19 @@ and domain. It does not change the architecture.
 
 The stack is defined in GoGo-BE; this repository injects `.env.prod` from SSM and drives the
 deploy. See [`vps/README.md`](../vps/README.md) for the boundary, and for the open conflict: that
-stack runs PostgreSQL and Redis on the VPS with a 24-hour RPO, while `GOGO_SRS.md` §6.3 and §10.1
-describe managed services with PITR and RPO under 15 minutes.
+stack runs PostgreSQL and Redis on the DEV host with a 24-hour RPO, while `GOGO_SRS.md` §6.3 and
+§10.1 describe managed services with PITR and RPO under 15 minutes.
+
+**Where the DEV host is, since 2026-09-04** (ADR-0007 / INF-064): a dedicated machine at
+`192.168.68.68` on the local LAN, not a cloud VPS. Nothing above changes shape — Cloudflare still
+fronts it, because the tunnel dials out and never needed an inbound route. Two things follow that
+the diagram cannot show: metrics now ship to a self-hosted Prometheus on a **second** LAN machine
+at `192.168.68.168` rather than to Grafana Cloud, and CI reaches the host over that same tunnel
+with Cloudflare Access in front, because a GitHub-hosted runner cannot route to an RFC1918
+address (INF-068).
+
+"Remote-first" still holds and was never about the cloud: ADR-0004's rule is that DEV is not a
+developer's workstation, and a dedicated LAN machine satisfies it.
 
 ## Control plane
 
