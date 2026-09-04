@@ -37,13 +37,16 @@ COMPOSE_EDGE="${COMPOSE_EDGE:?set COMPOSE_EDGE, e.g. docker/docker-compose.edge-
 # The metrics collector, optional and off unless asked for (INF-054).
 #
 # An overlay rather than a service in the shared stack, because its presence is
-# a decision and not a property of the host: before the Grafana Cloud account
-# exists there is nowhere to write, and a container restart-looping against an
-# empty endpoint is noise that reads as a fault. Observability must never be
+# a decision and not a property of the host: before there is a Prometheus to
+# write to there is nowhere to write, and a container restart-looping against
+# an empty endpoint is noise that reads as a fault. Observability must never be
 # able to look like an outage.
 #
-# Empty by default. The deploy sets it once `observability/grafana-prom-url` is
-# in SSM, which is also the moment `check-quotas.sh` stops reporting unknown.
+# Empty by default. The deploy sets it once `observability/prometheus-remote-
+# write-url` is in SSM (ADR-0007 §E1). It used to key off the Grafana Cloud URL
+# — the store moved to 192.168.68.168 on 2026-09-04, and a gate left pointing
+# at the old variable is worse than no gate, because it deploys the collector
+# in exactly the case where it has nowhere to send.
 COMPOSE_OBSERVABILITY="${COMPOSE_OBSERVABILITY:-}"
 compose_overlays="-f ${COMPOSE_EDGE}"
 [[ -n "$COMPOSE_OBSERVABILITY" ]] && compose_overlays="${compose_overlays} -f ${COMPOSE_OBSERVABILITY}"
