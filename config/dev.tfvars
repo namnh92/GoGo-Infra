@@ -130,17 +130,25 @@ cms_access_emails = [
 tunnel_ingress = {
   "api-dev.gogo.id.vn" = "http://api:3000"
 
-  # INF-068. SSH for the deploy, carried by the tunnel that already dials out
-  # of this host — no inbound port, no A record, nothing listening publicly.
+  # INF-068's `ssh-dev.gogo.id.vn = "ssh://localhost:22"` is DELIBERATELY
+  # ABSENT. Restore it and `access_ssh_hostname` below in the same change, once
+  # the apply token can create Access resources.
   #
-  # `localhost` and not a container name: sshd runs on the host, and the point
-  # of the whole path is to reach the host that runs docker rather than
-  # something inside it. Access is what decides who may connect; this line only
-  # says where the corridor goes.
-  "ssh-dev.gogo.id.vn" = "ssh://localhost:22"
+  # What happened, so nobody re-adds one line and stops: the apply for #127
+  # (run 33857596596) got the DNS record and this ingress rule created, then
+  # died on the service token with
+  #   POST .../access/service_tokens: 403 {"code":1010,"error":"auth.forbidden"}
+  # The Access policy and application depend on that token, so neither was
+  # created — leaving the corridor open with no door in front of it. SSH
+  # published through Cloudflare with nothing deciding who may connect is worse
+  # than the open port it replaces, because it looks private.
+  #
+  # The corridor and the door are one unit and must be applied as one. That is
+  # a property of the deploy path, not a preference: a partial apply here does
+  # not degrade, it exposes.
 }
 
-# The door in front of that corridor. Empty would leave SSH reachable through
-# Cloudflare with no policy, which is worse than the open port it replaces
-# because it looks private.
-access_ssh_hostname = "ssh-dev.gogo.id.vn"
+# Empty until the Access application, policy and service token can all be
+# created in the same apply. Empty sets the module's count to 0, so no Access
+# resource is attempted and no half-built door can be left standing.
+access_ssh_hostname = ""
