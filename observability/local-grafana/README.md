@@ -103,6 +103,28 @@ moves, and whatever still points at the old one goes on reporting healthy.
 with the same precedence GoGo-BE applies, so the probe cannot end up watching a
 different store than the API.
 
+## Versions are pinned to what already runs, by digest
+
+`PROMETHEUS_IMAGE` and `GRAFANA_IMAGE` name the versions **already running on
+this host**, by tag *and* digest. Adopting this stack therefore changes
+authentication, networking, persistence, retention and tooling — and **not the
+application version**.
+
+That is deliberate and it was nearly got wrong. The first draft pinned
+`prom/prometheus:v3.5.5` and `grafana/grafana:12.4.10` against a host running
+3.14.0 and 13.2.1, which would have been a **downgrade onto existing TSDB
+blocks**. Prometheus reads its storage forward, not backward: an older binary
+can refuse blocks a newer one wrote. Hardening must not be able to cost the
+history it exists to protect.
+
+The digest matters beyond the tag. A tag narrows what you get; only a digest
+fixes it, because a tag can be repushed. `sha256:5ce754…` is the artifact that
+was verified running here, not merely one that answers to the same name.
+
+**A version change is a separate task**, with its own backup, compatibility
+check and rollback plan — never bundled into a hardening change. Bundled, a
+failed start has two candidate causes and no clean revert.
+
 ## Backup and restore
 
 ```sh
