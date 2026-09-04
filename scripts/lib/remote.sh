@@ -77,6 +77,30 @@ common_opts=(-i "$SSH_KEY_FILE"
              -o StrictHostKeyChecking=yes
              -o UserKnownHostsFile="$KNOWN_HOSTS_FILE"
              -o IdentitiesOnly=yes)
+
+# INF-068 / ADR-0007 Consequence 1 — reaching a host on a LAN from a runner
+# that has no route to it.
+#
+# DEV moved to 192.168.68.68 on 2026-09-04. A GitHub-hosted runner cannot open
+# a TCP connection to an RFC1918 address, so the transport becomes the tunnel
+# the host already dials out on, with Cloudflare Access deciding who may use
+# it. `cloudflared access ssh` speaks the Access protocol and hands ssh a plain
+# stdio pipe; the service-token headers come from the environment.
+#
+# Set here and nowhere else. This file is the one place that already gathers
+# the flags for both `ssh` and `scp`, and a ProxyCommand added at each call
+# site is how one of them ends up connecting directly and quietly working on
+# whatever machine still has a route.
+#
+# What deliberately does NOT change: StrictHostKeyChecking stays `yes` against
+# the pinned UserKnownHostsFile, and IdentitiesOnly stays on. The proxy changes
+# how the bytes travel, not who is trusted at the other end — Access
+# authenticates the *connection*, and the host key authenticates the *host*.
+# Relaxing either to make the tunnel work would trade a routing problem for an
+# authentication one.
+if [[ -n "${DEPLOY_PROXY_COMMAND:-}" ]]; then
+  common_opts+=(-o ProxyCommand="$DEPLOY_PROXY_COMMAND")
+fi
 ssh_opts=("${common_opts[@]}" -p "$DEPLOY_PORT")
 # Used by deploy-vps.sh only; declared here so the two flag conventions stay
 # side by side, which is what stops the -p/-P confusion from coming back.

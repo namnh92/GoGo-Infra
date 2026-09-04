@@ -1,5 +1,33 @@
 # dev deploy target host key. Public — pinned, not secret.
+#
+# ⚠️ EMPTY ON PURPOSE. The deploy fails closed until the line below exists.
+#
+# DEV moved on 2026-09-04 (ADR-0007): the target is no longer the cloud VPS
+# `vps-dev.gogo.id.vn` but a LAN machine at 192.168.68.68, reached as
+# `ssh-dev.gogo.id.vn` through the tunnel and Cloudflare Access (INF-068).
+#
+# A different machine has a different host key, and this file is the only thing
+# that says which host the deploy is willing to talk to. Nobody can fill it in
+# from a repository: the key has to be read off the host itself, by someone who
+# knows they are looking at the right one. `ssh-keyscan` would answer with
+# whatever is at the other end, which is the question rather than the answer.
+#
+# To complete INF-068, on the DEV host:
+#
+#   ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub    # note the SHA256
+#   cat /etc/ssh/ssh_host_ed25519_key.pub
+#
+# then add one line here as `ssh-dev.gogo.id.vn ssh-ed25519 AAAA…`, record the
+# fingerprint and the verification date in a comment above it, exactly as
+# `known_hosts.local-observability` does.
+#
+# Until then `deploy-dev` stops at "Host key verification failed". That is the
+# intended behaviour and must not be worked around by relaxing
+# StrictHostKeyChecking or by pointing UserKnownHostsFile at /dev/null.
+#
+# Superseded entry, kept for the record. It cannot match anything: the host it
+# named is gone, and a commented line is never consulted.
 # SHA256:ZbQ/hxxRx3LZUose3wqoRi+aQNQx/ohMPoBAFHf2uRo
 # Verified out of band against the host, 2026-08-29. INF-034.
 # vps-dev.gogo.id.vn:22 SSH-2.0-OpenSSH_10.2
-vps-dev.gogo.id.vn ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIArdTaRB2NkQ/qEcsl4JmvsMNAUWooqO4QewhoVf/JX1
+# vps-dev.gogo.id.vn ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIArdTaRB2NkQ/qEcsl4JmvsMNAUWooqO4QewhoVf/JX1

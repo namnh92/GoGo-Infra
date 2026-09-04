@@ -54,6 +54,30 @@ jobs:
             --with-decryption --query 'Parameter.Value' --output text \
             > "${RUNNER_TEMP}/deploy_key"
 
+      # INF-068 / ADR-0007 Consequence 1. DEV is at 192.168.68.68 on a LAN and
+      # this runner has no route to it, so the connection goes through the
+      # tunnel the host already dials out on. cloudflared speaks the Access
+      # protocol and hands ssh a stdio pipe; nothing is listening publicly and
+      # there is no A record.
+      - name: install cloudflared
+        env:
+          # Verified, not trusted. Pinning a version without checking the bytes
+          # means the deploy runs whatever arrives at that URL — and this
+          # binary sits directly in the path to a production-like host.
+          CLOUDFLARED_VERSION: '2026.8.3'
+          CLOUDFLARED_SHA256: f29324fe934d1e100617484c78deef803c4dc2cd351d645bbde42e96b4fccc5e
+        run: |
+          set -euo pipefail
+          url="https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64"
+          # Retries, not a single attempt: the release endpoint has returned
+          # 504 to a burst before, and the habit of re-running until green is
+          # how a real failure gets waved through.
+          curl -sSfL --connect-timeout 10 --retry 8 --retry-delay 10 \
+            --retry-max-time 120 --retry-all-errors -o /tmp/cloudflared "$url"
+          echo "${CLOUDFLARED_SHA256}  /tmp/cloudflared" | sha256sum -c -
+          sudo install -m 755 /tmp/cloudflared /usr/local/bin/cloudflared
+          cloudflared --version
+
       - name: deploy
         env:
           DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
@@ -66,6 +90,27 @@ jobs:
           SSH_KEY_FILE: ${{ runner.temp }}/deploy_key
         run: |
           set -euo pipefail
+          # Access service-token headers. cloudflared reads these from the
+          # environment, so neither value reaches a command line — a secret in
+          # argv is a secret in every `ps` on the runner.
+          CF_ACCESS_CLIENT_ID="$(aws ssm get-parameter \
+            --name /gogo/ci/dev/deploy/access-client-id \
+            --query 'Parameter.Value' --output text)"
+          CF_ACCESS_CLIENT_SECRET="$(aws ssm get-parameter \
+            --name /gogo/ci/dev/deploy/access-client-secret \
+            --with-decryption --query 'Parameter.Value' --output text)"
+          export CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET
+          # Masked as well as exported: a non-zero exit inside cloudflared can
+          # put the value in a log line nobody wrote.
+          echo "::add-mask::${CF_ACCESS_CLIENT_SECRET}"
+
+          # Set once, here, and consumed by scripts/lib/remote.sh, which is the
+          # single place that assembles the flags for both ssh and scp. Host
+          # key verification is unchanged: Access authenticates the connection,
+          # the pinned known_hosts authenticates the host, and neither replaces
+          # the other.
+          export DEPLOY_PROXY_COMMAND="cloudflared access ssh --hostname %h"
+
           # INF-054, retargeted by ADR-0007 §E1 — the collector joins the
           # stack only when it has somewhere to write. Read from the env this
           # deploy just rendered, not from a workflow variable, so the two
