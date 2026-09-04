@@ -1,6 +1,12 @@
 # ADR 0006 — Grafana Cloud holds the samples; Better Stack and Sentry hold the alerts
 
-**Status:** accepted — 04/09/2026
+**Status:** accepted — 04/09/2026; partially superseded 04/09/2026
+**Superseded in part by:** [ADR-0007](0007-dev-lan-topology-and-self-hosted-observability.md) (INF-064) —
+**§D1a** and **§D2a**, the halves requiring Grafana *Cloud*, are superseded;
+**§D5** and **§D6** are amended; **§D1b, §D2b, §D3 and §D4 stand**. What changed
+is DEV's location, not this ADR's reasoning: DEV moved onto the local LAN on
+04/09/2026, so a second machine exists to hold the stack. Nothing below is
+rewritten — read it as written, then read ADR-0007.
 **Deciders:** product owner + platform
 **Issues:** INF-061. Answers **GoGo-BE ADR-0013 §D3**, which deliberately left this
 open. Constrains gap **G-24** / GoGo-BE#331 (alerts-as-code) and confirms
