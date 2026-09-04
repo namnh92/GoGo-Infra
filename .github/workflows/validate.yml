@@ -156,6 +156,13 @@ jobs:
       - name: the observability probe reports unknown, never zero
         run: ./scripts/ops/check-observability.test.sh
 
+      # The stack's images ship BusyBox. A healthcheck written for GNU wget
+      # printed usage text, sat at `unhealthy` for hours, and kept Grafana at
+      # `Created` — because it waits on service_healthy. Caught in production
+      # (DEV), guarded here.
+      - name: observability compose runs on the images it ships
+        run: ./scripts/ci/observability-compose.test.sh
+
       # The provider probe's whole value is the reason code it reports. Routes
       # errors arrive as a JSON array, and reading them as an object turned a
       # live BILLING_DISABLED into "no machine-readable reason" — a confident

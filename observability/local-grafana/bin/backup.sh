@@ -33,8 +33,11 @@ mkdir -p "$dest"
 cd "$here"
 
 echo "==> prometheus: asking for a snapshot"
+# `--header`, computed here on the host: the image's BusyBox wget has no
+# --user/--password and would print its usage text instead of a snapshot name.
+auth="$(printf '%s:%s' "$PROMETHEUS_BASIC_AUTH_USER" "$PROMETHEUS_BASIC_AUTH_PASSWORD" | base64 | tr -d '\n')"
 snapshot="$(docker compose exec -T prometheus wget -q -O- \
-  --user="$PROMETHEUS_BASIC_AUTH_USER" --password="$PROMETHEUS_BASIC_AUTH_PASSWORD" \
+  --header="Authorization: Basic ${auth}" \
   --post-data='' http://127.0.0.1:9090/api/v1/admin/tsdb/snapshot \
   | sed -n 's/.*"name":"\([^"]*\)".*/\1/p')"
 
