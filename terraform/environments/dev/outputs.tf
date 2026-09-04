@@ -52,3 +52,19 @@ output "cms_access_aud" {
   description = "Audience tag GoGo-BE verifies on the Access assertion. Put this in SSM as access/aud."
   value       = try(module.cms_hosting[0].access_aud, "")
 }
+
+output "access_ssh_hostname" {
+  description = "Hostname deploy-dev connects to. Set as the DEPLOY_HOST repository variable."
+  value       = try(module.access_ssh[0].hostname, "")
+}
+
+output "access_ssh_client_id" {
+  description = "CF-Access-Client-Id for the deploy job. Store as access/ssh-client-id in SSM."
+  value       = try(module.access_ssh[0].service_token_client_id, "")
+}
+
+output "access_ssh_client_secret" {
+  description = "CF-Access-Client-Secret. Cloudflare reveals it once, at creation; after that only state holds it. Piped into SSM, never printed."
+  value       = try(module.access_ssh[0].service_token_client_secret, "")
+  sensitive   = true
+}

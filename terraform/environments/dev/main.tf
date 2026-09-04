@@ -586,6 +586,21 @@ module "tunnel" {
   read_connector_token = var.tunnel_read_connector_token
 }
 
+# SSH for the deploy, through the same tunnel and behind Access.
+#
+# ADR-0007 Consequence 1: GitHub-hosted runners cannot route to 192.168.68.68,
+# which broke deploy-dev the moment DEV moved onto the LAN. The tunnel already
+# dials out from that host; this adds the door in front of the corridor, so the
+# hostname is not simply SSH published to the internet through Cloudflare.
+module "access_ssh" {
+  source = "../../modules/cloudflare-access-ssh"
+  count  = var.access_ssh_hostname == "" ? 0 : 1
+
+  account_id  = var.cloudflare_account_id
+  environment = var.environment
+  hostname    = var.access_ssh_hostname
+}
+
 module "dns" {
   source = "../../modules/cloudflare-dns"
   count  = var.cloudflare_zone_id == "" ? 0 : 1

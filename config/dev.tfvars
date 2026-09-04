@@ -129,4 +129,18 @@ cms_access_emails = [
 # network, so the API port is published nowhere at all.
 tunnel_ingress = {
   "api-dev.gogo.id.vn" = "http://api:3000"
+
+  # INF-068. SSH for the deploy, carried by the tunnel that already dials out
+  # of this host — no inbound port, no A record, nothing listening publicly.
+  #
+  # `localhost` and not a container name: sshd runs on the host, and the point
+  # of the whole path is to reach the host that runs docker rather than
+  # something inside it. Access is what decides who may connect; this line only
+  # says where the corridor goes.
+  "ssh-dev.gogo.id.vn" = "ssh://localhost:22"
 }
+
+# The door in front of that corridor. Empty would leave SSH reachable through
+# Cloudflare with no policy, which is worse than the open port it replaces
+# because it looks private.
+access_ssh_hostname = "ssh-dev.gogo.id.vn"

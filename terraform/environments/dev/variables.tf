@@ -186,3 +186,9 @@ variable "cms_access_github_org" {
   type        = string
   default     = ""
 }
+
+variable "access_ssh_hostname" {
+  type        = string
+  default     = ""
+  description = "Hostname the deploy SSHes to, through the tunnel and behind Access. Empty disables the whole path — which is the state before INF-068 is applied, and a deploy fails loudly rather than falling back to a direct connection that cannot work."
+}
