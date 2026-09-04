@@ -8,6 +8,23 @@ The VPS is *remote compute* for the DEV environment, which is what
 `GoGo-Remote-First-Multi-Environment-Infrastructure-Spec.md` requires. It is not a developer
 machine and DEV does not live on laptops.
 
+> **Topology changed 2026-09-04 (ADR-0007 / INF-064).** DEV BE no longer runs on a cloud VPS.
+> It runs on a dedicated machine at `192.168.68.68` on the local LAN, with the observability
+> stack on a second machine at `192.168.68.168`.
+>
+> The rule above is **not** repealed by that. What ADR-0004 required was *DEV is not your
+> workstation*, and a dedicated LAN machine satisfies it exactly as a cloud host did. What is
+> stale is only the assumption that "remote" had to mean "cloud". Everything below about the
+> GoGo-BE / GoGo-Infra boundary, the secrets, and the managed-PostgreSQL target is unchanged.
+>
+> Two practical consequences. Off-LAN developers still reach the API through the Cloudflare
+> Tunnel, which is why moving the host broke nothing for them — they never had its address.
+> And CI cannot reach it at all: a GitHub-hosted runner has no route to an RFC1918 address, so
+> the deploy goes over the tunnel with Cloudflare Access in front (INF-068).
+>
+> The word "VPS" survives in this file and in workflow names because renaming a workflow
+> renames its history. Read it as "the DEV host".
+
 What that spec also settles: production is **managed PostgreSQL with PITR**, not a bigger VPS
 running database containers. A self-hosted PostgreSQL with a nightly `pg_dump` is a transitional
 implementation, never the target. Capacity is the thing that scales from here; the data tier

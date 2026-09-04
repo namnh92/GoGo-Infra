@@ -10,7 +10,9 @@ Three logical environments exist from the start, even though only two are enable
 | Assets | `gogo-dev-assets` | `gogo-staging-assets` | `gogo-prod-assets` |
 | SSM prefix | `/gogo/dev/backend/` | `/gogo/staging/backend/` | `/gogo/prod/backend/` |
 | Terraform state key | `dev/terraform.tfstate` | `staging/terraform.tfstate` | `prod/terraform.tfstate` |
-| Deploy | local processes | on demand | `deploy-production.yml`, approval required |
+| Deploy | `deploy-dev.yml`, over Cloudflare Access SSH | on demand | `deploy-production.yml`, approval required |
+| Host | dedicated machine on the local LAN, `192.168.68.68` — **not** a workstation | — | own host, not yet provisioned |
+| Metrics | self-hosted Prometheus + Grafana on `192.168.68.168` | — | undecided (ADR-0006 §D4) |
 
 ## Naming
 
@@ -32,6 +34,32 @@ copy-paste mistake.
 
 Separate OneSignal applications matter beyond hygiene: sharing one would let a development
 device receive a production push, and would force APNs and FCM configuration to be shared too.
+
+## DEV is production-like, not disposable
+
+Standing principle, from ADR-0007 §E8 (04/09/2026). It is the reason several
+things below look heavier than "it is only dev" would justify.
+
+**DEV is the pre-production proving ground** for deployment, networking,
+persistence, observability, security, rollback, failure recovery and
+operational procedure. It reproduces production's architectural contracts as
+closely as practical.
+
+**DEV may differ from PROD in capacity, SLA, retention, redundancy and cost. It
+may not differ silently in architectural or operational semantics.** Every
+intentional difference is written down; an undocumented one is a defect, not a
+shortcut. The test that settles an argument: *would this configuration be
+refused for PROD?* If it would, "it is only DEV" does not rescue it.
+
+Two things follow that are easy to get backwards:
+
+- **The LAN is a network boundary, not a trusted zone.** DEV moved onto
+  `192.168.68.0/24` on 2026-09-04; that is not the same as moving it inside a
+  perimeter. Ports are restricted explicitly and nothing is public.
+- **Some DEV state is persistent.** The observability TSDB on `192.168.68.168`
+  is DEV state with a backup mechanism, and losing it is not normal operation.
+  That is not in tension with the section below — application data in Neon is
+  seeded and disposable; the infrastructure that runs and watches it is not.
 
 ## DEV data is shared, seeded, and disposable
 

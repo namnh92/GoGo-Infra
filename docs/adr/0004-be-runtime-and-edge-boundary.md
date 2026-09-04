@@ -58,6 +58,16 @@ developer working on GoGo-MobileApp or GoGo-CMS runs neither PostgreSQL nor
 Redis nor object storage nor the API stack on their machine. The workstation is
 a workstation, not an environment.
 
+> **Note added 2026-09-04 (ADR-0007 / INF-064) — this decision is unchanged.**
+> DEV BE moved from a cloud VPS to a dedicated machine at `192.168.68.68` on
+> the local LAN. The rule above is about *whose* machine, not *where* it is:
+> a dedicated host nobody develops on satisfies it, and the requirement that a
+> developer runs no backend infrastructure locally is untouched. What was
+> stale was only the unstated assumption that "remote" meant "cloud".
+>
+> Read alongside ADR-0007, which records what changed and when. Nothing in the
+> Decision below is superseded.
+
 **Migrating BullMQ workers to Cloudflare Queues and Cron Triggers is a future
 architectural migration and is not part of the current infrastructure rollout.**
 It is a legitimate direction; it is not this quarter's work, and treating it as
