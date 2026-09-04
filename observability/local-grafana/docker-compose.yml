@@ -39,8 +39,13 @@ services:
       PROMETHEUS_BASIC_AUTH_PASSWORD: ${PROMETHEUS_BASIC_AUTH_PASSWORD:?set PROMETHEUS_BASIC_AUTH_PASSWORD in .env}
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      # Generated from .env by bin/render-web-config.sh; never committed.
+      # Both generated from .env by bin/render-web-config.sh; never committed.
+      # web.yml is what Prometheus checks credentials against. The password
+      # file is what its OWN self-scrape presents — prometheus.yml names it as
+      # `password_file`, and without this mount that scrape 401s silently, so
+      # `prometheus_tsdb_*` never exists and E6's disk check has nothing to read.
       - ./prometheus/web.yml:/etc/prometheus/web.yml:ro
+      - ./prometheus/basic_auth_password:/etc/prometheus/basic_auth_password:ro
       - prometheus_data:/prometheus
     networks:
       - obs
@@ -48,12 +53,18 @@ services:
       # Basic auth covers every endpoint, `/-/healthy` included, so the probe
       # authenticates too. `-q -O /dev/null`: it must not print the response
       # and must not write the credential into a log.
+      #
+      # `--header`, not `--user`/`--password`. The image ships BusyBox wget,
+      # which has neither flag: it printed its usage text, exited non-zero, and
+      # the container sat at `unhealthy` for hours while Prometheus itself was
+      # fine — which kept Grafana at `Created` forever, because it waits on
+      # `service_healthy`. A probe that cannot run is worse than none: it
+      # reports the one state that blocks everything downstream.
       test:
         - CMD-SHELL
         - >-
           wget -q -O /dev/null
-          --user="$$PROMETHEUS_BASIC_AUTH_USER"
-          --password="$$PROMETHEUS_BASIC_AUTH_PASSWORD"
+          --header="Authorization: Basic $$(printf '%s:%s' "$$PROMETHEUS_BASIC_AUTH_USER" "$$PROMETHEUS_BASIC_AUTH_PASSWORD" | base64 | tr -d '\n')"
           http://127.0.0.1:9090/-/healthy || exit 1
       interval: 30s
       timeout: 5s

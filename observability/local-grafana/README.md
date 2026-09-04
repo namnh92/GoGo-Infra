@@ -56,7 +56,7 @@ stack:
 | --- | --- | --- |
 | Bind address | decides which interface answers | `OBS_BIND_IP`, never `0.0.0.0` |
 | Host firewall | decides who may ask | `firewall/gogo-observability.pf.conf` |
-| Basic auth | decides who is admitted | `bin/render-web-config.sh` → `prometheus/web.yml` |
+| Basic auth | decides who is admitted | `bin/render-web-config.sh` → `prometheus/web.yml` (checked by Prometheus) + `prometheus/basic_auth_password` (presented by its own self-scrape); both mounted read-only |
 
 Port ownership, because the difference is the rule:
 
