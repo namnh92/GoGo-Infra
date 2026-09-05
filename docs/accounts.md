@@ -65,6 +65,26 @@ convenience someone reaches for on a Friday.
 `scripts/ci/check-workflow-auth.test.sh` proves the checker fails on each of those four shapes.
 A checker nobody has watched turn red is a green light, not a check.
 
+### Cost Center collector credentials (INF-060, GoGo-Infra#114)
+
+The Cost Center's usage/cost collectors (GoGo-BE#383–#386) read providers with their own
+**read-only** tokens — never the data-plane credentials the application runs on, and never the
+Terraform tokens. Every row is optional in every environment: absent, the collector is not
+registered and the provider shows freshness UNKNOWN in the CMS; present, the worker registers it
+at boot and logs `<provider> cost collector registered`. Manifest rows are declared under
+`cloudflare/`, `upstash/`, `neon/`, `aws/`, `github/` in `config/secrets.manifest.yml`.
+
+Fill **Created** on the day the value is written with `scripts/secrets/put.sh dev <path>`. A
+blank means the row is declared and the collector is inert — the truthful state, not an outage.
+
+| Credential | SSM path(s) | Scope at the provider | Read by | Runs | Monitoring cost | Created (dev) | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Cloudflare API token | `cloudflare/analytics-token` + `cloudflare/account-id` (+ optional `cloudflare/r2-buckets`, `cloudflare/worker-scripts`) | **Account Analytics: Read** only | worker (`cloudflare_r2`, `cloudflare_workers`) | 4/day each, 2 GraphQL POSTs per run | FREE — no per-query charge | 2026-09-05 | Account id = `config/global.tfvars cloudflare_account_id`. Scope lists keep DEV from reporting PROD's buckets/scripts; leave `gogo-cms-dev` in the worker list or the CMS Worker's requests vanish |
+| Upstash Developer API key + account email | `upstash/api-email`, `upstash/api-key`, `upstash/database-id` | Developer API (management), used read-only: `GET /v2/redis/stats/{id}` | worker (`upstash_redis`) | 4/day, 1 GET | FREE | 2026-09-05 | Email = the GitHub account's primary email for an OAuth login. Database **id** is the UUID in the console, not `gogo-dev-redis` |
+| Neon API key | `neon/api-key` (INF-008), `neon/project-id` | Neon API, used read-only: `GET /projects/{id}` (Free plan) and `GET /consumption_history/projects` (Launch+, answers 403 on Free — handled) | worker (`neon_postgres`) | 4/day, ≤ 2 GETs | FREE — wakes no compute | 2026-09-05 | Project **id** from console → Settings → General. The first run only sets the baseline; deltas appear from the second run. History endpoint is Scale+ (Free/Launch 403) and needs `org_id`, resolved from the project by GoGo-BE#411 |
+| AWS IAM user, dedicated | `aws/cost-explorer-access-key-id`, `aws/cost-explorer-secret-access-key` | IAM policy: exactly `ce:GetCostAndUsage` on `*`. Cost Explorer must be enabled on account `477020169756` first (up to 24 h before the API answers) | worker (`aws_cost_explorer`) | **1/day**, cap enforced from `cost_source_freshness` | **PER_REQUEST $0.01 → ~$0.30/month** — the only paid collector; inside the $1/month DEV budget | | Only static key GoGo holds by design — `check-workflow-auth.sh` forbids it in CI, and it is never a fallback to the ambient identity |
+| GitHub fine-grained PAT | `github/billing-token`, `github/billing-account` | Account permission **Plan: read**, no repository access | worker (`github_actions`) | 4/day, 1 GET (2 across a month boundary) | FREE | | `GET /users/<login>/settings/billing/usage` (enhanced billing platform). A probe with the `gh` CLI token answered 404 on 2026-09-05 — that token lacks Plan: read; confirm the account is on the enhanced platform with the real token before trusting a 404 as "wrong login" |
+
 ## 3. Personal identity is a bus factor — accepted, with a revisit trigger
 
 The accounts hang off one personal GitHub identity. If that account is lost, disabled, or the
@@ -110,7 +130,7 @@ Fill in as accounts are created. "Owner" is a person; "backup" must not be the s
 | Provider | Account / project name | Login | Owner | Backup owner | Recovery path | Created |
 | --- | --- | --- | --- | --- | --- | --- |
 | Neon | `gogo-dev` | GitHub OAuth | | **none** | | |
-| Upstash | `gogo-dev-redis` | GitHub OAuth | | **none** | | |
+| Upstash | `gogo-dev` — endpoint `secure-rattler-216851.upstash.io`, Free plan; recreated 2026-09-05 (the earlier `gogo-dev-redis` / `trusting-cougar-204025` no longer exists in the account) | GitHub OAuth | | **none** | | 2026-09-05 |
 | Cloudflare | account `0c279927…e570b7b`, zone `gogo.id.vn` | GitHub OAuth | | **none** | | |
 | OneSignal | `GoGo Development` | GitHub OAuth | | **none** | | |
 | OneSignal | `GoGo Production` | GitHub OAuth | | **none** | | |
