@@ -90,19 +90,27 @@ jobs:
           SSH_KEY_FILE: ${{ runner.temp }}/deploy_key
         run: |
           set -euo pipefail
-          # Access service-token headers. cloudflared reads these from the
-          # environment, so neither value reaches a command line — a secret in
-          # argv is a secret in every `ps` on the runner.
-          CF_ACCESS_CLIENT_ID="$(aws ssm get-parameter \
+          # Access service token, in the environment variables cloudflared
+          # actually reads: `cloudflared access ssh --help` lists
+          # [$TUNNEL_SERVICE_TOKEN_ID] and [$TUNNEL_SERVICE_TOKEN_SECRET]. The
+          # first version exported CF_ACCESS_CLIENT_ID/SECRET — the names of the
+          # HTTP *headers* the token travels in, which cloudflared never looks
+          # at as env vars. It then sent no token at all, Access refused at the
+          # edge, and the deploy died on `websocket: bad handshake` with nothing
+          # in the tunnel's logs to explain why (run 33938635470).
+          #
+          # Environment rather than flags, so neither value reaches a command
+          # line — a secret in argv is a secret in every `ps` on the runner.
+          TUNNEL_SERVICE_TOKEN_ID="$(aws ssm get-parameter \
             --name /gogo/ci/dev/deploy/access-client-id \
             --query 'Parameter.Value' --output text)"
-          CF_ACCESS_CLIENT_SECRET="$(aws ssm get-parameter \
+          TUNNEL_SERVICE_TOKEN_SECRET="$(aws ssm get-parameter \
             --name /gogo/ci/dev/deploy/access-client-secret \
             --with-decryption --query 'Parameter.Value' --output text)"
-          export CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET
+          export TUNNEL_SERVICE_TOKEN_ID TUNNEL_SERVICE_TOKEN_SECRET
           # Masked as well as exported: a non-zero exit inside cloudflared can
           # put the value in a log line nobody wrote.
-          echo "::add-mask::${CF_ACCESS_CLIENT_SECRET}"
+          echo "::add-mask::${TUNNEL_SERVICE_TOKEN_SECRET}"
 
           # Set once, here, and consumed by scripts/lib/remote.sh, which is the
           # single place that assembles the flags for both ssh and scp. Host

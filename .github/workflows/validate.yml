@@ -163,6 +163,12 @@ jobs:
       - name: observability compose runs on the images it ships
         run: ./scripts/ci/observability-compose.test.sh
 
+      # The Access SSH deploy path failed twice on things a grep would have
+      # caught: the wrong env var names for the service token, and an ingress
+      # that pointed at the tunnel container's own loopback.
+      - name: the Access SSH deploy path is wired to what cloudflared reads
+        run: ./scripts/ci/access-ssh.test.sh
+
       # The provider probe's whole value is the reason code it reports. Routes
       # errors arrive as a JSON array, and reading them as an object turned a
       # live BILLING_DISABLED into "no machine-readable reason" — a confident

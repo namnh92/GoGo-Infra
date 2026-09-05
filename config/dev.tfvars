@@ -133,10 +133,14 @@ tunnel_ingress = {
   # INF-068. SSH for the deploy, carried by the tunnel that already dials out
   # of this host — no inbound port, no A record, nothing listening publicly.
   #
-  # `localhost` and not a container name: sshd runs on the host, and the point
-  # of the whole path is to reach the host that runs docker rather than
-  # something inside it. Access is what decides who may connect; this line only
-  # says where the corridor goes.
+  # `host.docker.internal`, because cloudflared itself runs as a container in
+  # the BE compose stack: from inside it `localhost:22` is the container's own
+  # loopback, where nothing listens, and the first version of this line said
+  # exactly that (run 33938635470 never reached sshd). sshd runs on the Mac.
+  # Docker Desktop resolves this name to the host (192.168.65.254 on the
+  # internal network); if the runtime ever changes, so must this line. Access
+  # is what decides who may connect; this line only says where the corridor
+  # goes.
   #
   # This line and `access_ssh_hostname` below are ONE UNIT. The first attempt
   # (run 33857596596) applied this rule, then died creating the service token
@@ -146,7 +150,7 @@ tunnel_ingress = {
   # with no door. A partial apply here does not degrade, it exposes. Both
   # tokens have since been granted Access permissions (write: Edit, read:
   # Read), so the set applies together or not at all.
-  "ssh-dev.gogo.id.vn" = "ssh://localhost:22"
+  "ssh-dev.gogo.id.vn" = "ssh://host.docker.internal:22"
 }
 
 # The door in front of that corridor. Empty would leave SSH reachable through
