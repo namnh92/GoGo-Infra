@@ -50,5 +50,20 @@ else
   fail "OBS_BIND_IP has a default or is not required"
 fi
 
+# 6. pf: the default-deny block must not say `quick`. pf keeps the LAST match
+#    unless a rule says quick; a quick block listed first wins before any pass
+#    rule is read, and cut off the BE host — the one writer :9090 exists for.
+pf="$d/firewall/gogo-observability.pf.conf"
+if grep -E '^[[:space:]]*block[^#]*\bquick\b' "$pf" >/dev/null; then
+  fail "pf anchor has a quick block rule; it will win before any pass rule is consulted"
+else
+  ok "pf default-deny carries no quick, so pass rules can still match"
+fi
+if grep -E '^[[:space:]]*pass[[:space:]]+in[[:space:]]+quick' "$pf" | grep -q 'port 9090'; then
+  ok "pf has a quick pass for the BE writer on :9090"
+else
+  fail "pf lacks a quick pass rule for :9090"
+fi
+
 if (( fails > 0 )); then echo "${fails} check(s) failed" >&2; exit 1; fi
 echo "all checks passed"
