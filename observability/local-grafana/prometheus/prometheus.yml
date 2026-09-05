@@ -4,6 +4,33 @@ global:
   external_labels:
     stack: gogo-local-observability
 
+# Accept what the collector sends back after an outage (ADR-0007 §E8).
+#
+# Alloy's remote_write WAL is a send buffer. When this host is unreachable the
+# collector keeps retrying and buffering; when it comes back it replays what it
+# held. With no out-of-order window every replayed sample older than the fresh
+# head's accepted range is refused with `400 out of bounds`, Alloy marks the
+# batch non-recoverable and stalls, and the only way out was a manual restart of
+# the collector — which also discards the buffered window, i.e. exactly the
+# minutes someone will want to look at. That happened twice on 2026-09-04/05.
+#
+# The window equals the collector's replay horizon, measured not guessed:
+# GoGo-BE's config.alloy sets no `wal {}` block, so Alloy's documented defaults
+# apply — min_keepalive_time 5m, truncate_frequency 2h, max_keepalive_time 8h.
+# Samples are forcibly dropped from the WAL only once older than 8h, so 8h is
+# the most the collector can ever replay. A 2h window would have covered a
+# fraction of the 7h56m outage that motivated this.
+#
+# BOUNDARY, stated plainly: this is NOT unlimited historical backfill. A sample
+# older than 8h when it arrives is still rejected. An outage longer than 8h
+# loses the excess on the collector side (WAL truncation) regardless of this
+# setting, and the collector may still need a restart in that case. The setting
+# makes recovery within the buffer's own horizon automatic; it does not extend
+# the buffer.
+storage:
+  tsdb:
+    out_of_order_time_window: 8h
+
 # No alerting rules here, on purpose. ADR-0006 §D3 stands: MVP paging is Better
 # Stack + healthchecks.io + Sentry, and ADR-0007 changed only where samples
 # live, not what wakes a human. A rule with a guessed threshold on a system

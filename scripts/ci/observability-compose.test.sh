@@ -65,5 +65,19 @@ else
   fail "pf lacks a quick pass rule for :9090"
 fi
 
+# 7. The out-of-order window must cover the collector's replay horizon. Alloy's
+#    default max_keepalive_time is 8h (no wal{} block in GoGo-BE's config.alloy),
+#    so anything below 8h re-opens the stall this guards against. Parsed, not
+#    grepped for a literal, so "480m" or "1d" also pass.
+win="$(sed -nE 's/^[[:space:]]*out_of_order_time_window:[[:space:]]*([0-9]+)([smhd])[[:space:]]*$/\1 \2/p' "$d/prometheus/prometheus.yml" | head -1)"
+if [[ -z "$win" ]]; then
+  fail "prometheus.yml sets no storage.tsdb.out_of_order_time_window; post-outage replay will be refused"
+else
+  n="${win% *}"; u="${win#* }"
+  case "$u" in s) secs=$n ;; m) secs=$((n*60)) ;; h) secs=$((n*3600)) ;; d) secs=$((n*86400)) ;; esac
+  if (( secs >= 8*3600 )); then ok "out_of_order_time_window ${n}${u} covers Alloy's 8h max_keepalive_time"
+  else fail "out_of_order_time_window ${n}${u} is below Alloy's 8h replay horizon"; fi
+fi
+
 if (( fails > 0 )); then echo "${fails} check(s) failed" >&2; exit 1; fi
 echo "all checks passed"
