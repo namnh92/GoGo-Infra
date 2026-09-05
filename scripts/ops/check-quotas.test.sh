@@ -85,44 +85,19 @@ STUB
 chmod +x "${tmp}/bin/aws"
 expect 0 "checks that cannot run do not fail the build"
 
-# --- a self-hosted endpoint is not a Grafana Cloud quota (ADR-0007 §E1/§E6) --
+# --- the Grafana Cloud probe is retired (ADR-0007 §E6, 2026-09-05) ----------
 #
-# `observability/grafana-prom-url` was repurposed to the self-hosted Prometheus
-# during the DEV migration. Before this guard the probe queried that box for
-# `count({__name__=~".+"})` and reported the answer against a 10,000-series
-# allowance nobody is subject to — a number measured against a quota that does
-# not exist, which reads as headroom. It must report `unknown`, and it must not
-# print a count.
-cat >"${tmp}/bin/aws" <<'STUB'
-#!/usr/bin/env bash
-case " $* " in
-  *" sts "*) exit 0 ;;
-  *observability/grafana-prom-url*)  printf 'http://192.168.68.168:9090/api/v1/write'; exit 0 ;;
-  *observability/grafana-prom-user*) printf 'local-prometheus'; exit 0 ;;
-  *observability/grafana-read-token*) printf 'stub-not-a-real-token'; exit 0 ;;
-esac
-exit 1
-STUB
-chmod +x "${tmp}/bin/aws"
-
+# A row that can only say `unknown` forever is noise dressed as vigilance. The
+# self-hosted store's limit is disk, measured by check-observability.sh. This
+# guards against the block being pasted back in from an old branch.
 out="$("$SCRIPT" dev 2>/dev/null)"
-if printf '%s' "$out" | grep -E '^  \?     grafana-series' >/dev/null; then
-  echo "  ok    a self-hosted endpoint reports unknown, not a quota reading"
-  pass=$(( pass + 1 ))
-else
-  echo "  FAIL  grafana-series is not unknown against a non-Cloud endpoint" >&2
-  fail=$(( fail + 1 ))
-fi
-
-if printf '%s' "$out" | grep -q 'active series of'; then
-  echo "  FAIL  a free-tier count was printed for a store with no free tier" >&2
+if printf '%s' "$out" | grep -q 'grafana-series'; then
+  echo "  FAIL  grafana-series row is back; the Cloud probe was retired under ADR-0007 §E6" >&2
   fail=$(( fail + 1 ))
 else
-  echo "  ok    and prints no series count, because the allowance does not apply"
+  echo "  ok    no grafana-series row: the Cloud probe stays retired"
   pass=$(( pass + 1 ))
 fi
-
-expect 0 "a non-Cloud endpoint does not fail the run"
 
 # --- the Maps SDK row is a stated gap, not an omission (INF-056) ------------
 #

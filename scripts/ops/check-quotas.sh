@@ -215,80 +215,15 @@ record google-quota unknown "needs Cloud Monitoring access; not stored (INF-015)
 # which is exactly true here, and it does not set the exit code.
 record google-maps-sdk unknown "iOS + Android map loads are billed in-app; needs Cloud Monitoring (INF-015, INF-055, INF-056)"
 
-# ── Grafana Cloud: active series against the free tier ───────────────────────
+# ── Grafana Cloud: retired 2026-09-05 (ADR-0007 §E6) ────────────────────────
 #
-# Free is 10 000 active series. The failure mode is the one this whole script
-# exists for: a free tier stops rather than degrades, and metrics arriving
-# nowhere looks exactly like a system with nothing to report.
-#
-# The read token is the right credential here — usage is a read, and this runs
-# unattended. Absent, this reports unknown, which is the honest answer while
-# INF-054's account does not exist yet.
-grafana_url="$(get observability/grafana-prom-url)"
-grafana_user="$(get observability/grafana-prom-user)"
-grafana_token="$(get observability/grafana-read-token)"
-
-# Is the configured endpoint actually Grafana Cloud?
-#
-# It stopped being so. ADR-0007 moved the DEV store to a self-hosted Prometheus
-# and `observability/grafana-prom-url` was repurposed to point at it, so this
-# probe was about to run `count({__name__=~".+"})` against a box with no
-# allowance and report the answer as free-tier usage. A number measured against
-# a quota that does not exist is worse than no number: it reads as headroom.
-#
-# `.grafana.net` is a vendor's domain, and shared application code must never
-# branch on one — GoGo-BE's query adapter had exactly that removed under §E7.
-# The asymmetry is the point: this is not shared code, it is a probe of *one
-# vendor's* quota, and a quota is a fact about a vendor. When the endpoint is
-# not theirs, the honest answer is that the question does not apply.
-#
-# §E6: the Grafana Cloud check retires when the Cloud tokens are revoked, not
-# before. Until then it stays here and stays accurate — accurate now including
-# the case where there is nothing of theirs left to measure.
-grafana_host="${grafana_url#*://}"
-grafana_host="${grafana_host%%/*}"
-grafana_host="${grafana_host%%:*}"
-
-if [[ -z "$grafana_url" || -z "$grafana_user" || -z "$grafana_token" ]]; then
-  record grafana-series unknown "needs observability/grafana-{prom-url,prom-user,read-token} (INF-054)"
-elif [[ "$grafana_host" != *.grafana.net ]]; then
-  # Deliberately `unknown`, never `ok` and never a count. The free tier is not
-  # in use, so there is no cliff to guard and nothing here to reassure anyone
-  # about.
-  record grafana-series unknown \
-    "not a Grafana Cloud endpoint (${grafana_host:-unset}) — free-tier quota does not apply (ADR-0007 §E1/§E6)"
-elif ! command -v jq >/dev/null 2>&1; then
-  record grafana-series unknown "jq not installed"
-else
-  # `count({__name__=~".+"})` over the query endpoint: the number of series
-  # carrying a sample right now, which is what the allowance is measured in.
-  # The write URL ends in /api/prom/push; the query API is its sibling.
-  query_url="${grafana_url%/push}"
-  query_url="${query_url%/api/prom}/api/prom/api/v1/query"
-  body="$(curl -sS --max-time 20 -u "${grafana_user}:${grafana_token}" \
-    --data-urlencode 'query=count({__name__=~".+"})' "$query_url" 2>/dev/null || true)"
-  # A successful query over an empty stack returns `result: []`, and that is an
-  # answer — zero series — not a failed measurement. Reading only
-  # `.result[0]` reported `unknown` for it, which is the one thing this script
-  # is careful not to do: `unknown` means nobody looked.
-  status="$(printf '%s' "$body" | jq -r '.status // empty' 2>/dev/null)"
-  if [[ "$status" == "success" ]]; then
-    series="$(printf '%s' "$body" | jq -r '.data.result[0].value[1] // "0"' 2>/dev/null)"
-  else
-    series=""
-  fi
-  free_series=10000
-  if [[ -z "$series" ]]; then
-    reason="$(printf '%s' "$body" | jq -r '.error // "query endpoint returned nothing usable"' 2>/dev/null)"
-    record grafana-series unknown "${reason}"
-  elif [[ "${series%.*}" -gt "$free_series" ]]; then
-    record grafana-series breach "${series%.*} active series of ${free_series} free"
-  elif [[ "${series%.*}" -gt $(( free_series * 70 / 100 )) ]]; then
-    record grafana-series warn "${series%.*} active series, over 70% of ${free_series} free"
-  else
-    record grafana-series ok "${series%.*} active series of ${free_series} free"
-  fi
-fi
+# The DEV store is the self-hosted Prometheus at 192.168.68.168, and a
+# self-hosted store has no free tier and no cliff to guard — its limit is disk
+# and retention, which `scripts/ops/check-observability.sh` measures against
+# the configured retention size. The Cloud tokens were revoked at the provider
+# and the `observability/grafana-*` parameters deleted, so a probe here could
+# only ever report `unknown`, which is noise dressed as vigilance. It was kept
+# exactly as long as §E6 said to: through the rollback window, not past it.
 
 if [[ "$AS_JSON" == "yes" ]]; then
   printf '{"environment":"%s","results":[' "$ENVIRONMENT"

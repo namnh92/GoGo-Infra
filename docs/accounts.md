@@ -35,7 +35,7 @@ automation credential be rotated without touching anyone's login.
 | Tenjin | GitHub OAuth | SDK Key per app | mobile build config — nothing in SSM |
 | Google Cloud | Google account | server API keys, split per API | `/gogo/<env>/backend/google/*` |
 | Google Cloud (client) | Google account | Maps SDK keys, one per platform — ship in the app binary, restricted by app id | `/gogo/<env>/mobile/google/*` |
-| Grafana Cloud | GitHub OAuth | access policy tokens, one per scope (`metrics:write` for the collector, `metrics:read` for the admin API). **Being retired** — ADR-0007 moved the DEV store self-hosted on 2026-09-04; these stay valid through the rollback window and are revoked last | `/gogo/<env>/backend/observability/grafana-*` |
+| Grafana Cloud | GitHub OAuth | access policy tokens, one per scope (`metrics:write` for the collector, `metrics:read` for the admin API). **Retired 2026-09-05** — ADR-0007 moved the DEV store self-hosted on 2026-09-04; tokens revoked at the provider after the shared end-to-end gate passed, SSM parameters and manifest entries removed (see `secrets.md` rotation register) | `/gogo/<env>/backend/observability/grafana-*` |
 | Self-hosted observability | none — LAN host | Prometheus basic auth, one credential for read and write | `/gogo/<env>/backend/observability/prometheus-*` |
 | AWS | IAM / SSO | GitHub OIDC, no static keys | n/a — roles are assumed, nothing is stored |
 
@@ -116,7 +116,7 @@ Fill in as accounts are created. "Owner" is a person; "backup" must not be the s
 | OneSignal | `GoGo Production` | GitHub OAuth | | **none** | | |
 | Tenjin | | GitHub OAuth | | **none** | | |
 | Google Cloud | project number `186055730568` — every DEV server key | Google | | **none** | | |
-| Grafana Cloud | Free stack `prometheus-prod-37-prod-ap-southeast-1`, instance id `3553140` — dev and prod share it via an `env` label. Superseded for DEV by ADR-0007 on 04/09/2026; kept live for the rollback window | GitHub OAuth | | **none** | | 01/09/2026 |
+| Grafana Cloud | Free stack `prometheus-prod-37-prod-ap-southeast-1`, instance id `3553140` — dev and prod share it via an `env` label. Superseded for DEV by ADR-0007 on 04/09/2026; tokens revoked 05/09/2026 after cutover | GitHub OAuth | | **none** | | 01/09/2026 |
 | AWS | account `477020169756` | IAM / SSO | | **none** | | |
 
 The account identifiers are filled from `config/global.tfvars` and `config/dev.tfvars`. The
