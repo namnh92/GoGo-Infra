@@ -164,6 +164,26 @@ retention. The mechanism is still not optional.
   request path: Alloy's WAL is a bounded send buffer with capped backoff, and
   the API binds no query port rather than blocking on one.
 
+## Recovery after an outage is automatic — within the buffer's horizon
+
+Prometheus runs with `storage.tsdb.out_of_order_time_window: 8h`, set in
+`prometheus/prometheus.yml`. That is the collector's replay horizon: GoGo-BE's
+`config.alloy` sets no `wal {}` block, so Alloy's defaults apply and it holds
+samples for at most `max_keepalive_time = 8h`. When this host comes back after
+being unreachable, everything Alloy buffered is accepted and the gap in every
+graph fills in — with no restart of the collector, and nothing lost.
+
+Without it, replayed samples were refused as `out of bounds`, Alloy stalled on
+the non-recoverable batch, and the only fix was restarting the collector, which
+threw the buffered window away. That happened twice on 2026-09-04/05.
+
+**The boundary:** this is not unlimited backfill. A sample older than 8h on
+arrival is still rejected, and an outage longer than 8h loses the excess in the
+collector's WAL regardless — that is Alloy's truncation, not this setting. The
+window makes recovery *inside* the buffer's horizon automatic; it does not make
+the buffer bigger. If the Alloy WAL settings ever change, this value must be
+re-derived from them, not left as is.
+
 ## The host is a desktop
 
 It is kept awake by `caffeinate`, via `launchd/com.gogo.observability.caffeinate.plist`.
