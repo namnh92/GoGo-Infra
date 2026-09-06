@@ -34,8 +34,10 @@ the change, because the file contents are part of the resource.
 4. Otherwise a plain `text/plain`, `no-store` answer that names no URL.
 
 Never a redirect to the canonical URL itself: that is the route being served, so it loops.
-`fallback_url` is validated (Terraform) and re-checked in the worker: https only and never under
-`/l/` on any host. Sharing keeps working through every step (`GOGO_SRS.md` FR-LINK-006); only
+`fallback_url` is validated (Terraform) and re-checked in the worker: https only, no credentials
+in the URL, and never under `/l/` on any host. The credential rule matters because this value is
+sent to every clicker without the app in a `Location` header — GoGo-BE refuses the same shape for
+`SHARE_LINK_BASE_URL`. Sharing keeps working through every step (`GOGO_SRS.md` FR-LINK-006); only
 attribution is lost.
 
 ## Degradation

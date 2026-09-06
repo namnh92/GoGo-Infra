@@ -104,8 +104,16 @@ function fallback(canonical, env) {
       const url = new URL(env.FALLBACK_URL)
       // A landing page under /l/ — on this host or any other — is this route
       // again: a redirect there is the loop this function exists to prevent.
-      // Terraform refuses the value too; this is the last line of defence.
-      if (url.protocol === 'https:' && !/^\/l(\/|$)/.test(url.pathname)) {
+      // Credentials are refused for a different reason: this URL goes out in a
+      // Location header to everyone who clicks without the app, so a
+      // `user:pw@host` here publishes them.
+      // Terraform refuses both; this is the last line of defence.
+      if (
+        url.protocol === 'https:' &&
+        !url.username &&
+        !url.password &&
+        !/^\/l(\/|$)/.test(url.pathname)
+      ) {
         url.searchParams.set('link', canonical)
         return new Response(null, {
           status: 302,

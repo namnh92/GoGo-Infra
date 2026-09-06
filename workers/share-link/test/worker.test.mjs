@@ -73,12 +73,16 @@ describe('share-link worker', () => {
     assert.equal(res.headers.get('cache-control'), 'no-store')
   })
 
-  it('a landing page under /l/ is the loop it must not follow (review finding 5)', async () => {
+  it('refuses a fallback that loops, is not https, or carries credentials (findings 5 and R7)', async () => {
     for (const bad of [
       `https://${HOST}/l/${SLUG}`,
       `https://${HOST}/l`,
       'https://other.example/l/anything',
       'http://gogo.id.vn/get-app',
+      // R7: this would put the credentials in a Location header sent to every
+      // clicker without the app.
+      'https://user:pw@gogo.id.vn/get-app',
+      'https://user@gogo.id.vn/get-app',
       'not a url',
     ]) {
       const res = await click(env({ FALLBACK_URL: bad }))

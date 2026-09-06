@@ -59,12 +59,19 @@ variable "fallback_url" {
   default = ""
 
   validation {
-    # https only, and never a path under /l/ — that is the route this worker
-    # serves, so such a value would redirect every click back to itself.
+    # Three things, and the third is the one that is easy to miss:
+    #   https only;
+    #   never a path under /l/ — that is the route this worker serves, so such
+    #     a value would redirect every click back to itself;
+    #   no credentials in the authority — `[^/?#@]` rejects `user:pw@host`.
+    #     This value is sent to every clicker without the app, in a Location
+    #     header, so a credential in it is a credential published. GoGo-BE
+    #     refuses the same shape for SHARE_LINK_BASE_URL; the two rules cover
+    #     the same class of value and must agree.
     condition = var.fallback_url == "" || (
-      can(regex("^https://[^/?#]+(/[^?#]*)?(\\?[^#]*)?$", var.fallback_url)) &&
+      can(regex("^https://[^/?#@]+(/[^?#]*)?(\\?[^#]*)?$", var.fallback_url)) &&
       !can(regex("^https://[^/?#]+/l(/|$)", var.fallback_url))
     )
-    error_message = "fallback_url must be empty or an https URL that is not under /l/ on any host."
+    error_message = "fallback_url must be empty or an https URL with no credentials, not under /l/ on any host."
   }
 }
