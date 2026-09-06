@@ -24,12 +24,24 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/remote.sh"
 echo "==> Recording the running revision for rollback"
 # Captured before anything changes. Without it a rollback has to guess, and
 # guessing during an incident is how the wrong revision goes back out.
+# INF-071: reachability first, and separately. `|| true` used to swallow a
+# connection failure into an empty `previous`, which then printed "first
+# deploy" — the retry after the outage said exactly that about a host that had
+# been deployed a dozen times. A host we cannot reach is a hard stop, not a
+# fresh one.
+if ! remote "true" >/dev/null 2>&1; then
+  echo "cannot reach ${DEPLOY_USER}@${DEPLOY_HOST} — refusing to deploy." >&2
+  echo "If a previous deploy stopped the access tunnel, it must be started on the host:" >&2
+  echo "  cd ${DEPLOY_PATH} && ${COMPOSE} up -d --no-recreate ${ACCESS_SERVICES}" >&2
+  exit 1
+fi
+
 previous="$(remote "cd '${DEPLOY_PATH}' && git rev-parse HEAD" 2>/dev/null || true)"
 if [[ -n "$previous" ]]; then
   echo "    current: ${previous}"
   remote "printf '%s' '${previous}' > '${DEPLOY_PATH}/.previous-revision'"
 else
-  echo "    no previous revision found — first deploy"
+  echo "    no previous revision recorded — treating as a first deploy"
 fi
 
 echo "==> Fetching ${RELEASE_REF}"
@@ -75,8 +87,65 @@ echo "==> Running migrations"
 # revision still runs against this schema if the health check fails.
 remote "cd '${DEPLOY_PATH}' && ${COMPOSE} run --rm migrate"
 
+echo "==> Ensuring the access tunnel is up (never recreated)"
+# --no-recreate: present-and-running is left exactly alone. This is the command
+# that used to take the deploy's own SSH path down with it (INF-071).
+remote "cd '${DEPLOY_PATH}' && ${COMPOSE} up -d --no-recreate ${ACCESS_SERVICES}"
+
 echo "==> Starting the stack"
-remote "cd '${DEPLOY_PATH}' && ${COMPOSE} up -d --remove-orphans"
+# Named services, and no --remove-orphans: the flag would delete anything not
+# in this compose set, which is precisely how a separately-managed access
+# container would disappear the first time one exists.
+remote "cd '${DEPLOY_PATH}' && ${COMPOSE} up -d ${DEPLOY_SERVICES}"
+
+# INF-071 — verify, then decide. The incident left four containers `Created`
+# and nothing noticed, because the step that would have noticed was skipped
+# when the previous step failed. Verification has to be its own step that runs
+# on the way out, not a health check hanging off the end.
+verify_running() {
+  local missing=""
+  for svc in ${ACCESS_SERVICES} ${DEPLOY_SERVICES}; do
+    local state
+    state="$(remote "cd '${DEPLOY_PATH}' && ${COMPOSE} ps --format '{{.Service}} {{.State}}' 2>/dev/null | awk -v s='${svc}' '\$1==s {print \$2}'" || true)"
+    state="$(printf '%s' "$state" | tr -d '[:space:]')"
+    [[ "$state" == "running" ]] || missing="${missing} ${svc}(${state:-absent})"
+  done
+  printf '%s' "$missing"
+}
+
+echo "==> Verifying every service is running"
+not_running="$(verify_running)"
+if [[ -n "$not_running" ]]; then
+  echo "    NOT running:${not_running}" >&2
+  if [[ -n "${previous:-}" ]]; then
+    echo "==> Rolling back to ${previous}"
+    remote "cd '${DEPLOY_PATH}' && git checkout --detach '${previous}'"
+    remote "cd '${DEPLOY_PATH}' && ${COMPOSE} build api worker migrate"
+    remote "cd '${DEPLOY_PATH}' && ${COMPOSE} up -d ${DEPLOY_SERVICES}"
+    still="$(verify_running)"
+    if [[ -n "$still" ]]; then
+      echo "ROLLBACK DID NOT RESTORE SERVICE:${still}" >&2
+      echo "The host needs hands. Access tunnel recovery, on the host itself:" >&2
+      echo "  cd ${DEPLOY_PATH} && ${COMPOSE} up -d --no-recreate ${ACCESS_SERVICES}" >&2
+      exit 1
+    fi
+    echo "    rolled back and verified running"
+    exit 1
+  fi
+  echo "no previous revision to roll back to — the host needs hands." >&2
+  exit 1
+fi
+echo "    all running: ${ACCESS_SERVICES} ${DEPLOY_SERVICES}"
+
+# The access path is what the *next* deploy needs. Proving it still answers
+# after this one is the cheapest possible check and the one whose absence
+# turned a broken pipe into a lockout.
+echo "==> Verifying the management path still answers"
+if ! remote "true" >/dev/null 2>&1; then
+  echo "the access path stopped answering after this deploy — the host needs hands." >&2
+  exit 1
+fi
+echo "    ok"
 
 echo "==> Pruning dangling images"
 remote "docker image prune -f >/dev/null"

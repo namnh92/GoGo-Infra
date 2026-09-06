@@ -65,6 +65,26 @@ compose_overlays="-f ${COMPOSE_EDGE}"
 # shellcheck disable=SC2034  # consumed by the scripts that source this file
 COMPOSE="COMPOSE_PROJECT_NAME=gogo-${ENVIRONMENT_NAME} ENV_FILE=${REMOTE_ENV_FILE} docker compose -f docker/docker-compose.prod.yml ${compose_overlays} --env-file ${REMOTE_ENV_FILE}"
 
+# INF-071 — which services a deploy may recreate, and which it must not.
+#
+# The incident: `up -d --remove-orphans` recreated every service, `cloudflared`
+# included. That container serves `api-dev.gogo.id.vn` *and*
+# `ssh-dev.gogo.id.vn` (config/dev.tfvars), so the deploy severed the SSH path
+# it was itself running over. The connection died mid-recreate, four containers
+# were left `Created` and never started, and the retry could not get back in:
+# `websocket: bad handshake`. A deploy cannot recover a host whose tunnel it
+# just stopped, and this host has no inbound ports to fall back on (ADR-0007).
+#
+# So the deploy owns the application services and only those. The access tunnel
+# is brought up if absent and never recreated — its configuration comes from a
+# token, not from the image, so a code deploy has no reason to restart it.
+# Changing it is a deliberate, separate act with someone watching.
+#
+# shellcheck disable=SC2034  # consumed by the scripts that source this file
+DEPLOY_SERVICES="${DEPLOY_SERVICES:-api worker}"
+# shellcheck disable=SC2034
+ACCESS_SERVICES="${ACCESS_SERVICES:-cloudflared}"
+
 # StrictHostKeyChecking with a pinned file: an unknown or changed host key
 # aborts rather than being accepted the way ssh-keyscan would.
 #
