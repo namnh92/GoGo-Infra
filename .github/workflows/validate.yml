@@ -227,6 +227,13 @@ jobs:
       - name: the worker secret never leaves the pipe
         run: ./scripts/secrets/put-worker-secret.test.sh
 
+      # The mobile env renderer decides what a client build is allowed to hold.
+      # Its tests are the only thing standing between "public config" and a
+      # server key rendered into a bundle, so they run here rather than living
+      # beside the script for whoever remembers to invoke them.
+      - name: the mobile env renderer refuses server secrets and cross-env values
+        run: python3 scripts/secrets/mobile-env.test.py
+
       # pull_request_target runs the base branch's workflow with full privileges
       # against the pull request's code. With OIDC credentials in reach, that is
       # a direct path from an unreviewed change to production secrets.
