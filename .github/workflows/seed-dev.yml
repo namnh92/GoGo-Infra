@@ -1,7 +1,10 @@
 name: seed-dev
 
-# Seeds the dev database: reference data, service areas, a place corpus, and a
-# bootstrap CMS admin.
+# Seeds the dev database: reference data, service areas and a place corpus.
+#
+# It creates no CMS account. Bootstrapping the one super_admin an environment
+# has is a separate command an operator runs deliberately, with credentials
+# pulled from SSM — see docs/cms-bootstrap-ssm.md (INF-069, GoGo-BE ADR-0018).
 #
 # Its own workflow rather than a step in deploy-dev, and dispatch-only, because
 # DEV is shared. A seed that ran on every deploy would overwrite whatever a

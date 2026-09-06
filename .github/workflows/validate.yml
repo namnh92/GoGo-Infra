@@ -183,6 +183,14 @@ jobs:
       - name: the place-refresh budget gate still tells refuse from configured
         run: ./scripts/lib/place-refresh-budget.test.sh
 
+      # The production seed guard lives in two places — here and in GoGo-BE's
+      # seed — and is only two guards if the confirmation reaches both. It did
+      # not: the compose invocation forwarded APP_ENV and nothing else, so a
+      # confirmed prod seed cleared this script and was refused inside the
+      # container.
+      - name: the seed forwards its production confirmation
+        run: ./scripts/deploy/seed-vps.test.sh
+
       # The namespace default decides what render-env.sh writes into the
       # production process environment. A client key drifting into that default
       # would hand the API a credential it cannot read and must not hold.

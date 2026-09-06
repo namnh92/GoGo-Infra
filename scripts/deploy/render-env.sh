@@ -44,11 +44,17 @@ while IFS=$'\t' read -r path env_var _type required _namespace; do
   elif [[ ",${required}," == *",${ENVIRONMENT},"* ]]; then
     missing+=("${prefix}/${path}")
   fi
-# Explicitly the backend namespace. This renders the production process
-# environment, and the deploy role's IAM grants `<env>/backend/*` only — a row
-# from another namespace would look up a path it may not read, and a value it
-# should not hold.
-done < <(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace backend)
+# Explicitly the backend namespace and the runtime consumer. This renders the
+# production process environment, and the deploy role's IAM grants
+# `<env>/backend/*` only — a row from another namespace would look up a path it
+# may not read, and a value it should not hold.
+#
+# The consumer filter is the same argument one step in: `<env>/backend` also
+# holds the CMS bootstrap password (INF-069), which this file has no reason to
+# carry. Rendering it would put a super_admin credential into the environment
+# of the process most exposed to the internet, for the benefit of a command
+# that does not run here.
+done < <(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace backend --consumer runtime)
 
 if [[ "${#missing[@]}" -gt 0 ]]; then
   rm -f "$OUT_FILE"

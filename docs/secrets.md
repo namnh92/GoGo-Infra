@@ -58,6 +58,7 @@ open a pull request — see `docs/adr/0001`.
 /gogo/<env>/backend/google/{server-api-key,routes-api-key,sheets-api-key}
 /gogo/<env>/backend/observability/sentry-dsn
 /gogo/<env>/backend/observability/metrics-token
+/gogo/<env>/backend/cms/seed-admin-{email,password}   seed-only — never rendered into the API env
 
 /gogo/<env>/mobile/google/maps-ios-api-key      client key — ships in the app binary
 /gogo/<env>/mobile/google/maps-android-api-key  client key — ships in the app binary
@@ -74,10 +75,11 @@ JSON blob would force every consumer to hold every secret.
 
 ## The manifest
 
-`secrets.manifest.yaml` declares names, namespaces, environment variables, types and which
-environments require each value. It contains no values. `namespace:` is omitted for `backend`,
-which is the default the reader emits — the tooling contract is pinned by
-`scripts/lib/manifest.test.sh`. It is the contract for three things:
+`secrets.manifest.yaml` declares names, namespaces, environment variables, types, which
+environments require each value, and which process loads it. It contains no values.
+`namespace:` is omitted for `backend` and `consumer:` for `runtime`, which are the defaults the
+reader emits — the tooling contract is pinned by `scripts/lib/manifest.test.sh`. It is the
+contract for three things:
 
 1. `scripts/secrets/validate.sh` diffs it against SSM.
 2. `scripts/secrets/pull.sh` and `scripts/deploy/render-env.sh` render env files from it.
@@ -85,6 +87,16 @@ which is the default the reader emits — the tooling contract is pinned by
 
 Adding a secret means editing the manifest first. Otherwise the value exists in SSM, nothing
 validates it, and it quietly survives long after it should have been rotated.
+
+`consumer:` is the second axis, added by INF-069, and it exists because `namespace:` could not
+answer the question. Namespace is *where the value is stored*; two values can share a prefix,
+share IAM, and still have no business in the same process. `consumer: seed` means the row is
+stored under `backend` like everything else and is rendered only by `pull.sh --seed`, for a
+provisioning command someone runs on purpose — never into the env file the API and the worker
+load. The CMS bootstrap password is the case that forced it: `backend` is the correct prefix for
+it, and the API's process environment is the wrong place for it. See
+[`adr/0008`](adr/0008-cms-bootstrap-credentials-in-ssm.md) and
+[`cms-bootstrap-ssm.md`](cms-bootstrap-ssm.md).
 
 ## Generated values
 
@@ -182,6 +194,7 @@ rotated at the provider — removing it from the latest revision changes nothing
 | --- | --- | --- | --- | --- |
 | 2026-09-05 | Grafana Cloud access-policy tokens — `metrics:write` (collector) and `metrics:read` (admin API), Free stack `prometheus-prod-37-prod-ap-southeast-1`, instance `3553140` | ADR-0007: DEV samples moved to the self-hosted Prometheus at `192.168.68.168`; the Cloud store is retired, so its credentials must not stay valid (§E7: revoked last, after the shared end-to-end gate passed) | platform owner (revoked at Grafana Cloud); this change (SSM + manifest) | Revoked at the provider **first**. Then `observability/grafana-prom-url`, `-prom-user`, `-write-token`, `-read-token`, `-retention-days` deleted from SSM and removed from the manifest **together**, because `validate.sh` fails on MISSING and UNDECLARED alike. `check-quotas.sh` Grafana probe retired (§E6). `grafana-url` is unrelated (self-hosted Grafana link) and stays. |
 | 2026-09-05 | `redis/url` (dev) — Upstash database recreated: `gogo-dev` @ `secure-rattler-216851.upstash.io`; the previous `trusting-cougar-204025` no longer exists in the account | Owner recreated the DEV Redis while adding the INF-060 rows (reason: owner to record) | platform owner | The DEV host kept the old URL from the 05:20Z deploy; `.env.dev` `REDIS_URL` was swapped by hand (backup `.env.dev.pre-redis-20260905T063905Z`) and api + worker recreated — readiness answers `redis: ok`. The next deploy-dev renders the same value; it is blocked by `validate.sh` (UNDECLARED) until this manifest lands. |
+| _(pending)_ | CMS bootstrap `super_admin` password, the literal that was in GoGo-BE `libs/database/src/seed.ts` | INF-069 removed the fallback and stored per-environment values in `/gogo/<env>/backend/cms/seed-admin-*`. Removing it from the latest revision changes nothing: it is in GoGo-BE's history, and it applied to every environment that did not override it | | **DEV only** — staging and prod had no such account and now hold freshly generated values, so nothing there was ever exposed. The DEV `admin_users` row still carries the old hash: the bootstrap never rewrites an existing account, by design. Rotate through CMS account management, then `put.sh dev cms/seed-admin-password` so SSM matches, in that order — see `cms-bootstrap-ssm.md` §Rotation |
 | _(pending INF-021)_ | APNs auth key `AuthKey_*.p8` | Key file present in the workspace next to the repos | | Upload to OneSignal, delete the local copy, confirm it never entered Git; if it did, revoke on Apple Developer and issue a new key |
 
 ## The permissions boundary is not editable from CI

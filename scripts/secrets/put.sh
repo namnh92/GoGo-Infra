@@ -23,7 +23,7 @@ require_env_arg "$ENVIRONMENT" allow-ci
 # round trip to be reported.
 PARAM_TYPE="${3:-}"
 if [[ -z "$PARAM_TYPE" && "$ENVIRONMENT" != "ci" ]]; then
-  PARAM_TYPE="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace all | awk -F'\t' -v p="$PARAM_PATH" '$1 == p { print $3 }')"
+  PARAM_TYPE="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace all --consumer all | awk -F'\t' -v p="$PARAM_PATH" '$1 == p { print $3 }')"
   if [[ -z "$PARAM_TYPE" ]]; then
     # A typo in the path writes a parameter nothing reads, nothing validates and
     # nobody rotates — while the real one stays empty and the application fails
@@ -31,7 +31,7 @@ if [[ -z "$PARAM_TYPE" && "$ENVIRONMENT" != "ci" ]]; then
     echo "'${PARAM_PATH}' is not declared in config/secrets.manifest.yml." >&2
     echo >&2
     echo "Declared paths for ${ENVIRONMENT}:" >&2
-    python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace all \
+    python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace all --consumer all \
       | awk -F'\t' '{ printf "  %s\t(%s)\n", $1, $5 }' >&2
     echo >&2
 
@@ -76,14 +76,37 @@ fi
 
 [[ -n "$value" ]] || die "empty value refused"
 
-aws ssm put-parameter \
-  --name "$full_path" \
-  --type "$PARAM_TYPE" \
-  --tier Standard \
-  --value "$value" \
-  --overwrite \
-  --no-cli-pager >/dev/null
+# The value goes to the CLI in a file, not in an argument.
+#
+# The header above promises the value never reaches a command line, and until
+# INF-069 the last line of this script broke that promise: `--value "$value"`
+# puts the secret in this process's argv, where any local user's `ps` can read
+# it for as long as the call takes. stdin protected the shell history and left
+# the harder half of the problem in place.
+#
+# --cli-input-json takes the whole request from a file created under umask 077.
+# python3 builds it — already a hard dependency here, unlike jq, and it encodes
+# a value containing a quote, a backslash or a newline instead of emitting
+# malformed JSON. Connection strings and generated secrets contain all three.
+#
+# The value reaches python through the environment, not through argv: an
+# argument would put it back in `ps`, one process further along.
+request_file="$(mktemp)"
+chmod 600 "$request_file"
+trap 'rm -f "$request_file"' EXIT
+
+GOGO_PUT_VALUE="$value" GOGO_PUT_NAME="$full_path" GOGO_PUT_TYPE="$PARAM_TYPE" \
+python3 -c 'import json, os, sys
+json.dump({
+    "Name": os.environ["GOGO_PUT_NAME"],
+    "Value": os.environ["GOGO_PUT_VALUE"],
+    "Type": os.environ["GOGO_PUT_TYPE"],
+    "Tier": "Standard",
+    "Overwrite": True,
+}, sys.stdout)' >"$request_file"
 
 unset value
+
+aws ssm put-parameter --cli-input-json "file://${request_file}" --no-cli-pager >/dev/null
 
 echo "wrote ${full_path} (${PARAM_TYPE})"

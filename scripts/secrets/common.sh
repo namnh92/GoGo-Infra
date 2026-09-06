@@ -75,14 +75,14 @@ ssm_prefix() {
 # Prints nothing for an undeclared path; the caller decides what that means.
 param_namespace() {
   local path="$1" env="${2:-dev}"
-  python3 "$MANIFEST_READER" "$env" --namespace all \
+  python3 "$MANIFEST_READER" "$env" --namespace all --consumer all \
     | awk -F'\t' -v p="$path" '$1 == p { print $5; exit }'
 }
 
 # Every namespace the manifest declares, one per line.
 manifest_namespaces() {
   local env="${1:-dev}"
-  python3 "$MANIFEST_READER" "$env" --namespace all | cut -f5 | sort -u
+  python3 "$MANIFEST_READER" "$env" --namespace all --consumer all | cut -f5 | sort -u
 }
 
 # Where a value comes from. Defined once: put.sh and setup-env.sh both prompt

@@ -28,8 +28,12 @@ skipped=()
 for namespace in $(manifest_namespaces "$ENVIRONMENT"); do
   prefix="$(ssm_prefix "$ENVIRONMENT" "$namespace")"
 
-  expected_all="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace "$namespace" | cut -f1 | sort)"
-  expected_required="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace "$namespace" --required | cut -f1 | sort)"
+  # --consumer all, not the default. This compares the manifest against what
+  # is *stored*, and a seed-only parameter is stored like any other: filtered
+  # out here it would be reported UNDECLARED the moment it was provisioned,
+  # and the fix a reader would reach for is deleting it.
+  expected_all="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace "$namespace" --consumer all | cut -f1 | sort)"
+  expected_required="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace "$namespace" --consumer all --required | cut -f1 | sort)"
   declared_total=$(( declared_total + $(echo "$expected_all" | grep -c . || true) ))
 
   # stderr is kept: an AccessDenied here is the difference between "nothing is
@@ -72,7 +76,7 @@ for namespace in $(manifest_namespaces "$ENVIRONMENT"); do
     if [[ "$actual_type" != "$expected_type" ]]; then
       wrong_type+="  - ${namespace}/${path}: expected ${expected_type}, found ${actual_type}"$'\n'
     fi
-  done < <(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace "$namespace")
+  done < <(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace "$namespace" --consumer all)
 
   if [[ -n "$wrong_type" ]]; then
     echo "WRONG TYPE:"
