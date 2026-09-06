@@ -337,6 +337,7 @@ module "share_link_worker" {
   api_origin               = var.api_origin
   tenjin_tracking_template = var.tenjin_tracking_template
   fallback_url             = var.share_fallback_url
+  edge_auth_token          = var.share_edge_auth_token
 }
 
 module "dns" {

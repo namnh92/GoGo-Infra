@@ -113,6 +113,23 @@ variable "share_fallback_url" {
   default     = ""
 }
 
+variable "share_edge_auth_token" {
+  description = <<-DESC
+    INF-070 / GoGo-BE SEC-004. Token the share-link worker presents to the API
+    so the API may believe the visitor address the worker forwards. Without it
+    every click looks like a Cloudflare egress address and the API's per-visitor
+    rate limit becomes one bucket for the whole product.
+
+    Per environment, never shared. Empty is safe: the worker sends no edge
+    headers and the API keys on the connecting address, as it did before.
+    Sourced from SSM share-link/worker-auth-token — never a real value in this
+    repository.
+  DESC
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "dns_record_suffix" {
   description = "Every DNS record in this environment must end with this hostname. Empty disables the check."
   type        = string

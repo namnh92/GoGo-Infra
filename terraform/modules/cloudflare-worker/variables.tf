@@ -75,3 +75,32 @@ variable "fallback_url" {
     error_message = "fallback_url must be empty or an https URL with no credentials, not under /l/ on any host."
   }
 }
+
+variable "edge_auth_token" {
+  description = <<-DESC
+    INF-070 / GoGo-BE SEC-004. Shared token the worker presents to the API as
+    `X-GoGo-Edge-Auth`, proving a request came from this worker so the API may
+    believe the visitor address it forwards in `X-GoGo-Client-IP`.
+
+    Without it the API sees only Cloudflare's egress address, and the rate limit
+    on GET /v1/share-links/{slug} becomes a ceiling shared by every visitor in
+    the product. The API's side is safe by default: no token means the header is
+    stripped and the limit keys on the connecting address, as it did before.
+
+    Per environment, never shared — one value good in DEV and PROD lets DEV's
+    edge speak for PROD's. Sourced from SSM `share-link/worker-auth-token`; the
+    repository holds an empty placeholder and never a real value.
+  DESC
+
+  type      = string
+  default   = ""
+  sensitive = true
+
+  validation {
+    # A short token is not a secret, and the API refuses one below 32 characters
+    # at boot. Catching it here means a bad value fails the plan rather than the
+    # deploy that follows it.
+    condition     = var.edge_auth_token == "" || length(var.edge_auth_token) >= 32
+    error_message = "edge_auth_token must be empty or at least 32 characters."
+  }
+}

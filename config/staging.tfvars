@@ -19,3 +19,8 @@ cors_allowed_origins = []
 # WebApp pending) or a store page once the apps are listed. Empty until one of
 # those exists — never a URL under /l/ (the worker's own route), never invented.
 share_fallback_url = ""
+# INF-070: token the share-link Worker presents to the API (SSM
+# share-link/worker-auth-token). Empty here on purpose — a real value never
+# lives in this repository, and until api_origin is set (INF-037) the Worker
+# never calls the API, so there is nothing to authenticate.
+share_edge_auth_token = ""

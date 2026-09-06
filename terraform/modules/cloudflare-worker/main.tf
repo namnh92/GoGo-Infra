@@ -44,6 +44,15 @@ resource "cloudflare_workers_script" "share_link" {
         type = "plain_text"
         text = var.fallback_url
       },
+      # secret_text, not plain_text: this one is a credential, and a plain_text
+      # binding is readable from the Cloudflare dashboard and the API that backs
+      # it. Empty is a valid state — the worker then sends no edge headers at
+      # all rather than an unauthenticated hint the API would ignore anyway.
+      {
+        name = "EDGE_AUTH_TOKEN"
+        type = "secret_text"
+        text = var.edge_auth_token
+      },
       {
         name = "AASA"
         type = "plain_text"
