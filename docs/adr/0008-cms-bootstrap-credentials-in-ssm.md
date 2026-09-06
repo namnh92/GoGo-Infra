@@ -32,6 +32,17 @@ This repository owns SSM, so it owns where the values go.
 
 ## Decision
 
+**These are bootstrap credentials, and only that.** The database is the
+authentication source for the CMS super admin as it is for every other CMS
+account: `admin_users.password_hash` holds an Argon2id hash, and login never
+reads SSM. A parameter here is what the *first* login is typed from; after that
+the two are unrelated, and **changing a value here does not change how the
+account signs in**. Rotation is CMS account management, which authenticates the
+person doing it, writes an audit row and revokes the sessions it invalidates.
+The scope of the account is settled with it: an environment has **exactly one**
+`super_admin` (GoGo-BE ADR-0017), the bootstrap creates it and refuses to add a
+second, and every other CMS account is created and managed by it.
+
 **Declare two optional SecureString parameters per environment**, under the
 existing backend prefix, and remove the source fallbacks with no replacement:
 
@@ -88,6 +99,28 @@ bootstrap itself.
 dependency and runtime AWS credentials in the application, to replace an
 environment variable.
 
+**Make SSM the live authentication source for the super admin.** Considered
+seriously and rejected on 2026-09-06; nothing of it shipped. The API would have
+compared the submitted password against the parameter behind a short TTL cache,
+keeping `admin_users` only as a projection with a NULL hash. The attraction was
+real — a rotation would take effect without a deploy and without an existing
+session. The costs did not shrink under design:
+
+- the credential would exist in a form something can read back, where an
+  Argon2id hash cannot, and every principal holding the backend prefix can read
+  it;
+- the login path for the one account that recovers a broken console would depend
+  on SSM being reachable, and failing closed (the only safe choice) means an SSM
+  outage takes the console with it;
+- editing a parameter is not authenticated as a person, writes no audit row and
+  revokes no session — so the "rotation" would leave the old sessions live and no
+  trace of who did it;
+- the internet-facing process would carry an AWS SDK and AWS credentials for one
+  login path.
+
+Superseded by the decision above: SSM stores bootstrap credentials, the database
+authenticates. See GoGo-BE ADR-0017.
+
 ## Consequences
 
 - The API and worker process environments no longer contain `SEED_ADMIN_*`.
@@ -107,7 +140,16 @@ environment variable.
   opposite. Now `--cli-input-json` from a mode-0600 file.
 - **Nothing here rotates anything.** The literal removed from GoGo-BE remains in
   that repository's history, and any account still using it stays valid until
-  someone rotates it through CMS account management.
+  someone rotates it through CMS account management. **DEV is in exactly that
+  state and rotating it is a required follow-up** — registered in
+  `docs/secrets.md` and in GoGo-BE's threat model, not closed by this ADR.
+- **A parameter edit is inert, and that will surprise someone.** It is the
+  direct consequence of the database being authoritative, so the manifest, the
+  procedure doc, the bootstrap command's own output and GoGo-BE's README all say
+  it in the same words rather than leaving it to be inferred.
+- **Production still requires SSO/MFA** (GoGo-BE ADR-0010) and the demo seed
+  still creates no account in any environment. Neither is relaxed by having a
+  bootstrap path.
 
 ## Migration and rollback
 

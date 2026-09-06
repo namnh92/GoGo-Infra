@@ -22,6 +22,21 @@ the bootstrap leaves an existing account exactly as it is, hash included. A seed
 that rewrote the hash would lock out whoever is already using the account, and
 would do it during a routine deploy.
 
+**The database authenticates, SSM only bootstraps** (GoGo-BE ADR-0017). The
+password lives in `admin_users.password_hash` as an Argon2id hash; the parameter
+is what the first login is typed from, once. Editing it afterwards changes
+nothing about how the account signs in — not after a deploy, not after a
+restart. Rotation is the account-management flow, which authenticates the person
+doing it, writes an audit row and revokes the sessions the change invalidates;
+an SSM edit does none of those three.
+
+**One account per environment.** There is exactly one `super_admin`, enforced by
+a unique index in the database and refused by the API at every path that could
+create, grant, demote or suspend the role. `pnpm db:seed-admin` creates it when
+it is absent and refuses when the environment already has one under a different
+address. Every other CMS account is created and managed by that account, not by
+this document.
+
 ## Parameters
 
 | SSM path (`<env>` = dev, staging, prod) | Env var | Type | Required |
@@ -193,8 +208,11 @@ later, and it refuses without `SEED_CONFIRM=prod` for exactly that reason.
 Rotating the SSM value and rotating the account password are two operations, and
 doing only the first leaves SSM lying about the database.
 
-1. Rotate the **account** password through CMS account management. That is the
-   only thing that replaces the stored Argon2id hash.
+1. Rotate the **account** password through CMS account management —
+   `POST /v1/cms/auth/change-password` while signed in, or a temporary password
+   from `POST /v1/cms/auth/admins/{id}/reset-password` for a staff account. That
+   is the only thing that replaces the stored Argon2id hash, and it is also what
+   records who did it and ends the sessions the old password opened.
 2. Rotate the **parameter** to match, with `put.sh` (above).
 3. Re-verify with the pass/fail comparison, not by printing.
 
