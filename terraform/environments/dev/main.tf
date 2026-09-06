@@ -538,7 +538,7 @@ module "share_link_worker" {
   environment                 = var.environment
   script_name                 = "${module.tags.name_prefix}-share-link"
   host                        = var.share_host
-  api_origin                  = var.api_origin
+  api_origin_provisioned      = var.api_origin_provisioned
   tenjin_tracking_template    = var.tenjin_tracking_template
   fallback_url                = var.share_fallback_url
   edge_auth_token_provisioned = var.share_edge_auth_token_provisioned

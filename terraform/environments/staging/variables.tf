@@ -90,10 +90,16 @@ variable "share_host" {
   default     = ""
 }
 
-variable "api_origin" {
-  description = "Origin the share-link worker calls to resolve a slug."
-  type        = string
-  default     = ""
+variable "api_origin_provisioned" {
+  description = <<-DESC
+    GoGo-Infra#153. Whether the share-link worker's `API_ORIGIN` is already set
+    in Cloudflare, which is where that value lives.
+
+    Not the origin, and never the origin: holding a copy here made two places
+    authoritative for one value, and the copy won every apply.
+  DESC
+  type        = bool
+  default     = false
 }
 
 variable "tenjin_tracking_template" {
