@@ -58,6 +58,16 @@ fi
 
 echo "==> Seeding ${ENVIRONMENT_NAME} (APP_ENV=${APP_ENV})"
 remote "cd '${DEPLOY_PATH}' && ${COMPOSE} build seed"
-remote "cd '${DEPLOY_PATH}' && ${COMPOSE} run --rm -e APP_ENV='${APP_ENV}' seed"
+# SEED_CONFIRM travels with APP_ENV, and it has to: GoGo-BE's seed carries the
+# same production guard, so a prod seed that cleared the check above would be
+# refused inside the container by a variable nothing forwarded — the operator
+# having done exactly what both messages asked for. The guard is in both places
+# because neither is the only way to run the seed; that is only true if the
+# confirmation reaches both.
+#
+# Empty outside production, where neither guard reads it. The value is compared
+# against APP_ENV rather than treated as a boolean, so an empty or stale one
+# fails closed.
+remote "cd '${DEPLOY_PATH}' && ${COMPOSE} run --rm -e APP_ENV='${APP_ENV}' -e SEED_CONFIRM='${SEED_CONFIRM:-}' seed"
 
 echo "seeded ${ENVIRONMENT_NAME}"

@@ -30,12 +30,16 @@ restart. Rotation is the account-management flow, which authenticates the person
 doing it, writes an audit row and revokes the sessions the change invalidates;
 an SSM edit does none of those three.
 
-**One account per environment.** There is exactly one `super_admin`, enforced by
-a unique index in the database and refused by the API at every path that could
-create, grant, demote or suspend the role. `pnpm db:seed-admin` creates it when
-it is absent and refuses when the environment already has one under a different
-address. Every other CMS account is created and managed by that account, not by
-this document.
+**One account per environment.** **At most one** `super_admin` before an
+environment is bootstrapped, **exactly one** after: the unique index in the
+database is the upper bound (an unbootstrapped environment legitimately has
+none), and the lower bound is held by the bootstrap creating the account and by
+the API refusing every path that could demote or suspend it. The transition is
+one-way.
+
+`pnpm db:seed-admin` creates the account when it is absent and refuses when the
+environment already has one under a different address. Every other CMS account is
+created and managed by that account, not by this document.
 
 ## Parameters
 
@@ -213,6 +217,12 @@ doing only the first leaves SSM lying about the database.
    from `POST /v1/cms/auth/admins/{id}/reset-password` for a staff account. That
    is the only thing that replaces the stored Argon2id hash, and it is also what
    records who did it and ends the sessions the old password opened.
+
+   Sessions, precisely, so the operator knows what to expect: a self-service
+   change **keeps the session doing the rotating and revokes every other session
+   of that account** — you stay signed in, everything else signs out. A reset
+   keeps none. Neither behaviour is reachable by editing a parameter, which is
+   the reason step 1 exists at all.
 2. Rotate the **parameter** to match, with `put.sh` (above).
 3. Re-verify with the pass/fail comparison, not by printing.
 

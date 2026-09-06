@@ -39,9 +39,13 @@ reads SSM. A parameter here is what the *first* login is typed from; after that
 the two are unrelated, and **changing a value here does not change how the
 account signs in**. Rotation is CMS account management, which authenticates the
 person doing it, writes an audit row and revokes the sessions it invalidates.
-The scope of the account is settled with it: an environment has **exactly one**
-`super_admin` (GoGo-BE ADR-0017), the bootstrap creates it and refuses to add a
-second, and every other CMS account is created and managed by it.
+The scope of the account is settled with it: an environment holds **at most one**
+`super_admin` before it is bootstrapped and **exactly one** after (GoGo-BE
+ADR-0017) — the database enforces the upper bound, the bootstrap creates the
+account and refuses to add a second, and no API path can demote or suspend it
+back to none. Every other CMS account is created and managed by it. Rotation
+keeps the session doing the rotating and revokes every other session of that
+account.
 
 **Declare two optional SecureString parameters per environment**, under the
 existing backend prefix, and remove the source fallbacks with no replacement:
