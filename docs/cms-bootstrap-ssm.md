@@ -22,7 +22,7 @@ the bootstrap leaves an existing account exactly as it is, hash included. A seed
 that rewrote the hash would lock out whoever is already using the account, and
 would do it during a routine deploy.
 
-**The database authenticates, SSM only bootstraps** (GoGo-BE ADR-0017). The
+**The database authenticates, SSM only bootstraps** (GoGo-BE ADR-0018). The
 password lives in `admin_users.password_hash` as an Argon2id hash; the parameter
 is what the first login is typed from, once. Editing it afterwards changes
 nothing about how the account signs in — not after a deploy, not after a

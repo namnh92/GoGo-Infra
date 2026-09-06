@@ -98,7 +98,7 @@ else
   fail "SEED_CONFIRM=staging was accepted for a prod seed"
 fi
 
-# 5. The seed creates no CMS account (DB-012 / ADR-0017): bootstrapping one is a
+# 5. The seed creates no CMS account (DB-012 / ADR-0018): bootstrapping one is a
 #    separate command, and this script must never grow it back.
 if grep -qE "seed-admin|SEED_ADMIN" "$script"; then
   fail "seed-vps.sh references the admin bootstrap; that is a separate, deliberate command"
