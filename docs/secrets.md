@@ -58,6 +58,7 @@ open a pull request — see `docs/adr/0001`.
 /gogo/<env>/backend/google/{server-api-key,routes-api-key,sheets-api-key}
 /gogo/<env>/backend/observability/sentry-dsn
 /gogo/<env>/backend/observability/metrics-token
+/gogo/<env>/backend/cms/seed-admin-{email,password}   seed-only — never rendered into the API env
 
 /gogo/<env>/mobile/google/maps-ios-api-key      client key — ships in the app binary
 /gogo/<env>/mobile/google/maps-android-api-key  client key — ships in the app binary
@@ -74,10 +75,11 @@ JSON blob would force every consumer to hold every secret.
 
 ## The manifest
 
-`secrets.manifest.yaml` declares names, namespaces, environment variables, types and which
-environments require each value. It contains no values. `namespace:` is omitted for `backend`,
-which is the default the reader emits — the tooling contract is pinned by
-`scripts/lib/manifest.test.sh`. It is the contract for three things:
+`secrets.manifest.yaml` declares names, namespaces, environment variables, types, which
+environments require each value, and which process loads it. It contains no values.
+`namespace:` is omitted for `backend` and `consumer:` for `runtime`, which are the defaults the
+reader emits — the tooling contract is pinned by `scripts/lib/manifest.test.sh`. It is the
+contract for three things:
 
 1. `scripts/secrets/validate.sh` diffs it against SSM.
 2. `scripts/secrets/pull.sh` and `scripts/deploy/render-env.sh` render env files from it.
@@ -85,6 +87,16 @@ which is the default the reader emits — the tooling contract is pinned by
 
 Adding a secret means editing the manifest first. Otherwise the value exists in SSM, nothing
 validates it, and it quietly survives long after it should have been rotated.
+
+`consumer:` is the second axis, added by INF-069, and it exists because `namespace:` could not
+answer the question. Namespace is *where the value is stored*; two values can share a prefix,
+share IAM, and still have no business in the same process. `consumer: seed` means the row is
+stored under `backend` like everything else and is rendered only by `pull.sh --seed`, for a
+provisioning command someone runs on purpose — never into the env file the API and the worker
+load. The CMS bootstrap password is the case that forced it: `backend` is the correct prefix for
+it, and the API's process environment is the wrong place for it. See
+[`adr/0008`](adr/0008-cms-bootstrap-credentials-in-ssm.md) and
+[`cms-bootstrap-ssm.md`](cms-bootstrap-ssm.md).
 
 ## Generated values
 

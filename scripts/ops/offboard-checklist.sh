@@ -51,7 +51,7 @@ for env in "${ENVS[@]}"; do
       *)      how="rotate at the provider, then \`./scripts/secrets/put.sh ${env} ${path}\`" ;;
     esac
     printf -- '- [ ] `%s` (%s) — %s\n' "$path" "$env_var" "$how"
-  done < <(python3 "${REPO_ROOT}/scripts/lib/manifest.py" "$env")
+  done < <(python3 "${REPO_ROOT}/scripts/lib/manifest.py" "$env" --consumer all)
 
   echo
   echo "   Not credentials, no rotation needed:"
@@ -59,7 +59,7 @@ for env in "${ENVS[@]}"; do
     [[ -z "$path" ]] && continue
     [[ "$type" == "SecureString" ]] && continue
     printf -- '   - `%s` (%s)\n' "$path" "$env_var"
-  done < <(python3 "${REPO_ROOT}/scripts/lib/manifest.py" "$env")
+  done < <(python3 "${REPO_ROOT}/scripts/lib/manifest.py" "$env" --consumer all)
 done
 
 # CI parameters exist only under dev/ and prod/ — staging plans run against the

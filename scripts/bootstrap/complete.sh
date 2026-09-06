@@ -156,7 +156,7 @@ while IFS=$'\t' read -r path env_var _type required _namespace; do
   else
     printf '  ○ %s — required in: %s\n' "$label" "${required:-none}"
   fi
-done < <(python3 "${REPO_ROOT}/scripts/lib/manifest.py" "$ENVIRONMENT")
+done < <(python3 "${REPO_ROOT}/scripts/lib/manifest.py" "$ENVIRONMENT" --consumer all)
 
 echo
 echo "  ${present}/${total} required runtime parameters present."

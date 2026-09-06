@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Tests for the manifest reader's namespace handling.
+# Tests for the manifest reader's namespace and consumer handling.
 #
 #   ./scripts/lib/manifest.test.sh
 #
@@ -136,6 +136,94 @@ if python3 "$READER" dev --namespace mobile | grep -q "PLACE_RESOLUTION_ATTESTAT
 else
   ok "the attestation secret stays out of the mobile namespace"
 fi
+
+# --- INF-069: the consumer dimension --------------------------------------
+# Same property as the namespace cases above, one step in. `backend` is the
+# right SSM prefix for the CMS bootstrap password — same IAM, same deploy role
+# — and the API's process environment is still the wrong place for it. Only the
+# consumer filter can say that, so these pin that it does.
+
+seed_rows="$(python3 "$READER" dev --consumer seed | cut -f1)"
+if [[ -n "$seed_rows" ]]; then
+  ok "the seed consumer is non-empty ($(echo "$seed_rows" | wc -l | tr -d ' ') row(s))"
+else
+  bad "the seed consumer is empty" "INF-069 declares cms/seed-admin-email there"
+fi
+
+# The default output is what render-env.sh and pull.sh render into the process
+# environment of the API and the worker. A bootstrap credential appearing here
+# is the whole defect this dimension exists to prevent.
+leaked="$(python3 "$READER" dev | grep -E '^cms/seed-admin-' || true)"
+if [[ -z "$leaked" ]]; then
+  ok "the CMS bootstrap credentials are absent from the default output"
+else
+  bad "a CMS bootstrap credential reached the default output" \
+      "render-env.sh would write it into the API and worker environment"
+fi
+
+default_consumers="$(python3 "$READER" dev --namespace all | awk -F'\t' '$6 != "runtime" { print $1 " (" $6 ")" }')"
+if [[ -z "$default_consumers" ]]; then
+  ok "default output is the runtime consumer only"
+else
+  bad "default output leaked a non-runtime row" "$default_consumers"
+fi
+
+count_runtime=$(python3 "$READER" dev --namespace all | wc -l | tr -d ' ')
+count_seed=$(python3 "$READER" dev --namespace all --consumer seed | wc -l | tr -d ' ')
+count_consumer_all=$(python3 "$READER" dev --namespace all --consumer all | wc -l | tr -d ' ')
+if [[ "$count_consumer_all" -eq $(( count_runtime + count_seed )) ]]; then
+  ok "--consumer all is exactly runtime + seed (${count_consumer_all})"
+else
+  bad "--consumer all is not the union" \
+      "all=${count_consumer_all}, runtime=${count_runtime}, seed=${count_seed} — a consumer exists that no test covers"
+fi
+
+# A typo'd consumer has the same failure mode as a typo'd namespace: the row
+# stops appearing anywhere, and a parameter nobody renders and nobody validates
+# is a parameter nobody rotates.
+unknown_consumer="$(python3 "$READER" dev --namespace all --consumer all \
+  | awk -F'\t' '$6 != "runtime" && $6 != "seed" { print $1 " (" $6 ")" }')"
+if [[ -z "$unknown_consumer" ]]; then
+  ok "every row declares a known consumer"
+else
+  bad "a row declares an unrecognised consumer" "$unknown_consumer"
+fi
+
+if python3 "$READER" dev --consumer >/dev/null 2>&1; then
+  bad "--consumer with no value was accepted" "it must exit non-zero, not default to a scope"
+else
+  ok "--consumer with no value is rejected"
+fi
+
+# --- the callers that must see the whole manifest --------------------------
+# Filtering here is not a rendering decision, it is a blind spot: validate.sh
+# would report a provisioned seed parameter as UNDECLARED, and the offboarding
+# checklist would omit the one credential a departing admin most plausibly
+# knows.
+for caller in scripts/secrets/validate.sh scripts/secrets/put.sh \
+              scripts/ops/offboard-checklist.sh scripts/bootstrap/complete.sh \
+              scripts/secrets/common.sh; do
+  file="${DIR}/../../${caller}"
+  if grep -q 'manifest.py' "$file" || grep -q 'MANIFEST_READER' "$file"; then
+    if grep -q '\-\-consumer all' "$file"; then
+      ok "${caller} reads every consumer"
+    else
+      bad "${caller} reads the default consumer only" \
+          "a seed-only parameter would be invisible to it"
+    fi
+  fi
+done
+
+# The two renderers must NOT. They write the API and worker process env.
+for caller in scripts/deploy/render-env.sh scripts/secrets/pull.sh; do
+  file="${DIR}/../../${caller}"
+  if grep -q '\-\-consumer runtime\|--consumer "\$CONSUMER"' "$file"; then
+    ok "${caller} states its consumer explicitly"
+  else
+    bad "${caller} inherits the default consumer" \
+        "the default is load-bearing here and must be stated, not assumed"
+  fi
+done
 
 echo
 if [[ "$failures" -gt 0 ]]; then

@@ -4,9 +4,16 @@
 #
 #   ./scripts/deploy/seed-vps.sh
 #
-# Runs GoGo-BE's `seed` service — reference data, service areas, a small verified
-# place corpus, and outside production a bootstrap CMS admin. The seed is
-# idempotent: it matches on name and skips what already exists.
+# Runs GoGo-BE's `seed` service — reference data, service areas and a small
+# verified place corpus. The seed is idempotent: it matches on name and skips
+# what already exists.
+#
+# It creates no CMS account. It used to, from credentials written into
+# GoGo-BE's source; INF-069 moved those to SSM and GoGo-BE DB-012 split the
+# bootstrap into its own command. That split is what keeps a super_admin
+# password out of the env file this host already has — the one the API and the
+# worker load. Provisioning the first CMS admin is a separate, deliberate act:
+# see docs/cms-bootstrap-ssm.md.
 #
 # Deliberately separate from deploy-vps.sh. Seeding on every deploy would
 # overwrite whatever someone was testing in a shared environment, and a deploy
@@ -23,11 +30,12 @@ set -euo pipefail
 # shellcheck source=scripts/lib/remote.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/remote.sh"
 
-# APP_ENV decides whether the bootstrap CMS admin is created, and GoGo-BE
-# defaults it to `dev` when unset. Passed explicitly from the environment name
-# rather than read from the env file, which does not carry it today (INF-048) —
-# a seed that guesses its own environment is how a demo admin reaches
-# production.
+# APP_ENV names the environment and GoGo-BE defaults it to `dev` when unset.
+# Passed explicitly from the environment name rather than read from the env
+# file, which does not carry it today (INF-048) — a seed that guesses its own
+# environment is how a demo place corpus reaches production. GoGo-BE refuses a
+# production demo seed without SEED_CONFIRM for the same reason this script
+# does; the guard is in both places because neither is the only way to run it.
 APP_ENV="$ENVIRONMENT_NAME"
 
 # Production seeding is a different act from dev seeding: demo places in a

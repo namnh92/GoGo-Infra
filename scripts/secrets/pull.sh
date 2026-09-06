@@ -4,9 +4,17 @@
 #
 #   ./scripts/secrets/pull.sh dev
 #   ./scripts/secrets/pull.sh dev --out ../GoGo-BE/.env.runtime
+#   ./scripts/secrets/pull.sh dev --seed          # -> .env.seed, adds the seed-only rows
 #
 # Fetches once per session rather than calling SSM per request. The output file
 # is written with mode 0600 and is gitignored.
+#
+# --seed adds the parameters declared `consumer: seed` (INF-069) on top of the
+# runtime ones, because a provisioning command needs both DATABASE_URL and its
+# own inputs. It writes a *different file by default* rather than widening
+# .env.runtime, and that is the entire point: .env.runtime is the file a
+# developer keeps loaded all day and the shape the deployed env file copies.
+# Shred the seed file when the command that needed it has finished.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 # shellcheck source=../lib/place-refresh-budget.sh
@@ -16,16 +24,27 @@ ENVIRONMENT="${1:-}"
 require_env_arg "$ENVIRONMENT"
 shift || true
 
-OUT_FILE=".env.runtime"
+OUT_FILE=""
+CONSUMER="runtime"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --out)
       OUT_FILE="${2:-}"
       shift 2
       ;;
+    --seed)
+      CONSUMER="all"
+      shift
+      ;;
     *) die "unknown argument: $1" ;;
   esac
 done
+
+# Defaulted after parsing so --out wins regardless of flag order, and so the
+# two modes cannot land on the same filename by accident.
+if [[ -z "$OUT_FILE" ]]; then
+  [[ "$CONSUMER" == "all" ]] && OUT_FILE=".env.seed" || OUT_FILE=".env.runtime"
+fi
 
 if [[ "$ENVIRONMENT" == "prod" && "${GOGO_ALLOW_PROD_PULL:-}" != "1" ]]; then
   die "refusing to pull production secrets onto a developer machine.
@@ -65,7 +84,11 @@ while IFS=$'\t' read -r path env_var _type required _namespace; do
 # `backend` is stated rather than inherited. This file becomes GoGo-BE's
 # environment; a mobile build key belongs in a mobile build, not in the API's
 # process env, and it lives under a prefix this prefix cannot even reach.
-done < <(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace backend)
+#
+# The consumer is stated for the same reason and defaults to `runtime`: without
+# --seed this file must not carry the CMS bootstrap password, because the API
+# started from it would then hold a super_admin credential it never uses.
+done < <(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace backend --consumer "$CONSUMER")
 
 if [[ "$missing" -gt 0 ]]; then
   die "${missing} required parameter(s) missing. Run ./scripts/secrets/validate.sh ${ENVIRONMENT} for the full diff."
@@ -74,6 +97,11 @@ fi
 install -m 600 "$tmp_file" "$OUT_FILE"
 variable_count=$(grep -cE '^[A-Z_]+=' "$OUT_FILE")
 echo "wrote ${OUT_FILE} (mode 0600, ${variable_count} variables)"
+
+if [[ "$CONSUMER" == "all" ]]; then
+  echo "  Includes seed-only parameters. Shred it when the provisioning command is done:"
+  echo "    shred -u ${OUT_FILE} 2>/dev/null || rm -P ${OUT_FILE}"
+fi
 
 # INF-057. Same default-deny budget as a deploy, same silence: a local API with
 # four of the five ceilings set refreshes nothing and says nothing about it.

@@ -6,16 +6,25 @@ mappings), so a full YAML parser is not needed and not assumed to be installed
 on a developer machine or a CI runner.
 
 Usage:
-    manifest.py <env>                    Emit "path<TAB>env_var<TAB>type<TAB>required<TAB>namespace"
+    manifest.py <env>                    Emit "path<TAB>env_var<TAB>type<TAB>required<TAB>namespace<TAB>consumer"
     manifest.py <env> --required         Only the parameters required in that env
     manifest.py <env> --namespace mobile Only that namespace
     manifest.py <env> --namespace all    Every namespace
+    manifest.py <env> --consumer seed    Only rows a seed/provisioning command loads
+    manifest.py <env> --consumer all     Every consumer
 
-Namespace defaults to `backend`. That default is load-bearing rather than
-convenient: render-env.sh renders every row it is given into the API's runtime
-env file, so a caller written before namespaces existed must keep receiving
-exactly the rows it was written to render. A client key that leaked into that
-file would be handed to the server, under a path the server cannot even read.
+Namespace defaults to `backend` and consumer defaults to `runtime`. Both
+defaults are load-bearing rather than convenient: render-env.sh renders every
+row it is given into the API's runtime env file, so a caller written before
+either field existed must keep receiving exactly the rows it was written to
+render.
+
+The two filters answer different questions and neither substitutes for the
+other. Namespace is *where the value lives* — it picks the SSM prefix, and a
+client key that leaked into the backend default would be handed to the server
+under a path the server cannot even read. Consumer is *which process loads it*
+— a CMS bootstrap password belongs under `backend` (same prefix, same IAM) and
+still has no business in the environment of an internet-facing API.
 """
 
 import os
@@ -85,10 +94,20 @@ def main():
             return 2
         namespace = args[index + 1]
 
+    consumer = "runtime"
+    if "--consumer" in args:
+        index = args.index("--consumer")
+        if index + 1 >= len(args):
+            sys.stderr.write("--consumer needs a value: runtime, seed, or all\n")
+            return 2
+        consumer = args[index + 1]
+
     for entry in parse():
         if required_only and env not in entry["required_list"]:
             continue
         if namespace != "all" and entry.get("namespace", "backend") != namespace:
+            continue
+        if consumer != "all" and entry.get("consumer", "runtime") != consumer:
             continue
         sys.stdout.write(
             "\t".join(
@@ -98,6 +117,7 @@ def main():
                     entry.get("type", "SecureString"),
                     ",".join(entry["required_list"]),
                     entry.get("namespace", "backend"),
+                    entry.get("consumer", "runtime"),
                 ]
             )
             + "\n"
