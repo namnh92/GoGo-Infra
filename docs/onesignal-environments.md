@@ -5,6 +5,16 @@ Supply separate App IDs, send keys and identity signing keys under
 `/gogo/<dev|staging|prod>/backend/onesignal/` using the existing manifest/put tooling.
 Never copy DEV credentials to another environment.
 
+GoGo-BE reads three values (GoGo-BE#193/#199, rendered by `render-env.sh`):
+`ONESIGNAL_APP_ID`, `ONESIGNAL_REST_API_KEY`, and
+`ONESIGNAL_IDENTITY_VERIFICATION_KEY` (PEM, `\n`-escaped or base64 so it fits
+one line). `PUSH_PROVIDER_MODE` is not set in a deployed environment — the
+production build selects OneSignal; a missing value makes the process refuse
+sends and log `push provider NOT ready`, it never falls back to the fake.
+Before enabling Identity Verification in the dashboard, confirm the mobile
+client sends tokens (NTF-APP-004); enabling it first unsubscribes every
+named user.
+
 Mobile needs only the public App ID. Generate its build environment:
 
 ```sh
