@@ -113,21 +113,21 @@ variable "share_fallback_url" {
   default     = ""
 }
 
-variable "share_edge_auth_token" {
+variable "share_edge_auth_token_provisioned" {
   description = <<-DESC
-    INF-070 / GoGo-BE SEC-004. Token the share-link worker presents to the API
-    so the API may believe the visitor address the worker forwards. Without it
-    every click looks like a Cloudflare egress address and the API's per-visitor
-    rate limit becomes one bucket for the whole product.
+    INF-070 / GoGo-BE SEC-004. Whether the share-link worker's EDGE_AUTH_TOKEN
+    secret has already been put with scripts/secrets/put-worker-secret.sh.
 
-    Per environment, never shared. Empty is safe: the worker sends no edge
-    headers and the API keys on the connecting address, as it did before.
-    Sourced from SSM share-link/worker-auth-token — never a real value in this
-    repository.
+    Not the token, and never the token: the value goes from SSM straight to
+    Cloudflare at deploy time, so Terraform holds no copy in its configuration,
+    its plan or its state. This flag only says whether to carry an existing
+    binding across script updates.
+
+    Put the secret first, then set this true and apply — see
+    docs/share-link-edge-auth.md.
   DESC
-  type        = string
-  default     = ""
-  sensitive   = true
+  type        = bool
+  default     = false
 }
 
 variable "dns_record_suffix" {

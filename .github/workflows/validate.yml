@@ -220,6 +220,13 @@ jobs:
             echo "${env}: $(python3 scripts/lib/manifest.py "$env" --required | wc -l) required parameters"
           done
 
+      # INF-070. The value this script moves must never reach Terraform, a file,
+      # an environment variable or a log, and the only way to keep that true is
+      # to assert it. The test also fails if a `secret_text` binding or a
+      # value-carrying variable is ever added back.
+      - name: the worker secret never leaves the pipe
+        run: ./scripts/secrets/put-worker-secret.test.sh
+
       # pull_request_target runs the base branch's workflow with full privileges
       # against the pull request's code. With OIDC credentials in reach, that is
       # a direct path from an unreviewed change to production secrets.
