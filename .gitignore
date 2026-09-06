@@ -41,6 +41,12 @@ secrets.auto.tfvars
 # does not cover. The manifest and lock are committed; the tree is not.
 node_modules/
 
+# Python — the secret renderers are imported by their tests, which leaves a
+# bytecode cache next to scripts that must never carry an untracked artefact
+# into a release archive.
+__pycache__/
+*.pyc
+
 # Local
 .DS_Store
 .idea/
