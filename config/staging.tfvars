@@ -13,3 +13,9 @@ dns_record_suffix  = "-stag.gogo.id.vn"
 # }
 
 cors_allowed_origins = []
+
+# Share-link fallback (GoGo-Infra#12). Where a click lands when the app is not
+# installed and there is no attribution URL: the web landing page (LNK-WEB-001,
+# WebApp pending) or a store page once the apps are listed. Empty until one of
+# those exists — never a URL under /l/ (the worker's own route), never invented.
+share_fallback_url = ""

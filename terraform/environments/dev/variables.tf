@@ -102,6 +102,17 @@ variable "tenjin_tracking_template" {
   default     = ""
 }
 
+variable "share_fallback_url" {
+  description = <<-DESC
+    Where a share-link click lands when the app is not installed and no
+    attribution URL exists: the web landing page (LNK-WEB-001) or a store page
+    once one exists. Empty = the worker answers plain uncached text. Must not be
+    under /l/ on any host — the worker's own route — or every click loops.
+  DESC
+  type        = string
+  default     = ""
+}
+
 variable "dns_record_suffix" {
   description = "Every DNS record in this environment must end with this hostname. Empty disables the check."
   type        = string

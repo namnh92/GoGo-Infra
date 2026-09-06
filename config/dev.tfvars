@@ -159,3 +159,9 @@ tunnel_ingress = {
 # exist: DNS record, tunnel ingress, Access application, Access policy, and the
 # service token the policy names.
 access_ssh_hostname = "ssh-dev.gogo.id.vn"
+
+# Share-link fallback (GoGo-Infra#12). Where a click lands when the app is not
+# installed and there is no attribution URL: the web landing page (LNK-WEB-001,
+# WebApp pending) or a store page once the apps are listed. Empty until one of
+# those exists — never a URL under /l/ (the worker's own route), never invented.
+share_fallback_url = ""

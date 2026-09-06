@@ -23,12 +23,31 @@ an edge that fails verification during an origin outage.
 Regenerate with `scripts/deploy/render-well-known.sh <env>` and re-apply. `terraform plan` shows
 the change, because the file contents are part of the resource.
 
+## Where a click goes
+
+1. The `trackingUrl` the API resolved the link with (LNK-BE-003 composes it per resolve; the
+   API owns vendor knowledge).
+2. Otherwise this module's `tenjin_tracking_template` with `deeplink_url=<canonical>` — a
+   fallback for links minted before the API attached one.
+3. Otherwise `fallback_url` (root input `share_fallback_url`): the web landing page (LNK-WEB-001)
+   or a store page once one exists, with `?link=<canonical>` appended.
+4. Otherwise a plain `text/plain`, `no-store` answer that names no URL.
+
+Never a redirect to the canonical URL itself: that is the route being served, so it loops.
+`fallback_url` is validated (Terraform) and re-checked in the worker: https only, no credentials
+in the URL, and never under `/l/` on any host. The credential rule matters because this value is
+sent to every clicker without the app in a `Location` header — GoGo-BE refuses the same shape for
+`SHARE_LINK_BASE_URL`. Sharing keeps working through every step (`GOGO_SRS.md` FR-LINK-006); only
+attribution is lost.
+
 ## Degradation
 
-- No `tenjin_tracking_template` → redirect to the canonical link, no attribution. Sharing keeps
-  working (`GOGO_SRS.md` FR-LINK-006).
 - API unreachable → `502`, not a redirect to nowhere, so a retry can succeed.
 - Slug unknown, expired or revoked → `404` with `no-store`.
+
+## Tests
+
+`cd workers/share-link && node --test` runs the edge behaviour against a faked API — no network.
 
 ## Cache lifetimes
 
@@ -46,4 +65,6 @@ place and no repository, which is exactly the drift tracked as INF-037 for the C
 
 1. A DNS record so the hostname resolves — routes attach to a zone, but the name must exist.
 2. `api_origin` pointing at a reachable GoGo-BE.
-3. `LNK-BE-002`, which provides `GET /v1/share-links/{slug}`.
+3. `LNK-BE-002` (`GET /v1/share-links/{slug}`) deployed to that origin — implemented on GoGo-BE
+   branch `feature/GOGO-205-share-links-api`, not yet merged.
+4. `share_fallback_url` once a landing page or store listing exists (empty until then).

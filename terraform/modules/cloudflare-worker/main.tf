@@ -40,6 +40,11 @@ resource "cloudflare_workers_script" "share_link" {
         text = var.tenjin_tracking_template
       },
       {
+        name = "FALLBACK_URL"
+        type = "plain_text"
+        text = var.fallback_url
+      },
+      {
         name = "AASA"
         type = "plain_text"
         text = local.aasa
