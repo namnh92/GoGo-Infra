@@ -9,6 +9,7 @@
   "compatibility_date": "2026-01-01",
   "vars": {
     "API_ORIGIN": "http://localhost:3000",
-    "TENJIN_TRACKING_TEMPLATE": ""
+    "TENJIN_TRACKING_TEMPLATE": "",
+    "FALLBACK_URL": ""
   }
 }

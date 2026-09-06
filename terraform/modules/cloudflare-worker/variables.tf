@@ -35,9 +35,24 @@ variable "api_origin" {
 
 variable "tenjin_tracking_template" {
   description = <<-DESC
-    Tenjin tracking URL the worker appends deeplink_url to. Empty disables
-    attribution, and the worker then redirects to the canonical link — sharing
-    keeps working without it (FR-LINK-006).
+    Tenjin tracking URL the worker appends deeplink_url to, used only for a
+    link the API resolved without its own trackingUrl (links minted before
+    LNK-BE-003). Empty disables that fallback; sharing keeps working without
+    attribution (FR-LINK-006). The API-side value is SSM
+    tenjin/tracking-url-template.
+  DESC
+
+  type    = string
+  default = ""
+}
+
+variable "fallback_url" {
+  description = <<-DESC
+    Where a click lands when there is no attribution URL: the web landing page
+    (LNK-WEB-001) or a store page once the apps are listed. The worker appends
+    ?link=<canonical>. Empty means a plain uncached text answer — never a
+    redirect back to the canonical URL, which would loop. No value exists yet:
+    GoGo-WebApp is pending and there is no App Store Connect app.
   DESC
 
   type    = string

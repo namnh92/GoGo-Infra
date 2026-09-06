@@ -68,21 +68,56 @@ async function resolveSlug(slug, env) {
 /**
  * Tracking URL for attribution, with the canonical link as the deferred target.
  *
- * Attribution is not allowed to break sharing: if no tracking template is
- * configured, or building one fails, the caller falls back to the canonical
- * URL (FR-LINK-006).
+ * The API owns vendor knowledge (LNK-BE-003): a resolved link carries the
+ * tracking URL it was minted with, and that is used first. The Worker's own
+ * template is a fallback for links minted before the API attached one.
+ * Attribution is not allowed to break sharing (FR-LINK-006): any failure here
+ * means "no attribution", never "no redirect".
  */
 function trackingUrl(link, canonical, env) {
+  if (typeof link.trackingUrl === 'string' && link.trackingUrl.startsWith('https://')) {
+    return link.trackingUrl
+  }
   if (!env.TENJIN_TRACKING_TEMPLATE) return null
   try {
     const url = new URL(env.TENJIN_TRACKING_TEMPLATE)
     url.searchParams.set('deeplink_url', canonical)
-    if (link.campaign) url.searchParams.set('campaign', link.campaign)
-    if (link.source) url.searchParams.set('source', link.source)
     return url.toString()
   } catch {
     return null
   }
+}
+
+/**
+ * Where a click lands when there is no attribution URL to send it to.
+ *
+ * Reaching this handler at all means the app did not claim the link — an
+ * installed app takes a universal/app link before any HTTP happens. A redirect
+ * to the canonical URL here would be a redirect to ourselves, i.e. a loop. So:
+ * the configured landing page if there is one (LNK-WEB-001, or a store page
+ * once the apps are listed), otherwise a plain, uncached answer that names no
+ * URL nobody has yet.
+ */
+function fallback(canonical, env) {
+  if (env.FALLBACK_URL) {
+    try {
+      const url = new URL(env.FALLBACK_URL)
+      url.searchParams.set('link', canonical)
+      return new Response(null, {
+        status: 302,
+        headers: { location: url.toString(), 'cache-control': 'no-store' },
+      })
+    } catch {
+      // Misconfigured landing page: fall through to the plain answer.
+    }
+  }
+  return new Response(
+    'Liên kết GoGo. Mở trong ứng dụng GoGo để tiếp tục.\nGoGo link. Open it in the GoGo app to continue.\n',
+    {
+      status: 200,
+      headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
+    },
+  )
 }
 
 export default {
@@ -123,7 +158,8 @@ export default {
     if (!link) return notFound('link expired or revoked')
 
     const canonical = `https://${url.host}/l/${slug}`
-    const target = trackingUrl(link, canonical, env) ?? canonical
+    const target = trackingUrl(link, canonical, env)
+    if (!target) return fallback(canonical, env)
     const ttl = TTL[link.type] ?? 0
 
     return new Response(null, {
