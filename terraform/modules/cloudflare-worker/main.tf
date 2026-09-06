@@ -30,11 +30,6 @@ resource "cloudflare_workers_script" "share_link" {
   bindings = concat(
     [
       {
-        name = "API_ORIGIN"
-        type = "plain_text"
-        text = var.api_origin
-      },
-      {
         name = "TENJIN_TRACKING_TEMPLATE"
         type = "plain_text"
         text = var.tenjin_tracking_template
@@ -68,6 +63,24 @@ resource "cloudflare_workers_script" "share_link" {
     var.edge_auth_token_provisioned ? [
       {
         name = "EDGE_AUTH_TOKEN"
+        type = "inherit"
+      },
+    ] : [],
+
+    # GoGo-Infra#153. API_ORIGIN is set in Cloudflare, not here — the same
+    # `inherit` arrangement as the token above, for a different reason. It is not
+    # a secret; it is a value whose authority is the edge. Terraform holding a
+    # copy meant the two could disagree, and they did: the dashboard had the
+    # right origin and `config/dev.tfvars` still had the empty string it was
+    # given while the dev API was unreachable, so the next apply would have put
+    # the edge back to answering 502 on every share link.
+    #
+    # `inherit` errors when there is no binding to carry, so a fresh environment
+    # sets the variable in Cloudflare first, then flips this flag. Until it does,
+    # the Worker still serves /.well-known/ — only /l/{slug} is dark.
+    var.api_origin_provisioned ? [
+      {
+        name = "API_ORIGIN"
         type = "inherit"
       },
     ] : [],

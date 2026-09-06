@@ -27,6 +27,12 @@ share_fallback_url = ""
 # INF-070: has the share-link Worker's EDGE_AUTH_TOKEN secret been put yet?
 # The token itself never appears here or anywhere else in Terraform — it goes
 # from SSM straight to Cloudflare via scripts/secrets/put-worker-secret.sh.
-# false until api_origin exists (INF-037), because until then the Worker never
-# calls the API and there is nothing to authenticate.
+# false until the Worker has an API to call — see api_origin_provisioned below.
 share_edge_auth_token_provisioned = false
+
+# GoGo-Infra#153. The share-link worker's API_ORIGIN is set in Cloudflare, not in
+# Terraform: two authoritative copies of one value drifted on DEV, the stale copy
+# won the apply, and every share link answered 502 until someone clicked one.
+# false here until the variable exists on this environment's worker — `inherit`
+# has nothing to carry before that.
+api_origin_provisioned = false

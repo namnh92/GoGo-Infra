@@ -28,9 +28,30 @@ variable "host" {
   type        = string
 }
 
-variable "api_origin" {
-  description = "Origin the worker calls to resolve a slug, e.g. https://api.dev.gogo.id.vn."
-  type        = string
+variable "api_origin_provisioned" {
+  description = <<-DESC
+    GoGo-Infra#153. Whether `API_ORIGIN` is already set on this worker in
+    Cloudflare.
+
+    **This module never receives the origin.** Cloudflare is where that value
+    lives; Terraform only says whether a binding by that name should be carried
+    across script updates, using the Workers API's `inherit` type — the same
+    arrangement as `edge_auth_token_provisioned` below.
+
+    It used to be a `plain_text` binding fed from `config/<env>.tfvars`, which
+    made two places authoritative for one value. They drifted: the edge was
+    given the real origin by hand while the tfvars entry still held the empty
+    string it was written with, back when the dev API was not reachable. The
+    next apply would have restored the empty one, and every share link would
+    have gone back to answering 502.
+
+    `inherit` fails when nothing is there to inherit, so a new environment sets
+    the variable in Cloudflare first and flips this to true afterwards. While it
+    is false the Worker still serves the association files; only `/l/{slug}` is
+    dark, and that failure is visible on the first click rather than silent.
+  DESC
+  type        = bool
+  default     = false
 }
 
 variable "tenjin_tracking_template" {
