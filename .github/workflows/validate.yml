@@ -234,6 +234,12 @@ jobs:
       - name: the mobile env renderer refuses server secrets and cross-env values
         run: python3 scripts/secrets/mobile-env.test.py
 
+      # Tenjin's client keys are per environment and look alike. The failure
+      # this guards is a DEV key rendered into a store build, which attributes
+      # real installs to the wrong app and cannot be undone after the fact.
+      - name: the Tenjin renderer never falls back across environments
+        run: python3 scripts/secrets/tenjin-mobile-env.test.py
+
       # pull_request_target runs the base branch's workflow with full privileges
       # against the pull request's code. With OIDC credentials in reach, that is
       # a direct path from an unreviewed change to production secrets.
