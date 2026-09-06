@@ -55,6 +55,22 @@ resource "cloudflare_workers_script" "share_link" {
         text = local.assetlinks
       },
     ],
+    # INF-070. `inherit` means "keep the binding the previous version of this
+    # script had", so the token stays bound across script updates without this
+    # configuration ever holding it. It is written by
+    # scripts/secrets/put-worker-secret.sh, straight from SSM to Cloudflare;
+    # Terraform never receives it, so it is in no plan, no state file and no log.
+    #
+    # A secret_text binding here would have put the value in Terraform state,
+    # which `sensitive = true` hides from the CLI and not from the file. The
+    # Secrets Store binding type would avoid that too, but it is open beta and
+    # this is an authentication credential.
+    var.edge_auth_token_provisioned ? [
+      {
+        name = "EDGE_AUTH_TOKEN"
+        type = "inherit"
+      },
+    ] : [],
   )
 }
 

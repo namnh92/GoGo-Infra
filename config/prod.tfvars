@@ -24,3 +24,9 @@ cors_allowed_origins = [
 # WebApp pending) or a store page once the apps are listed. Empty until one of
 # those exists — never a URL under /l/ (the worker's own route), never invented.
 share_fallback_url = ""
+# INF-070: has the share-link Worker's EDGE_AUTH_TOKEN secret been put yet?
+# The token itself never appears here or anywhere else in Terraform — it goes
+# from SSM straight to Cloudflare via scripts/secrets/put-worker-secret.sh.
+# false until api_origin exists (INF-037), because until then the Worker never
+# calls the API and there is nothing to authenticate.
+share_edge_auth_token_provisioned = false

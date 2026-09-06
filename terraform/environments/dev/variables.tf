@@ -113,6 +113,23 @@ variable "share_fallback_url" {
   default     = ""
 }
 
+variable "share_edge_auth_token_provisioned" {
+  description = <<-DESC
+    INF-070 / GoGo-BE SEC-004. Whether the share-link worker's EDGE_AUTH_TOKEN
+    secret has already been put with scripts/secrets/put-worker-secret.sh.
+
+    Not the token, and never the token: the value goes from SSM straight to
+    Cloudflare at deploy time, so Terraform holds no copy in its configuration,
+    its plan or its state. This flag only says whether to carry an existing
+    binding across script updates.
+
+    Put the secret first, then set this true and apply — see
+    docs/share-link-edge-auth.md.
+  DESC
+  type        = bool
+  default     = false
+}
+
 variable "dns_record_suffix" {
   description = "Every DNS record in this environment must end with this hostname. Empty disables the check."
   type        = string

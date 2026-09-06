@@ -14,9 +14,13 @@ const API_TRACKING = `https://track.tenjin.com/v0/click/FromApi?deeplink_url=${e
 
 const originalFetch = globalThis.fetch
 
+/** Headers the Worker sent on its last call to the API. */
+let lastRequestHeaders = null
+
 function apiAnswering(status, body) {
-  globalThis.fetch = async (url) => {
+  globalThis.fetch = async (url, init) => {
     assert.equal(url, `https://api.test/v1/share-links/${SLUG}`)
+    lastRequestHeaders = new Headers(init?.headers ?? {})
     return new Response(body === undefined ? null : JSON.stringify(body), {
       status,
       headers: { 'content-type': 'application/json' },
@@ -28,7 +32,7 @@ function env(overrides = {}) {
   return { API_ORIGIN: 'https://api.test', TENJIN_TRACKING_TEMPLATE: '', FALLBACK_URL: '', ...overrides }
 }
 
-const click = (e) => worker.fetch(new Request(CANONICAL), e, {})
+const click = (e, requestInit) => worker.fetch(new Request(CANONICAL, requestInit), e, {})
 
 describe('share-link worker', () => {
   beforeEach(() => apiAnswering(200, { type: 'PLACE', trackingUrl: null }))
@@ -117,5 +121,66 @@ describe('share-link worker', () => {
     assert.equal(aasa.headers.get('content-type'), 'application/json')
     const post = await worker.fetch(new Request(CANONICAL, { method: 'POST' }), env(), {})
     assert.equal(post.status, 405)
+  })
+})
+
+describe('forwarding the visitor address to the API (INF-070)', () => {
+  const TOKEN = 'edge-token-for-tests-'.padEnd(48, 'z')
+  beforeEach(() => {
+    lastRequestHeaders = null
+    apiAnswering(200, { type: 'PLACE', trackingUrl: null })
+  })
+  afterEach(() => {
+    globalThis.fetch = originalFetch
+  })
+
+  it('sends the token and the address Cloudflare set', async () => {
+    await click(env({ EDGE_AUTH_TOKEN: TOKEN }), {
+      headers: { 'CF-Connecting-IP': '203.0.113.7' },
+    })
+    assert.equal(lastRequestHeaders.get('x-gogo-edge-auth'), TOKEN)
+    assert.equal(lastRequestHeaders.get('x-gogo-client-ip'), '203.0.113.7')
+    assert.equal(lastRequestHeaders.get('accept'), 'application/json')
+  })
+
+  it('sends neither header when no token is bound', async () => {
+    // Every environment today. An unauthenticated hint would be ignored by the
+    // API anyway, and sending one would suggest it was worth something.
+    await click(env(), { headers: { 'CF-Connecting-IP': '203.0.113.7' } })
+    assert.equal(lastRequestHeaders.get('x-gogo-edge-auth'), null)
+    assert.equal(lastRequestHeaders.get('x-gogo-client-ip'), null)
+  })
+
+  it('sends the token but no address when Cloudflare set none', async () => {
+    await click(env({ EDGE_AUTH_TOKEN: TOKEN }), {})
+    assert.equal(lastRequestHeaders.get('x-gogo-edge-auth'), TOKEN)
+    assert.equal(lastRequestHeaders.get('x-gogo-client-ip'), null)
+  })
+
+  it('never relays a header the visitor sent', async () => {
+    // The visitor controls their own request. `CF-Connecting-IP` is overwritten
+    // by Cloudflare before the Worker sees it, and nothing else is copied — an
+    // X-Forwarded-For or an X-GoGo-Client-IP from the client must not survive
+    // this hop wearing the Worker's token.
+    await click(env({ EDGE_AUTH_TOKEN: TOKEN }), {
+      headers: {
+        'CF-Connecting-IP': '203.0.113.7',
+        'x-forwarded-for': '198.51.100.66',
+        'x-gogo-client-ip': '198.51.100.77',
+        authorization: 'Bearer someone-elses-session',
+      },
+    })
+    assert.equal(lastRequestHeaders.get('x-gogo-client-ip'), '203.0.113.7')
+    assert.equal(lastRequestHeaders.get('x-forwarded-for'), null)
+    assert.equal(lastRequestHeaders.get('authorization'), null)
+  })
+
+  it('redirects exactly as before — attribution and routing do not change', async () => {
+    const withToken = await click(env({ EDGE_AUTH_TOKEN: TOKEN }), {
+      headers: { 'CF-Connecting-IP': '203.0.113.7' },
+    })
+    const without = await click(env(), {})
+    assert.equal(withToken.status, without.status)
+    assert.equal(withToken.headers.get('location'), without.headers.get('location'))
   })
 })

@@ -75,3 +75,28 @@ variable "fallback_url" {
     error_message = "fallback_url must be empty or an https URL with no credentials, not under /l/ on any host."
   }
 }
+
+variable "edge_auth_token_provisioned" {
+  description = <<-DESC
+    INF-070 / GoGo-BE SEC-004. Whether `EDGE_AUTH_TOKEN` has already been put on
+    this worker with `scripts/secrets/put-worker-secret.sh`.
+
+    **This module never receives the token.** The value is a Cloudflare Worker
+    secret written at deploy time straight from SSM; Terraform only says whether
+    a binding by that name should be carried across script updates, using the
+    Workers API's `inherit` type. So the token is absent from the configuration,
+    from the plan, from the state file and from every log line either produces.
+
+    false — the state of every environment today — emits no binding at all,
+    which is also what the worker expects: with no token bound it forwards no
+    edge headers, and the API trusts nothing.
+
+    Ordering matters and only one order works. Put the secret first, then set
+    this true and apply. `inherit` on a script that has no such binding yet is
+    an error, and an apply while this is false removes a binding that exists.
+    docs/share-link-edge-auth.md is the runbook.
+  DESC
+
+  type    = bool
+  default = false
+}

@@ -51,10 +51,37 @@ function notFound(message) {
   })
 }
 
-async function resolveSlug(slug, env) {
+/**
+ * Headers that tell the API who is on the other end of this click.
+ *
+ * INF-070 / GoGo-BE SEC-004. This runs server-to-server, so without help every
+ * click reaches the API as one of a handful of Cloudflare egress addresses:
+ * the API's per-visitor rate limit becomes a ceiling shared by the whole
+ * product, and tells no two visitors apart.
+ *
+ * `CF-Connecting-IP` is set by Cloudflare at the edge and overwrites anything
+ * the visitor sent under that name, so it is the one address here that cannot
+ * be lied about. It is forwarded under a GoGo-specific name — deliberately not
+ * `X-Forwarded-For`, which the API must never trust from anyone — alongside the
+ * token that proves this request came from this Worker. The API believes the
+ * address only when the token verifies, and strips both headers otherwise.
+ *
+ * No token binding means no headers: an unauthenticated hint would be ignored
+ * by the API anyway, and sending one would suggest it was worth something.
+ * Nothing from `request.headers` is ever relayed.
+ */
+function edgeHeaders(request, env) {
+  const token = env.EDGE_AUTH_TOKEN
+  if (!token) return {}
+  const clientIp = request.headers.get('CF-Connecting-IP')
+  if (!clientIp) return { 'x-gogo-edge-auth': token }
+  return { 'x-gogo-edge-auth': token, 'x-gogo-client-ip': clientIp }
+}
+
+async function resolveSlug(slug, env, request) {
   const url = `${env.API_ORIGIN}/v1/share-links/${encodeURIComponent(slug)}`
   const response = await fetch(url, {
-    headers: { accept: 'application/json' },
+    headers: { accept: 'application/json', ...edgeHeaders(request, env) },
     // The edge should fail fast: a share link that takes seconds is a share
     // link people abandon.
     signal: AbortSignal.timeout(3000),
@@ -157,7 +184,7 @@ export default {
 
     let link
     try {
-      link = await resolveSlug(slug, env)
+      link = await resolveSlug(slug, env, request)
     } catch (error) {
       // The API being down is not the sharer's problem and not the recipient's.
       // 502 rather than a redirect to nowhere, so a retry can succeed.

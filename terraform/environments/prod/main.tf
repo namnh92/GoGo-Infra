@@ -378,14 +378,15 @@ module "share_link_worker" {
   source = "../../modules/cloudflare-worker"
   count  = var.share_host == "" || var.cloudflare_zone_id == "" ? 0 : 1
 
-  account_id               = var.cloudflare_account_id
-  zone_id                  = var.cloudflare_zone_id
-  environment              = var.environment
-  script_name              = "${module.tags.name_prefix}-share-link"
-  host                     = var.share_host
-  api_origin               = var.api_origin
-  tenjin_tracking_template = var.tenjin_tracking_template
-  fallback_url             = var.share_fallback_url
+  account_id                  = var.cloudflare_account_id
+  zone_id                     = var.cloudflare_zone_id
+  environment                 = var.environment
+  script_name                 = "${module.tags.name_prefix}-share-link"
+  host                        = var.share_host
+  api_origin                  = var.api_origin
+  tenjin_tracking_template    = var.tenjin_tracking_template
+  fallback_url                = var.share_fallback_url
+  edge_auth_token_provisioned = var.share_edge_auth_token_provisioned
 }
 
 module "dns" {

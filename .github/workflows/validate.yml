@@ -106,6 +106,24 @@ jobs:
       - name: gitleaks
         run: make scan
 
+  workers:
+    name: share-link worker tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The Worker is the hop that tells the API who is on the other end of a
+      # click (INF-070). Its tests were sitting beside it, run by no job — and
+      # a test nobody runs is a comment. Pass the file rather than the
+      # directory: the directory form resolves as a module on Node 22 and dies
+      # before a single test runs.
+      - name: node --test
+        run: node --test workers/share-link/test/worker.test.mjs
+
   scripts:
     name: shellcheck
     runs-on: ubuntu-latest
@@ -201,6 +219,13 @@ jobs:
             python3 scripts/lib/manifest.py "$env" >/dev/null
             echo "${env}: $(python3 scripts/lib/manifest.py "$env" --required | wc -l) required parameters"
           done
+
+      # INF-070. The value this script moves must never reach Terraform, a file,
+      # an environment variable or a log, and the only way to keep that true is
+      # to assert it. The test also fails if a `secret_text` binding or a
+      # value-carrying variable is ever added back.
+      - name: the worker secret never leaves the pipe
+        run: ./scripts/secrets/put-worker-secret.test.sh
 
       # pull_request_target runs the base branch's workflow with full privileges
       # against the pull request's code. With OIDC credentials in reach, that is
