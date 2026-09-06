@@ -540,6 +540,7 @@ module "share_link_worker" {
   host                     = var.share_host
   api_origin               = var.api_origin
   tenjin_tracking_template = var.tenjin_tracking_template
+  fallback_url             = var.share_fallback_url
 }
 
 # CMS front end — hostname and access control only. GoGo-CMS deploys the Worker

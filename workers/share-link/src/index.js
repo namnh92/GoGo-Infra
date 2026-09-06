@@ -102,11 +102,16 @@ function fallback(canonical, env) {
   if (env.FALLBACK_URL) {
     try {
       const url = new URL(env.FALLBACK_URL)
-      url.searchParams.set('link', canonical)
-      return new Response(null, {
-        status: 302,
-        headers: { location: url.toString(), 'cache-control': 'no-store' },
-      })
+      // A landing page under /l/ — on this host or any other — is this route
+      // again: a redirect there is the loop this function exists to prevent.
+      // Terraform refuses the value too; this is the last line of defence.
+      if (url.protocol === 'https:' && !/^\/l(\/|$)/.test(url.pathname)) {
+        url.searchParams.set('link', canonical)
+        return new Response(null, {
+          status: 302,
+          headers: { location: url.toString(), 'cache-control': 'no-store' },
+        })
+      }
     } catch {
       // Misconfigured landing page: fall through to the plain answer.
     }

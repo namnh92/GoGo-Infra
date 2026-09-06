@@ -1,0 +1,8 @@
+{
+  "name": "gogo-share-link-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

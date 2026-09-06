@@ -57,4 +57,14 @@ variable "fallback_url" {
 
   type    = string
   default = ""
+
+  validation {
+    # https only, and never a path under /l/ — that is the route this worker
+    # serves, so such a value would redirect every click back to itself.
+    condition = var.fallback_url == "" || (
+      can(regex("^https://[^/?#]+(/[^?#]*)?(\\?[^#]*)?$", var.fallback_url)) &&
+      !can(regex("^https://[^/?#]+/l(/|$)", var.fallback_url))
+    )
+    error_message = "fallback_url must be empty or an https URL that is not under /l/ on any host."
+  }
 }
