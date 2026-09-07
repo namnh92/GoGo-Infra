@@ -87,8 +87,14 @@ if git -C "$pem_dir" rev-parse --show-toplevel >/dev/null 2>&1; then
          chmod 600 ~/.config/gogo/secrets/${ENVIRONMENT}/onesignal-identity.pem"
 fi
 
-# stat(1) differs between BSD and GNU; ask both rather than assume the platform.
-mode="$(stat -f '%Lp' "$PEM_FILE" 2>/dev/null || stat -c '%a' "$PEM_FILE" 2>/dev/null || echo '')"
+# python3, not stat(1). The two stat flavours disagree about `-f`: BSD reads it
+# as a format string, GNU as --file-system, so a BSD-first fallback chain does
+# not fail over on Linux — it *succeeds* and returns something that is not a
+# mode. Every check after this one then died with "must be 0600". Same trap as
+# the BSD/GNU sed note in scripts/lib/config.sh; python3 is already required
+# here by common.sh, and has one answer on both.
+mode="$(python3 -c 'import os, stat, sys
+print("%o" % stat.S_IMODE(os.stat(sys.argv[1]).st_mode))' "$PEM_FILE" 2>/dev/null || echo '')"
 if [[ -n "$mode" && "$mode" != "600" && "$mode" != "400" ]]; then
   die "${PEM_FILE} is mode ${mode}; a signing key must be 0600.
          chmod 600 '${PEM_FILE}'"
@@ -107,7 +113,10 @@ command -v openssl >/dev/null || die "openssl is required"
 # The OID is matched instead of `-text_pub` output because the text format
 # differs between OpenSSL and LibreSSL — macOS ships the latter at
 # /usr/bin/openssl — while the DER encoding does not.
-if ! spki_hex="$(openssl pkey -in "$PEM_FILE" -pubout -outform DER -passin pass: 2>/dev/null </dev/null | xxd -p | tr -d '\n')" ||
+# `od`, not `xxd`: xxd ships with vim, not coreutils, so it is present on a
+# developer laptop and absent from a minimal image — a dependency that fails
+# only in CI, or only in production, is the worst kind to take on a validator.
+if ! spki_hex="$(openssl pkey -in "$PEM_FILE" -pubout -outform DER -passin pass: 2>/dev/null </dev/null | od -An -v -tx1 | tr -d ' \n')" ||
   [[ -z "$spki_hex" ]]; then
   die "${PEM_FILE} is not an unencrypted private key.
        OneSignal issues it under Settings -> Keys & IDs -> Identity Verification.

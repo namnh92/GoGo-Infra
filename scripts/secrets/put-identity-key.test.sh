@@ -250,7 +250,11 @@ fi
 # render-env.sh:42 and pull.sh:82 are both `printf '%s=%s\n'`. Anything with a
 # newline in it produces orphan lines no env parser can attach to a variable.
 run "${KEYS}/p256-sec1.pem" dev >/dev/null
-if [[ "$(wc -l <"$STORED" | tr -d ' ')" == "0" ]]; then
+# -s first. An empty $STORED — which is what a die *before* the upload leaves
+# behind — has zero lines and matches no forbidden pattern, so without this the
+# next three assertions pass by never having run. That is exactly how a
+# BSD-only `stat` call reached CI green locally and failed on Linux.
+if [[ -s "$STORED" && "$(wc -l <"$STORED" | tr -d ' ')" == "0" ]]; then
   pass "the stored value is a single line"
 else
   fail "the stored value is a single line"
