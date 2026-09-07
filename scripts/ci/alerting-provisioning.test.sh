@@ -83,6 +83,12 @@ rs = g["rules"]
 uids = [r["uid"] for r in rs]
 titles = [r["title"] for r in rs]
 want(len(set(uids)) == len(uids), f"duplicate rule uid: {[u for u in uids if uids.count(u) > 1]}")
+# Grafana's own constraint, from rules_types.go: "Should not exceed 40 symbols.
+# Only letters, numbers, - (hyphen), and _ (underscore) allowed." A uid that
+# breaks it fails provisioning at start, which is a slow way to find out.
+for u in uids:
+    want(len(u) <= 40, f"rule uid {u!r} is {len(u)} characters; Grafana's limit is 40")
+    want(re.fullmatch(r"[A-Za-z0-9_-]+", u), f"rule uid {u!r} uses characters Grafana rejects")
 want(len(set(titles)) == len(titles), f"duplicate rule title: {[t for t in titles if titles.count(t) > 1]}")
 
 # The metric contract, mirrored from GoGo-BE cf5989c / dd3d1ee
