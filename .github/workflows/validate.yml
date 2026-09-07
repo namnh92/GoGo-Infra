@@ -236,6 +236,14 @@ jobs:
       - name: the worker secret never leaves the pipe
         run: ./scripts/secrets/put-worker-secret.test.sh
 
+      # NTF-BE-008. The identity signing key is the one credential here that is
+      # neither a token nor a string: it is a PEM, and the runtime env renderers
+      # emit one line per variable. The tests assert the encoding that survives
+      # that, and that a wrong curve, a public key or an encrypted file is
+      # refused before the upload rather than discovered on a phone.
+      - name: the identity key is validated and encoded before it reaches SSM
+        run: ./scripts/secrets/put-identity-key.test.sh
+
       # The mobile env renderer decides what a client build is allowed to hold.
       # Its tests are the only thing standing between "public config" and a
       # server key rendered into a bundle, so they run here rather than living
