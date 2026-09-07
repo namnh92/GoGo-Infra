@@ -1,0 +1,47 @@
+# ADR-0009 §F5. The Telegram receiver for administrative-data alerts.
+#
+# Grafana 13.2.1. Field names verified against the source rather than the docs,
+# because the two disagree in places:
+#   - grafana/alerting  receivers/telegram/v1/config.go  → `bottoken`, `chatid`,
+#     `parse_mode`, `disable_web_page_preview`, `protect_content`,
+#     `disable_notifications`, `message_thread_id`, `message`
+#   - grafana/grafana   pkg/services/provisioning/alerting/contact_point_types.go
+#     → ReceiverV1.Settings is a `values.JSONValue`, which expands the
+#     environment, so ${VAR} below is interpolated from the Grafana container's
+#     environment and no credential is written here.
+#
+# `bottoken` is a secure field: Grafana encrypts it into secureSettings on
+# provisioning. It is never readable back through the UI or the API.
+#
+# An EMPTY token does not provision a broken contact point quietly. The same
+# file's NewConfig() returns `could not find Bot Token in settings`, provisioning
+# fails, and Grafana logs it — which is the loud failure ADR-0007 §E8 asks for
+# rather than a channel that silently never delivers.
+#
+# Values come from SSM through bin/render-alerting-env.sh → .env.alerting.
+# Nothing here is committed and nothing here is printed.
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: gogo-administrative-telegram
+    receivers:
+      - uid: gogo-adm-telegram
+        type: telegram
+        # false = a recovery message is sent when the alert resolves. Required
+        # by the acceptance run (step 14): an alert channel that only ever says
+        # "broken" trains people to stop reading it.
+        disableResolveMessage: false
+        settings:
+          bottoken: ${GRAFANA_TELEGRAM_BOT_TOKEN}
+          chatid: ${GRAFANA_TELEGRAM_CHAT_ID}
+          # HTML is the receiver's own default; named here so a future reader
+          # knows the template's <b> tags are deliberate. The template emits no
+          # raw `<` or `&` from metric data — every interpolated value is a
+          # number, a closed-set label, or a URL.
+          parse_mode: HTML
+          # Alert links point at a LAN address the Telegram client cannot fetch;
+          # a preview card for an unreachable host is noise on every message.
+          disable_web_page_preview: true
+          message: |
+            {{ template "gogo.administrative.telegram" . }}

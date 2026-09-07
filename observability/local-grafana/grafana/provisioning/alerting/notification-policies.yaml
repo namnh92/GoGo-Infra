@@ -1,0 +1,42 @@
+# ADR-0009 §F6. One child route; the root keeps whatever it had.
+#
+# HAZARD, stated because it is not obvious and it is not reversible by editing
+# this file alone: provisioning `policies:` replaces the org's ENTIRE root
+# policy tree, not just the child route added below. Capture the current tree
+# before the first apply (the runbook says how), and use `resetPolicies: [1]`
+# to roll back to Grafana's default.
+#
+# The root therefore repeats what Grafana's default root already is, so that
+# applying this file changes exactly one thing: administrative-data alerts get
+# a second destination. Nothing else is re-routed, which is the requirement —
+# ADR-0006 §D3 still owns every other alert, and there are none.
+apiVersion: 1
+
+policies:
+  - orgId: 1
+    # Grafana's built-in default contact point. Overridable because an operator
+    # may have renamed it; a name that does not exist fails provisioning loudly.
+    receiver: ${GOGO_ALERTS_DEFAULT_RECEIVER}
+    group_by:
+      - grafana_folder
+      - alertname
+    routes:
+      # The only route this ADR adds. `service` is set on every rule in the
+      # administrative folder and on nothing else, so this cannot capture an
+      # unrelated alert even if one is added later to another folder.
+      - receiver: gogo-administrative-telegram
+        object_matchers:
+          - ['service', '=', 'administrative-data']
+        # No `continue: true`. Matching ends here: an administrative alert goes
+        # to Telegram and not also to the root receiver, which would double every
+        # message.
+        group_by:
+          - grafana_folder
+          - alertname
+        # One batch per minute of evaluation, then quiet. `repeat_interval` is
+        # long on purpose: these conditions persist for hours by nature (a
+        # missing dataset does not un-miss itself), and a 4h reminder on a known
+        # state is how a channel becomes background noise.
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 12h

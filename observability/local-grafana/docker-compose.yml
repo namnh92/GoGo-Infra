@@ -90,6 +90,31 @@ services:
       # is never written into a committed YAML.
       PROMETHEUS_BASIC_AUTH_USER: ${PROMETHEUS_BASIC_AUTH_USER:?set PROMETHEUS_BASIC_AUTH_USER in .env}
       PROMETHEUS_BASIC_AUTH_PASSWORD: ${PROMETHEUS_BASIC_AUTH_PASSWORD:?set PROMETHEUS_BASIC_AUTH_PASSWORD in .env}
+      # ADR-0009 §F4. Read by every rule in provisioning/alerting as
+      # `isPaused: ${GOGO_ADM_ALERTS_PAUSED}`. Grafana's values.BoolValue
+      # expands the environment and then calls strconv.ParseBool, so an EMPTY
+      # value fails provisioning rather than resolving to "not paused" — and
+      # `:?` here stops the stack before it ever gets that far.
+      #
+      # All 39 administrative series are absent until the BE build containing
+      # cf5989c is deployed. `true` is the only safe default and the runbook's
+      # activation step is the only thing that changes it.
+      GOGO_ADM_ALERTS_PAUSED: ${GOGO_ADM_ALERTS_PAUSED:?set GOGO_ADM_ALERTS_PAUSED in .env — true until the acceptance run}
+      # The org's existing root receiver, repeated so provisioning the child
+      # route does not silently re-point everything else (ADR-0009 §F6).
+      # `:-` and not `:?`: this is a name, not a credential, and Grafana's
+      # built-in default is what it has always been.
+      GOGO_ALERTS_DEFAULT_RECEIVER: ${GOGO_ALERTS_DEFAULT_RECEIVER:-grafana-default-email}
+    env_file:
+      # The Telegram credential, rendered from SSM by bin/render-alerting-env.sh
+      # (ADR-0009 §F5). `required: true` is the point: without it a missing file
+      # is silently skipped, Grafana starts, and the contact point is provisioned
+      # with an empty token — a channel that exists and never delivers.
+      #
+      # On the Grafana service only. Prometheus has no reason to hold it, and the
+      # blast radius of a credential is every process that can read it.
+      - path: ./.env.alerting
+        required: true
     ports:
       - ${OBS_BIND_IP:?set OBS_BIND_IP in .env — never 0.0.0.0}:${GRAFANA_HTTP_PORT:-3000}:3000
     volumes:

@@ -1,0 +1,1153 @@
+# ADR-0009 — alert rules for the administrative-data surface. INF-156.
+#
+# The metric contract these read is GoGo-BE#463, merged in cf5989c and extended
+# in dd3d1ee. Every metric and every label value below is taken from
+# GoGo-BE/libs/observability/src/metric-labels.ts and
+# GoGo-BE/docs/administrative-observability.md — not guessed, and asserted by
+# scripts/ci/alerting-provisioning.test.sh.
+#
+# THREE RULES THIS FILE FOLLOWS, and the test enforces:
+#
+# 1. Never alert on the LEVEL of a known baseline. The pinned dataset ships with
+#    1,033 unresolved rows, 1,370 simplification anomalies, 233 same-level
+#    overlaps, 56 area outliers and 1 formatting warning. They are the data. The
+#    backlog rules read delta() and the finding rules read severity="ERROR".
+#
+# 2. Counters are read through increase() over a window, never as a lifetime
+#    total. A process restart resets a counter; a lifetime threshold would fire
+#    on history and then never recover.
+#
+# 3. `or vector(0)` where absence genuinely means zero — a counter series does
+#    not exist until its first increment, and "no failures yet" must not read as
+#    NoData. It is deliberately ABSENT from the two guarded rules, where an
+#    empty result means "not applicable" and NoData: OK says so honestly.
+#
+# BOOTSTRAP. All 39 series are absent until the BE build containing cf5989c is
+# deployed, so every rule ships paused: `isPaused: ${GOGO_ADM_ALERTS_PAUSED}`,
+# which defaults to true. Grafana's values.BoolValue expands the environment and
+# then calls strconv.ParseBool, so an UNSET variable fails provisioning loudly
+# rather than quietly resolving to "not paused". Activation is
+# docs/runbook-administrative-alerts.md § Activation, after seven recorded
+# conditions — never a side effect of a deploy.
+#
+# `no_data = OK` is not used to hide an uninstrumented system: adm-dataset-missing
+# reads its gauge bare with noDataState: Alerting and is the sentinel for the
+# whole family disappearing. That is exactly why these must not run before the
+# metrics exist.
+#
+# Generated once from a table and then owned by hand. Editing a rule here is the
+# whole change; there is no generator to re-run.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: administrative-data
+    folder: GoGo Administrative Data
+    # Equal to the scrape interval, never faster. Alloy scrapes GoGo-BE every
+    # 60s (GoGo-BE/docker/alloy/config.alloy), so evaluating more often would
+    # re-read the same sample and only move the moment a rule notices by less
+    # than the data's own resolution.
+    interval: 60s
+    rules:
+    - uid: adm-dataset-missing
+      title: "Administrative dataset missing"
+      condition: B
+      data:
+        - refId: A
+          relativeTimeRange:
+            from: 600
+            to: 0
+          datasourceUid: gogo-prometheus-local
+          model:
+            refId: A
+            datasource:
+              type: prometheus
+              uid: gogo-prometheus-local
+            editorMode: code
+            expr: "max(administrative_dataset_active{env=\"dev\"})"
+            instant: true
+            range: false
+            intervalMs: 60000
+            maxDataPoints: 43200
+        - refId: B
+          relativeTimeRange:
+            from: 600
+            to: 0
+          datasourceUid: __expr__
+          model:
+            refId: B
+            type: threshold
+            datasource:
+              type: __expr__
+              uid: __expr__
+            expression: A
+            conditions:
+              - evaluator:
+                  type: lt
+                  params:
+                    - 1
+                operator:
+                  type: and
+                query:
+                  params:
+                    - A
+                reducer:
+                  type: last
+                type: query
+            intervalMs: 1000
+            maxDataPoints: 43200
+      for: 15m
+      noDataState: Alerting
+      execErrState: Error
+      isPaused: ${GOGO_ADM_ALERTS_PAUSED}
+      labels:
+        service: administrative-data
+        env: dev
+        severity: high
+      annotations:
+        summary: "no published administrative dataset for 15m"
+        impact: "no place can be approved; the domain guard refuses every publication"
+        expected: "administrative_dataset_active = 1"
+        description: "The sentinel rule. It reads the gauge bare, so a total disappearance of the administrative metric family lands here as NoData -> Alerting rather than being absorbed by another rule's `or vector(0)`. Every other rule in this group can therefore assume the family exists."
+        runbook: "docs/runbook-administrative-alerts.md#adm-dataset-missing"
+    - uid: adm-publication-blocked
+      title: "Administrative publication blocked"
+      condition: B
+      data:
+        - refId: A
+          relativeTimeRange:
+            from: 600
+            to: 0
+          datasourceUid: gogo-prometheus-local
+          model:
+            refId: A
+            datasource:
+              type: prometheus
+              uid: gogo-prometheus-local
+            editorMode: code
+            expr: "count((max(administrative_publication_enabled{env=\"dev\"}) == 0) and on() (max(administrative_dataset_active{env=\"dev\"}) == 1))"
+            instant: true
+            range: false
+            intervalMs: 60000
+            maxDataPoints: 43200
+        - refId: B
+          relativeTimeRange:
+            from: 600
+            to: 0
+          datasourceUid: __expr__
+          model:
+            refId: B
+            type: threshold
+            datasource:
+              type: __expr__
+              uid: __expr__
+            expression: A
+            conditions:
+              - evaluator:
+                  type: gt
+                  params:
+                    - 0
+                operator:
+                  type: and
+                query:
+                  params:
+                    - A
+                reducer:
+                  type: last
+                type: query
+            intervalMs: 1000
+            maxDataPoints: 43200
+      for: 30m
+      noDataState: OK
+      execErrState: Error
+      isPaused: ${GOGO_ADM_ALERTS_PAUSED}
+      labels:
+        service: administrative-data
+        env: dev
+        severity: high
+      annotations:
+        summary: "publication disabled for 30m while a dataset is published"
+        impact: "places cannot be approved even though the dataset that would let them is live"
+        expected: "administrative_publication_enabled = 1 whenever a dataset is published"
+        description: "Guarded by dataset_active == 1 so it stays silent during bootstrap, when publication is correctly disabled because nothing is published yet. The guard is why NoData means OK here: an empty result is 'not applicable', not 'unknown'."
+        runbook: "docs/runbook-administrative-alerts.md#adm-publication-blocked"
+    - uid: adm-lifecycle-failed
+      title: "Administrative dataset lifecycle failure"
+      condition: B
+      data:
+        - refId: A
+          relativeTimeRange:
+            from: 1800
+            to: 0
+          datasourceUid: gogo-prometheus-local
+          model:
+            refId: A
+            datasource:
+              type: prometheus
+              uid: gogo-prometheus-local
+            editorMode: code
+            expr: "sum(increase(administrative_dataset_operations_total{env=\"dev\",result=\"failed\"}[15m])) or vector(0)"
+            instant: true
+            range: false
+            intervalMs: 60000
+            maxDataPoints: 43200
+        - refId: B
+          relativeTimeRange:
+            from: 1800
+            to: 0
+          datasourceUid: __expr__
+          model:
+            refId: B
+            type: threshold
+            datasource:
+              type: __expr__
+              uid: __expr__
+            expression: A
+            conditions:
+              - evaluator:
+                  type: gt
+                  params:
+                    - 0
+                operator:
+                  type: and
+                query:
+                  params:
+                    - A
+                reducer:
+                  type: last
+                type: query
+            intervalMs: 1000
+            maxDataPoints: 43200
+      for: 0s
+      noDataState: OK
+      execErrState: Error
+      isPaused: ${GOGO_ADM_ALERTS_PAUSED}
+      labels:
+        service: administrative-data
+        env: dev
+        severity: high
+      annotations:
+        summary: "an import, validate, diff, publish or rollback failed in the last 15m"
+        impact: "the dataset lifecycle is stuck; the operator who ran it is waiting on a fix"
+        expected: "result=failed stays at 0"
+        description: "`failed` only. GoGo-BE keeps `rejected` in a separate bucket on purpose: a refused publication is the policy working, and paging on it would train the channel away. Reads increase() over a window, never the lifetime counter."
+        runbook: "docs/runbook-administrative-alerts.md#adm-lifecycle-failed"
+    - uid: adm-validation-error
+      title: "Administrative validation ERROR finding"
+      condition: B
+      data:
+        - refId: A
+          relativeTimeRange:
+            from: 7200
+            to: 0
+          datasourceUid: gogo-prometheus-local
+          model:
+            refId: A
+            datasource:
+              type: prometheus
+              uid: gogo-prometheus-local
+            editorMode: code
+            expr: "sum(increase(administrative_validation_findings_total{env=\"dev\",severity=\"ERROR\"}[1h])) or vector(0)"
+            instant: true
+            range: false
+            intervalMs: 60000
+            maxDataPoints: 43200
+        - refId: B
+          relativeTimeRange:
+            from: 7200
+            to: 0
+          datasourceUid: __expr__
+          model:
+            refId: B
+            type: threshold
+            datasource:
+              type: __expr__
+              uid: __expr__
+            expression: A
+            conditions:
+              - evaluator:
+                  type: gt
+                  params:
+                    - 0
+                operator:
+                  type: and
+                query:
+                  params:
+                    - A
+                reducer:
+                  type: last
+                type: query
+            intervalMs: 1000
+            maxDataPoints: 43200
+      for: 0s
+      noDataState: OK
+      execErrState: Error
+      isPaused: ${GOGO_ADM_ALERTS_PAUSED}
+      labels:
+        service: administrative-data
+        env: dev
+        severity: high
+      annotations:
+        summary: "a validation gate produced an ERROR finding in the last hour"
+        impact: "the staged dataset cannot be published until the gate passes"
+        expected: "ERROR findings stay at 0; WARNING findings are the baseline and never fire"
+        baseline: "WARNING families are expected: 1,033 UNRESOLVED_CHANGES, 1,370 COMMUNE_OUTSIDE_PROVINCE, 233 SAME_LEVEL_OVERLAP, 56 AREA_OUTLIER, 1 SOURCE_FORMATTING"
+        description: "Filters severity=ERROR. The WARNING families above are the pinned dataset's measured baseline; a rule on their level would fire forever on correct data."
+        runbook: "docs/runbook-administrative-alerts.md#adm-validation-error"
+    - uid: adm-boundary-missing
+      title: "Administrative boundaries not loaded"
+      condition: B
+      data:
+        - refId: A
+          relativeTimeRange:
+            from: 600
+            to: 0
+          datasourceUid: gogo-prometheus-local
+          model:
+            refId: A
+            datasource:
+              type: prometheus
+              uid: gogo-prometheus-local
+            editorMode: code
+            expr: "count((max(administrative_boundary_active{env=\"dev\"}) == 0) and on() (max(administrative_dataset_active{env=\"dev\"}) == 1))"
+            instant: true
+            range: false
+            intervalMs: 60000
+            maxDataPoints: 43200
+        - refId: B
+          relativeTimeRange:
+            from: 600
+            to: 0
+          datasourceUid: __expr__
+          model:
+            refId: B
+            type: threshold
+            datasource:
+              type: __expr__
+              uid: __expr__
+            expression: A
+            conditions:
+              - evaluator:
+                  type: gt
+                  params:
+                    - 0
+                operator:
+                  type: and
+                query:
+                  params:
+                    - A
+                reducer:
+                  type: last
+                type: query
+            intervalMs: 1000
+            maxDataPoints: 43200
+      for: 30m
+      noDataState: OK
+      execErrState: Error
+      isPaused: ${GOGO_ADM_ALERTS_PAUSED}
+      labels:
+        service: administrative-data
+        env: dev
+        severity: high
+      annotations:
+        summary: "no boundary release loaded for 30m while a dataset is published"
+        impact: "the resolver runs PARTIAL: geometry answers nothing, so most places land in review"
+        expected: "administrative_boundary_active = 1 whenever a dataset is published"
+        description: "Same guard as adm-publication-blocked, for the same reason. PARTIAL is a degradation, not an outage \u2014 the resolver still answers from codes, names and the change mapping \u2014 which is why this is 30m and not 15m."
+        runbook: "docs/runbook-administrative-alerts.md#adm-boundary-missing"
+    - uid: adm-boundary-load-failed
+      title: "Administrative boundary load failed"
+      condition: B
+      data:
+        - refId: A
+          relativeTimeRange:
+            from: 7200
+            to: 0
+          datasourceUid: gogo-prometheus-local
+          model:
+            refId: A
+            datasource:
+              type: prometheus
+              uid: gogo-prometheus-local
+            editorMode: code
+            expr: "sum(increase(administrative_boundary_loads_total{env=\"dev\",result=~\"failed|rejected\"}[1h])) or vector(0)"
+            instant: true
+            range: false
+            intervalMs: 60000
+            maxDataPoints: 43200
+        - refId: B
+          relativeTimeRange:
+            from: 7200
+            to: 0
+          datasourceUid: __expr__
+          model:
+            refId: B
+            type: threshold
+            datasource:
+              type: __expr__
+              uid: __expr__
+            expression: A
+            conditions:
+              - evaluator:
+                  type: gt
+                  params:
+                    - 0
+                operator:
+                  type: and
+                query:
+                  params:
+                    - A
+                reducer:
+                  type: last
+                type: query
+            intervalMs: 1000
+            maxDataPoints: 43200
+      for: 0s
+      noDataState: OK
+      execErrState: Error
+      isPaused: ${GOGO_ADM_ALERTS_PAUSED}
+      labels:
+        service: administrative-data
+        env: dev
+        severity: warning
+      annotations:
+        summary: "a boundary release was refused or failed to load in the last hour"
+        impact: "the previously loaded release still serves; the new one did not take"
+        expected: "result=loaded or result=unchanged"
+        description: "`rejected` is included here, unlike the dataset lifecycle rule, because a refused boundary release leaves the operator with nothing loaded rather than with a working previous state to fall back to explaining."
+        runbook: "docs/runbook-administrative-alerts.md#adm-boundary-load-failed"
+    - uid: adm-boundary-validation-error
+      title: "Administrative boundary validation ERROR"
+      condition: B
+      data:
+        - refId: A
+          relativeTimeRange:
+            from: 7200
+            to: 0
+          datasourceUid: gogo-prometheus-local
+          model:
+            refId: A
+            datasource:
+              type: prometheus
+              uid: gogo-prometheus-local
+            editorMode: code
+            expr: "sum(increase(administrative_boundary_findings_total{env=\"dev\",severity=\"ERROR\"}[1h])) or vector(0)"
+            instant: true
+            range: false
+            intervalMs: 60000
+            maxDataPoints: 43200
+        - refId: B
+          relativeTimeRange:
+            from: 7200
+            to: 0
+          datasourceUid: __expr__
+          model:
+            refId: B
+            type: threshold
+            datasource:
+              type: __expr__
+              uid: __expr__
+            expression: A
+            conditions:
+              - evaluator:
+                  type: gt
+                  params:
+                    - 0
+                operator:
+                  type: and
+                query:
+                  params:
+                    - A
+                reducer:
+                  type: last
+                type: query
+            intervalMs: 1000
+            maxDataPoints: 43200
+      for: 0s
+      noDataState: OK
+      execErrState: Error
+      isPaused: ${GOGO_ADM_ALERTS_PAUSED}
+      labels:
+        service: administrative-data
+        env: dev
+        severity: high
+      annotations:
+        summary: "a boundary gate produced an ERROR finding in the last hour"
+        impact: "the boundary release is refused; the previous one still serves"
+        expected: "ERROR findings stay at 0"
+        baseline: "geometry WARNING families are the baseline: 1,370 COMMUNE_OUTSIDE_PROVINCE, 233 SAME_LEVEL_OVERLAP, 56 AREA_OUTLIER"
+        description: "Province and commune outlines were simplified independently, which is what produces the three WARNING families above. They are the data, not a defect, and this rule never reads them."
+        runbook: "docs/runbook-administrative-alerts.md#adm-boundary-validation-error"
+    - uid: adm-cache-refresh-failing
+      title: "Administrative cache refresh failing"
+      condition: B
+      data:
+        - refId: A
+          relativeTimeRange:
+            from: 3600
+            to: 0
+          datasourceUid: gogo-prometheus-local
+          model:
+            refId: A
+            datasource:
+              type: prometheus
+              uid: gogo-prometheus-local
+            editorMode: code
+            expr: "sum(increase(administrative_cache_refresh_total{env=\"dev\",result=\"failed\"}[30m])) or vector(0)"
+            instant: true
+            range: false
+            intervalMs: 60000
+            maxDataPoints: 43200
+        - refId: B
+          relativeTimeRange:
+            from: 3600
+            to: 0
+          datasourceUid: __expr__
+          model:
+            refId: B
+            type: threshold
+            datasource:
+              type: __expr__
+              uid: __expr__
+            expression: A
+            conditions:
+              - evaluator:
+                  type: gt
+                  params:
+                    - 2
+                operator:
+                  type: and
+                query:
+                  params:
+                    - A
+                reducer:
+                  type: last
+                type: query
+            intervalMs: 1000
+            maxDataPoints: 43200
+      for: 10m
+      noDataState: OK
+      execErrState: OK
+      isPaused: ${GOGO_ADM_ALERTS_PAUSED}
+      labels:
+        service: administrative-data
+        env: dev
+        severity: warning
+      annotations:
+        summary: "more than 2 cache warm-up failures in 30m"
+        impact: "the publishing process serves stale reads until the 60s TTL converges; PostgreSQL stays authoritative"
+        expected: "occasional single failures are normal and do not fire"
+        description: "Threshold is >2, not >0. A single failed warm-up is not an outage: other processes converge on the TTL and the database is authoritative. Repetition is the signal."
+        runbook: "docs/runbook-administrative-alerts.md#adm-cache-refresh-failing"
+    - uid: adm-backfill-run-failed
+      title: "Administrative backfill run failed"
+      condition: B
+      data:
+        - refId: A
+          relativeTimeRange:
+            from: 7200
+            to: 0
+          datasourceUid: gogo-prometheus-local
+          model:
+            refId: A
+            datasource:
+              type: prometheus
+              uid: gogo-prometheus-local
+            editorMode: code
+            expr: "sum(increase(administrative_backfill_runs_total{env=\"dev\",outcome=\"failed\"}[1h])) or vector(0)"
+            instant: true
+            range: false
+            intervalMs: 60000
+            maxDataPoints: 43200
+        - refId: B
+          relativeTimeRange:
+            from: 7200
+            to: 0
+          datasourceUid: __expr__
+          model:
+            refId: B
+            type: threshold
+            datasource:
+              type: __expr__
+              uid: __expr__
+            expression: A
+            conditions:
+              - evaluator:
+                  type: gt
+                  params:
+                    - 0
+                operator:
+                  type: and
+                query:
+                  params:
+                    - A
+                reducer:
+                  type: last
+                type: query
+            intervalMs: 1000
+            maxDataPoints: 43200
+      for: 0s
+      noDataState: OK
+      execErrState: Error
+      isPaused: ${GOGO_ADM_ALERTS_PAUSED}
+      labels:
+        service: administrative-data
+        env: dev
+        severity: high
+      annotations:
+        summary: "a backfill run ended in outcome=failed in the last hour"
+        impact: "the run stopped part-way; its cursor and counters are on the run row"
+        expected: "outcome=completed"
+        description: "`failed` only. `abandoned` is an operator decision and `stopped_version_changed` has its own rule, because the three need different responses and one bucket would hide that."
+        runbook: "docs/runbook-administrative-alerts.md#adm-backfill-run-failed"
+    - uid: adm-backfill-failure-rate
+      title: "Administrative backfill place failure rate"
+      condition: B
+      data:
+        - refId: A
+          relativeTimeRange:
+            from: 7200
+            to: 0
+          datasourceUid: gogo-prometheus-local
+          model:
+            refId: A
+            datasource:
+              type: prometheus
+              uid: gogo-prometheus-local
+            editorMode: code
+            expr: "(sum(increase(administrative_backfill_places_total{env=\"dev\",outcome=\"failure\",mode=\"execute\"}[1h])) or vector(0)) / clamp_min(sum(increase(administrative_backfill_places_total{env=\"dev\",mode=\"execute\"}[1h])) or vector(0), 1)"
+            instant: true
+            range: false
+            intervalMs: 60000
+            maxDataPoints: 43200
+        - refId: B
+          relativeTimeRange:
+            from: 7200
+            to: 0
+          datasourceUid: __expr__
+          model:
+            refId: B
+            type: threshold
+            datasource:
+              type: __expr__
+              uid: __expr__
+            expression: A
+            conditions:
+              - evaluator:
+                  type: gt
+                  params:
+                    - 0.05
+                operator:
+                  type: and
+                query:
+                  params:
+                    - A
+                reducer:
+                  type: last
+                type: query
+            intervalMs: 1000
+            maxDataPoints: 43200
+      for: 10m
+      noDataState: OK
+      execErrState: OK
+      isPaused: ${GOGO_ADM_ALERTS_PAUSED}
+      labels:
+        service: administrative-data
+        env: dev
+        severity: warning
+      annotations:
+        summary: "over 5% of executed backfill places failed in the last hour"
+        impact: "a systematic problem rather than scattered bad rows"
+        expected: "failure rate below 5%"
+        description: "mode=execute only: a dry run's counters describe what would have happened and must never alert. clamp_min guards the divide when no places were processed."
+        runbook: "docs/runbook-administrative-alerts.md#adm-backfill-failure-rate"
+    - uid: adm-backfill-version-stop
+      title: "Administrative backfill stopped on version change"
+      condition: B
+      data:
+        - refId: A
+          relativeTimeRange:
+            from: 7200
+            to: 0
+          datasourceUid: gogo-prometheus-local
+          model:
+            refId: A
+            datasource:
+              type: prometheus
+              uid: gogo-prometheus-local
+            editorMode: code
+            expr: "sum(increase(administrative_backfill_version_stops_total{env=\"dev\",mode=\"execute\"}[1h])) or vector(0)"
+            instant: true
+            range: false
+            intervalMs: 60000
+            maxDataPoints: 43200
+        - refId: B
+          relativeTimeRange:
+            from: 7200
+            to: 0
+          datasourceUid: __expr__
+          model:
+            refId: B
+            type: threshold
+            datasource:
+              type: __expr__
+              uid: __expr__
+            expression: A
+            conditions:
+              - evaluator:
+                  type: gt
+                  params:
+                    - 0
+                operator:
+                  type: and
+                query:
+                  params:
+                    - A
+                reducer:
+                  type: last
+                type: query
+            intervalMs: 1000
+            maxDataPoints: 43200
+      for: 0s
+      noDataState: OK
+      execErrState: OK
+      isPaused: ${GOGO_ADM_ALERTS_PAUSED}
+      labels:
+        service: administrative-data
+        env: dev
+        severity: warning
+      annotations:
+        summary: "an executing backfill stopped because the active dataset version changed"
+        impact: "not an outage: the run stopped deliberately rather than writing against a version that moved under it. It needs resuming or abandoning."
+        expected: "expected immediately after a publication; unexpected otherwise"
+        description: "Warning, not high. This is the safety mechanism working. It is here because a stopped run that nobody resumes is a backfill that silently never finishes."
+        runbook: "docs/runbook-administrative-alerts.md#adm-backfill-version-stop"
+    - uid: adm-quarantine-regression
+      title: "Administrative quarantine backlog grew"
+      condition: B
+      data:
+        - refId: A
+          relativeTimeRange:
+            from: 172800
+            to: 0
+          datasourceUid: gogo-prometheus-local
+          model:
+            refId: A
+            datasource:
+              type: prometheus
+              uid: gogo-prometheus-local
+            editorMode: code
+            expr: "max(delta(administrative_quarantined_changes{env=\"dev\"}[24h])) or vector(0)"
+            instant: true
+            range: false
+            intervalMs: 60000
+            maxDataPoints: 43200
+        - refId: B
+          relativeTimeRange:
+            from: 172800
+            to: 0
+          datasourceUid: __expr__
+          model:
+            refId: B
+            type: threshold
+            datasource:
+              type: __expr__
+              uid: __expr__
+            expression: A
+            conditions:
+              - evaluator:
+                  type: gt
+                  params:
+                    - 0
+                operator:
+                  type: and
+                query:
+                  params:
+                    - A
+                reducer:
+                  type: last
+                type: query
+            intervalMs: 1000
+            maxDataPoints: 43200
+      for: 1h
+      noDataState: OK
+      execErrState: OK
+      isPaused: ${GOGO_ADM_ALERTS_PAUSED}
+      labels:
+        service: administrative-data
+        env: dev
+        severity: warning
+      annotations:
+        summary: "unreviewed quarantined mapping rows increased over 24h"
+        impact: "new source drift arrived that no reviewer has adjudicated"
+        expected: "the count falls as reviewers work through it, or holds"
+        baseline: "1,033 divided-commune rows are the pinned dataset's accepted level and never fire on their own"
+        description: "delta(), never the level. The 1,033 rows are the data. Only growth is news."
+        runbook: "docs/runbook-administrative-alerts.md#adm-quarantine-regression"
+    - uid: adm-unresolved-regression
+      title: "Administrative unresolved changes grew"
+      condition: B
+      data:
+        - refId: A
+          relativeTimeRange:
+            from: 172800
+            to: 0
+          datasourceUid: gogo-prometheus-local
+          model:
+            refId: A
+            datasource:
+              type: prometheus
+              uid: gogo-prometheus-local
+            editorMode: code
+            expr: "max(delta(administrative_unresolved_changes{env=\"dev\"}[24h])) or vector(0)"
+            instant: true
+            range: false
+            intervalMs: 60000
+            maxDataPoints: 43200
+        - refId: B
+          relativeTimeRange:
+            from: 172800
+            to: 0
+          datasourceUid: __expr__
+          model:
+            refId: B
+            type: threshold
+            datasource:
+              type: __expr__
+              uid: __expr__
+            expression: A
+            conditions:
+              - evaluator:
+                  type: gt
+                  params:
+                    - 0
+                operator:
+                  type: and
+                query:
+                  params:
+                    - A
+                reducer:
+                  type: last
+                type: query
+            intervalMs: 1000
+            maxDataPoints: 43200
+      for: 1h
+      noDataState: OK
+      execErrState: OK
+      isPaused: ${GOGO_ADM_ALERTS_PAUSED}
+      labels:
+        service: administrative-data
+        env: dev
+        severity: warning
+      annotations:
+        summary: "unresolved administrative changes increased over 24h"
+        impact: "more commune divisions are waiting on an adjudication decision"
+        expected: "the count falls or holds"
+        baseline: "1,033 unresolved rows are the accepted level"
+        description: "delta() against the accepted baseline, matching adm-quarantine-regression."
+        runbook: "docs/runbook-administrative-alerts.md#adm-unresolved-regression"
+    - uid: adm-review-backlog-growing
+      title: "Administrative review backlog growing"
+      condition: B
+      data:
+        - refId: A
+          relativeTimeRange:
+            from: 172800
+            to: 0
+          datasourceUid: gogo-prometheus-local
+          model:
+            refId: A
+            datasource:
+              type: prometheus
+              uid: gogo-prometheus-local
+            editorMode: code
+            expr: "max(delta(administrative_mappings{env=\"dev\",status=\"NEEDS_REVIEW\"}[24h])) or vector(0)"
+            instant: true
+            range: false
+            intervalMs: 60000
+            maxDataPoints: 43200
+        - refId: B
+          relativeTimeRange:
+            from: 172800
+            to: 0
+          datasourceUid: __expr__
+          model:
+            refId: B
+            type: threshold
+            datasource:
+              type: __expr__
+              uid: __expr__
+            expression: A
+            conditions:
+              - evaluator:
+                  type: gt
+                  params:
+                    - 0
+                operator:
+                  type: and
+                query:
+                  params:
+                    - A
+                reducer:
+                  type: last
+                type: query
+            intervalMs: 1000
+            maxDataPoints: 43200
+      for: 6h
+      noDataState: OK
+      execErrState: OK
+      isPaused: ${GOGO_ADM_ALERTS_PAUSED}
+      labels:
+        service: administrative-data
+        env: dev
+        severity: warning
+      annotations:
+        summary: "places in NEEDS_REVIEW grew over 24h and stayed up for 6h"
+        impact: "places are accumulating that no reviewer has reached"
+        expected: "the queue drains or holds"
+        description: "A 6h `for` because a catalogue that just imported will grow this legitimately for a while. Sustained growth is the signal, not a single day's arrivals."
+        runbook: "docs/runbook-administrative-alerts.md#adm-review-backlog-growing"
+    - uid: adm-mappings-stale-sustained
+      title: "Administrative mappings STALE after publish"
+      condition: B
+      data:
+        - refId: A
+          relativeTimeRange:
+            from: 43200
+            to: 0
+          datasourceUid: gogo-prometheus-local
+          model:
+            refId: A
+            datasource:
+              type: prometheus
+              uid: gogo-prometheus-local
+            editorMode: code
+            expr: "max(min_over_time(administrative_mappings{env=\"dev\",status=\"STALE\"}[6h])) or vector(0)"
+            instant: true
+            range: false
+            intervalMs: 60000
+            maxDataPoints: 43200
+        - refId: B
+          relativeTimeRange:
+            from: 43200
+            to: 0
+          datasourceUid: __expr__
+          model:
+            refId: B
+            type: threshold
+            datasource:
+              type: __expr__
+              uid: __expr__
+            expression: A
+            conditions:
+              - evaluator:
+                  type: gt
+                  params:
+                    - 0
+                operator:
+                  type: and
+                query:
+                  params:
+                    - A
+                reducer:
+                  type: last
+                type: query
+            intervalMs: 1000
+            maxDataPoints: 43200
+      for: 0s
+      noDataState: OK
+      execErrState: OK
+      isPaused: ${GOGO_ADM_ALERTS_PAUSED}
+      labels:
+        service: administrative-data
+        env: dev
+        severity: warning
+      annotations:
+        summary: "STALE mappings never returned to zero across a 6h window"
+        impact: "places are pinned to a dataset version that is no longer active and nothing is re-resolving them"
+        expected: "STALE spikes after a publication and drains as the backfill runs"
+        description: "min_over_time, not the instantaneous value: a spike right after a publication is correct and expected. What is wrong is a floor that never comes back down, which is exactly what the minimum over 6h measures."
+        runbook: "docs/runbook-administrative-alerts.md#adm-mappings-stale-sustained"
+    - uid: adm-remediation-regression
+      title: "Administrative remediation backlog grew"
+      condition: B
+      data:
+        - refId: A
+          relativeTimeRange:
+            from: 172800
+            to: 0
+          datasourceUid: gogo-prometheus-local
+          model:
+            refId: A
+            datasource:
+              type: prometheus
+              uid: gogo-prometheus-local
+            editorMode: code
+            expr: "sum(delta(administrative_remediation{env=\"dev\",category!=\"compliant\"}[24h])) or vector(0)"
+            instant: true
+            range: false
+            intervalMs: 60000
+            maxDataPoints: 43200
+        - refId: B
+          relativeTimeRange:
+            from: 172800
+            to: 0
+          datasourceUid: __expr__
+          model:
+            refId: B
+            type: threshold
+            datasource:
+              type: __expr__
+              uid: __expr__
+            expression: A
+            conditions:
+              - evaluator:
+                  type: gt
+                  params:
+                    - 0
+                operator:
+                  type: and
+                query:
+                  params:
+                    - A
+                reducer:
+                  type: last
+                type: query
+            intervalMs: 1000
+            maxDataPoints: 43200
+      for: 6h
+      noDataState: OK
+      execErrState: OK
+      isPaused: ${GOGO_ADM_ALERTS_PAUSED}
+      labels:
+        service: administrative-data
+        env: dev
+        severity: warning
+      annotations:
+        summary: "published places failing today's approval policy increased over 24h"
+        impact: "pre-policy approved places are accumulating; they are reported, never auto-corrected"
+        expected: "the non-compliant categories fall or hold"
+        description: "Sums the non-compliant categories WITHIN administrative_remediation using category!=\"compliant\". It does not add administrative_quarantined_changes: remediation counts published places classified against the active version, quarantine counts rows of a dataset. Different populations; summing them would produce a number that measures nothing."
+        runbook: "docs/runbook-administrative-alerts.md#adm-remediation-regression"
+    - uid: adm-override-materialize-rejected
+      title: "Administrative override materialization rejected"
+      condition: B
+      data:
+        - refId: A
+          relativeTimeRange:
+            from: 7200
+            to: 0
+          datasourceUid: gogo-prometheus-local
+          model:
+            refId: A
+            datasource:
+              type: prometheus
+              uid: gogo-prometheus-local
+            editorMode: code
+            expr: "sum(increase(administrative_override_materializations_total{env=\"dev\",result=\"rejected\"}[1h])) or vector(0)"
+            instant: true
+            range: false
+            intervalMs: 60000
+            maxDataPoints: 43200
+        - refId: B
+          relativeTimeRange:
+            from: 7200
+            to: 0
+          datasourceUid: __expr__
+          model:
+            refId: B
+            type: threshold
+            datasource:
+              type: __expr__
+              uid: __expr__
+            expression: A
+            conditions:
+              - evaluator:
+                  type: gt
+                  params:
+                    - 0
+                operator:
+                  type: and
+                query:
+                  params:
+                    - A
+                reducer:
+                  type: last
+                type: query
+            intervalMs: 1000
+            maxDataPoints: 43200
+      for: 0s
+      noDataState: OK
+      execErrState: OK
+      isPaused: ${GOGO_ADM_ALERTS_PAUSED}
+      labels:
+        service: administrative-data
+        env: dev
+        severity: warning
+      annotations:
+        summary: "an override materialization was refused in the last hour"
+        impact: "the reviewer's adjudicated decisions did not become a dataset; the queue is stuck where they left it"
+        expected: "result=succeeded"
+        description: "The metric contract has no `failed` value \u2014 result is succeeded|rejected \u2014 so this rule reads a refusal, which is the only failure shape the contract can express. Materialization is a rare, deliberate action, so even one refusal is worth a message."
+        runbook: "docs/runbook-administrative-alerts.md#adm-override-materialize-rejected"
+    - uid: adm-override-conflicts-repeated
+      title: "Administrative override conflicts repeating"
+      condition: B
+      data:
+        - refId: A
+          relativeTimeRange:
+            from: 7200
+            to: 0
+          datasourceUid: gogo-prometheus-local
+          model:
+            refId: A
+            datasource:
+              type: prometheus
+              uid: gogo-prometheus-local
+            editorMode: code
+            expr: "sum(increase(administrative_override_conflicts_total{env=\"dev\"}[1h])) or vector(0)"
+            instant: true
+            range: false
+            intervalMs: 60000
+            maxDataPoints: 43200
+        - refId: B
+          relativeTimeRange:
+            from: 7200
+            to: 0
+          datasourceUid: __expr__
+          model:
+            refId: B
+            type: threshold
+            datasource:
+              type: __expr__
+              uid: __expr__
+            expression: A
+            conditions:
+              - evaluator:
+                  type: gt
+                  params:
+                    - 5
+                operator:
+                  type: and
+                query:
+                  params:
+                    - A
+                reducer:
+                  type: last
+                type: query
+            intervalMs: 1000
+            maxDataPoints: 43200
+      for: 0s
+      noDataState: OK
+      execErrState: OK
+      isPaused: ${GOGO_ADM_ALERTS_PAUSED}
+      labels:
+        service: administrative-data
+        env: dev
+        severity: warning
+      annotations:
+        summary: "more than 5 override decision or materialization conflicts in an hour"
+        impact: "reviewers are colliding on the same rows, or a client is retrying a refused call blindly"
+        expected: "occasional conflicts are normal on a shared queue"
+        description: "Threshold >5 because a conflict is the optimistic-concurrency guard working. Repetition at this rate is a coordination problem or a client bug, not a data problem."
+        runbook: "docs/runbook-administrative-alerts.md#adm-override-conflicts-repeated"

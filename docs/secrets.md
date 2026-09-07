@@ -98,6 +98,16 @@ it, and the API's process environment is the wrong place for it. See
 [`adr/0008`](adr/0008-cms-bootstrap-credentials-in-ssm.md) and
 [`cms-bootstrap-ssm.md`](cms-bootstrap-ssm.md).
 
+`consumer: observability` is the third value, added by INF-156, and it is the same argument with
+a different reader. Grafana's Telegram bot token is stored under `backend` — same prefix, same
+deploy and monitor roles, so no IAM change and no secret in Terraform state — and it is loaded by
+a container on `192.168.68.168`, never by the API. `render-env.sh` asks the manifest for
+`--consumer runtime`, so the token cannot reach the process environment of the most
+internet-exposed service here for the benefit of a machine that is not even the same one. It is
+rendered by `observability/local-grafana/bin/render-alerting-env.sh`. See
+[`adr/0009`](adr/0009-grafana-alerting-for-administrative-data.md) and
+[`runbook-administrative-alerts.md`](runbook-administrative-alerts.md).
+
 ## Generated values
 
 Three of these are ours to invent rather than to collect from a provider: the auth signing pair,
