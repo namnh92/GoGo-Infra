@@ -14,14 +14,6 @@ PostgreSQL — including the notification outbox.
 | R2 assets | Durable. |
 | Secrets | In SSM. |
 
-The administrative-data epic adds two DEV assets with their own recovery
-paths: the Prometheus TSDB and Grafana's alert state on `192.168.68.168`
-(`bin/backup.sh` / `bin/restore.sh`, ADR-0007 §E8), and a published
-administrative dataset, which rolls back in-product rather than by restore.
-Both are covered in
-[`administrative-data-dev-acceptance.md`](administrative-data-dev-acceptance.md)
-§ Rollback.
-
 ## Production
 
 | Asset | Mechanism | Rehearsed |
