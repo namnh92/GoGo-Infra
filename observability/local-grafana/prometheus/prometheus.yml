@@ -31,10 +31,20 @@ storage:
   tsdb:
     out_of_order_time_window: 8h
 
-# No alerting rules here, on purpose. ADR-0006 §D3 stands: MVP paging is Better
-# Stack + healthchecks.io + Sentry, and ADR-0007 changed only where samples
-# live, not what wakes a human. A rule with a guessed threshold on a system
-# with no baseline teaches the team to ignore alerts.
+# No alerting rules here, on purpose — and the reason changed on 08/09/2026, so
+# read both halves.
+#
+# For generic latency and error-rate alerting, ADR-0006 §D3 still stands: MVP
+# paging is Better Stack + healthchecks.io + Sentry, ADR-0007 changed only where
+# samples live, and a rule with a guessed threshold on a system with no baseline
+# teaches the team to ignore alerts.
+#
+# For the administrative-data surface, ADR-0009 supersedes §D3 narrowly and
+# those rules DO exist — in Grafana, not here. Grafana's embedded Alertmanager
+# evaluates and routes them, so this file stays free of `rule_files:` and of an
+# `alerting:` block. One condition, one evaluator: a duplicate here could
+# disagree with Grafana, and it would be the copy nobody updates.
+# scripts/ci/alerting-provisioning.test.sh fails the build if either appears.
 scrape_configs:
   # Prometheus watching itself. This is what makes E6's disk/retention check
   # possible — `prometheus_tsdb_*` and the storage series come from here, and

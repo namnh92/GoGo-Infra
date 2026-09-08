@@ -181,6 +181,15 @@ jobs:
       - name: observability compose runs on the images it ships
         run: ./scripts/ci/observability-compose.test.sh
 
+      # The first alert rules this repository has ever carried (ADR-0009 /
+      # INF-156). The failure they are guarded against is not a syntax error —
+      # it is a rule that loads cleanly and means nothing: alerting on the level
+      # of a baseline that is 1,033 rows by design, reading a lifetime counter
+      # that fires on history, or shipping unpaused into an environment where
+      # none of the 39 series exist yet.
+      - name: administrative alert rules mean something
+        run: ./scripts/ci/alerting-provisioning.test.sh
+
       # The Access SSH deploy path failed twice on things a grep would have
       # caught: the wrong env var names for the service token, and an ingress
       # that pointed at the tunnel container's own loopback.

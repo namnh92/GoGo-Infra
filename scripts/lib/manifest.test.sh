@@ -168,21 +168,41 @@ else
   bad "default output leaked a non-runtime row" "$default_consumers"
 fi
 
+# ADR-0009 / INF-156. `observability` is the third consumer: the Grafana
+# Telegram credential lives under `backend` — same IAM, same roles — and is read
+# by a container on 192.168.68.168, never by the API. Same argument as `seed`,
+# a different reader.
+obs_rows="$(python3 "$READER" dev --consumer observability | cut -f1)"
+if [[ -n "$obs_rows" ]]; then
+  ok "the observability consumer is non-empty ($(echo "$obs_rows" | wc -l | tr -d ' ') row(s))"
+else
+  bad "the observability consumer is empty" "ADR-0009 declares the Grafana Telegram credential there"
+fi
+
+telegram_leak="$(python3 "$READER" dev | grep -Ei 'telegram' || true)"
+if [[ -z "$telegram_leak" ]]; then
+  ok "the Telegram bot token is absent from the default output"
+else
+  bad "a Telegram credential reached the default output" \
+      "render-env.sh would write a bot token into the API and worker environment"
+fi
+
 count_runtime=$(python3 "$READER" dev --namespace all | wc -l | tr -d ' ')
 count_seed=$(python3 "$READER" dev --namespace all --consumer seed | wc -l | tr -d ' ')
+count_obs=$(python3 "$READER" dev --namespace all --consumer observability | wc -l | tr -d ' ')
 count_consumer_all=$(python3 "$READER" dev --namespace all --consumer all | wc -l | tr -d ' ')
-if [[ "$count_consumer_all" -eq $(( count_runtime + count_seed )) ]]; then
-  ok "--consumer all is exactly runtime + seed (${count_consumer_all})"
+if [[ "$count_consumer_all" -eq $(( count_runtime + count_seed + count_obs )) ]]; then
+  ok "--consumer all is exactly runtime + seed + observability (${count_consumer_all})"
 else
   bad "--consumer all is not the union" \
-      "all=${count_consumer_all}, runtime=${count_runtime}, seed=${count_seed} — a consumer exists that no test covers"
+      "all=${count_consumer_all}, runtime=${count_runtime}, seed=${count_seed}, observability=${count_obs} — a consumer exists that no test covers"
 fi
 
 # A typo'd consumer has the same failure mode as a typo'd namespace: the row
 # stops appearing anywhere, and a parameter nobody renders and nobody validates
 # is a parameter nobody rotates.
 unknown_consumer="$(python3 "$READER" dev --namespace all --consumer all \
-  | awk -F'\t' '$6 != "runtime" && $6 != "seed" { print $1 " (" $6 ")" }')"
+  | awk -F'\t' '$6 != "runtime" && $6 != "seed" && $6 != "observability" { print $1 " (" $6 ")" }')"
 if [[ -z "$unknown_consumer" ]]; then
   ok "every row declares a known consumer"
 else

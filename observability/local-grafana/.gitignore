@@ -8,3 +8,7 @@ prometheus/basic_auth_password
 # Backup artifacts are host state, not source. They are also the one thing here
 # that would be a real leak: a TSDB holds every label value BE has emitted.
 backups/
+# Rendered from SSM by bin/render-alerting-env.sh (ADR-0009 §F5). Holds the
+# Telegram bot token, which is a credential for a channel anyone in the chat
+# can read. Host state, never source.
+.env.alerting

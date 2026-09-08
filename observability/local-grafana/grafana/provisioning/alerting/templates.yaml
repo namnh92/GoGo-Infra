@@ -1,0 +1,45 @@
+# ADR-0009. One template, used by the administrative Telegram contact point.
+#
+# Deliberately absent from every message, per GoGo-BE's metric contract and
+# .claude/rules/security.md: the bot token, the chat id, dataset UUIDs, the
+# combined dataset version, checksums, place ids, reviewer ids, raw errors and
+# payloads. What identifies a dataset lives on
+# GET /v1/cms/administrative-datasets/capability, in structured logs, and in the
+# audit rows — all of them behind authentication, which Telegram is not.
+#
+# `rulename` is printed because Grafana's DatasourceNoData / DatasourceError
+# instances replace `alertname` with their own value and carry the rule's title
+# in `rulename` instead. Without this line those two — the ones that fire when
+# the metrics disappear — would arrive without saying which rule sent them.
+apiVersion: 1
+
+templates:
+  - orgId: 1
+    name: gogo.administrative.telegram
+    template: |
+      {{ define "gogo.administrative.telegram" }}
+      {{- range .Alerts }}
+      {{ if eq .Status "firing" }}🔴 FIRING{{ else }}✅ RESOLVED{{ end }} [{{ .Labels.env }}][{{ .Labels.severity }}]
+      <b>{{ .Labels.alertname }}</b>
+      {{- if .Labels.rulename }}
+      Rule: {{ .Labels.rulename }}
+      {{- end }}
+      {{- if .Annotations.summary }}
+      State: {{ .Annotations.summary }}
+      {{- end }}
+      {{- if .Annotations.impact }}
+      Impact: {{ .Annotations.impact }}
+      {{- end }}
+      {{- if .Annotations.expected }}
+      Expected: {{ .Annotations.expected }}
+      {{- end }}
+      {{- if .Annotations.baseline }}
+      Baseline: {{ .Annotations.baseline }}
+      {{- end }}
+      Value: {{ .ValueString }}
+      Runbook: {{ .Annotations.runbook }}
+      {{- if .GeneratorURL }}
+      Grafana: {{ .GeneratorURL }}
+      {{- end }}
+      {{- end }}
+      {{ end }}

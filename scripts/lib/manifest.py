@@ -11,6 +11,8 @@ Usage:
     manifest.py <env> --namespace mobile Only that namespace
     manifest.py <env> --namespace all    Every namespace
     manifest.py <env> --consumer seed    Only rows a seed/provisioning command loads
+    manifest.py <env> --consumer observability
+                                         Only rows the observability host loads
     manifest.py <env> --consumer all     Every consumer
 
 Namespace defaults to `backend` and consumer defaults to `runtime`. Both
@@ -98,7 +100,7 @@ def main():
     if "--consumer" in args:
         index = args.index("--consumer")
         if index + 1 >= len(args):
-            sys.stderr.write("--consumer needs a value: runtime, seed, or all\n")
+            sys.stderr.write("--consumer needs a value: runtime, seed, observability, or all\n")
             return 2
         consumer = args[index + 1]
 
