@@ -16,6 +16,14 @@ Migrations run before the new containers take traffic and are expand-only, so th
 revision still works against the migrated schema if the health check fails. That is the whole
 reason for expand-then-contract: it is what makes rollback a real option rather than a wish.
 
+For the administrative-data epic specifically, the rollback paths are
+enumerated separately — application rollback, database restore after a
+part-way migration, dataset rollback, boundary-load retry, CMS rollback and
+alert-provisioning rollback are six different procedures and the common
+mistake is reaching for the wrong one. See
+[`administrative-data-dev-acceptance.md`](administrative-data-dev-acceptance.md)
+§ Rollback.
+
 ## Rolling back
 
 ```bash

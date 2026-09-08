@@ -649,8 +649,14 @@ permanently-zero counter is invented to imply otherwise.
 
 ## DEV acceptance runbook
 
-The order matters; step 11 is the one this document exists for. **Nothing below
-has been executed** — Infra#156 authors the configuration only.
+**Canonical:
+[`administrative-data-dev-acceptance.md`](administrative-data-dev-acceptance.md)**
+— fourteen phases with prerequisites, evidence, stop conditions, rollback and
+the three hard owner-approval gates. The summary below is the shape; that
+document is the checklist, and it is the one to follow.
+
+The order matters; the Grafana phases are the ones this document exists for.
+**Nothing below has been executed** — Infra#156 authors the configuration only.
 
 1. Deploy BE (a build containing `cf5989c`, ideally `dd3d1ee` or later).
 2. Confirm `/v1/metrics` reaches Prometheus through Alloy —
