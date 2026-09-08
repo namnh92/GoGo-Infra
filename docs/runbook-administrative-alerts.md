@@ -80,6 +80,124 @@ Stated first because it is the mistake these alerts make tempting.
   common one, `OVERRIDE_BASE_ALREADY_MATERIALIZED`, means someone already did it
   and a second attempt is refused correctly.
 
+## Preflight — MANDATORY before the first apply
+
+**Run this before provisioning ever reaches this Grafana. It is not optional and
+it is not a formality.**
+
+The evidence that unified alerting exists here is an **unauthenticated** probe:
+`/api/v1/provisioning/alert-rules`, `/api/v1/provisioning/contact-points`,
+`/api/alertmanager/grafana/config/api/v1/alerts` and
+`/api/ruler/grafana/api/v1/rules` all answered **401 rather than 404**.
+
+**That proved the APIs exist. It proved nothing about what they contain.** A 401
+is indistinguishable between an empty Grafana and one an operator has been
+configuring by hand for a week. Provisioning `policies:` **replaces the org's
+entire root notification policy tree**, so applying this configuration against
+an unknown current state can silently delete routing somebody else set up — and
+the deletion would look exactly like a successful provision.
+
+Take the inventory first. All commands run on `192.168.68.168`, authenticated,
+and none of them prints a credential.
+
+```bash
+cd ~/gogo-observability/local-grafana
+mkdir -p preflight && cd preflight
+G=http://192.168.68.168:3000
+AUTH="admin:$GRAFANA_ADMIN_PASSWORD"      # from .env on this host; never echoed
+
+# 1. The routing tree that is about to be REPLACED.
+curl -fsS -u "$AUTH" "$G/api/v1/provisioning/policies"       > policy-tree-before.json
+
+# 2. Everything else that already exists.
+curl -fsS -u "$AUTH" "$G/api/v1/provisioning/contact-points" > contact-points-before.json
+curl -fsS -u "$AUTH" "$G/api/v1/provisioning/alert-rules"    > alert-rules-before.json
+curl -fsS -u "$AUTH" "$G/api/v1/provisioning/templates"      > templates-before.json
+curl -fsS -u "$AUTH" "$G/api/v1/provisioning/mute-timings"   > mute-timings-before.json
+```
+
+### 1. Read what came back, do not just archive it
+
+```bash
+jq '{root_receiver: .receiver, child_routes: (.routes // [] | length)}' policy-tree-before.json
+jq '[.[] | {name, provenance}]' contact-points-before.json
+jq '[.[] | {uid, title, folderUID, provenance}]' alert-rules-before.json
+```
+
+**Stop and escalate to the owner, do not apply, if any of these is true:**
+
+- `policy-tree-before.json` has **any** child route. This configuration provides
+  exactly one, and applying it would delete every other.
+- `.receiver` at the root is **not** the value in `GOGO_ALERTS_DEFAULT_RECEIVER`
+  (default `grafana-default-email`). Applying would re-point the org's default
+  destination.
+- A contact point or alert rule has `provenance` of `""` or `api` — that is
+  **manually managed** configuration. File provisioning does not merge with it;
+  it competes with it.
+- Any mute timing exists. The provisioned policy references none, and a routing
+  replacement drops the reference.
+
+### 2. UID collision check
+
+File provisioning **overwrites by uid**, silently. A pre-existing rule or
+contact point that happens to share one of ours is replaced with no warning.
+
+```bash
+# Must both print nothing.
+jq -r '.[].uid' alert-rules-before.json | grep -Ex 'adm-[a-z-]+' || true
+jq -r '.[].uid' contact-points-before.json | grep -x 'gogo-adm-telegram' || true
+```
+
+Also confirm the folder is not already in use by something else:
+
+```bash
+curl -fsS -u "$AUTH" "$G/api/folders" | jq -r '.[] | select(.title=="GoGo Administrative Data")'
+```
+
+Any output from the three commands above is a **collision**. Rename ours in the
+repository — never delete theirs to make room.
+
+### 3. Back up `grafana_data` before applying
+
+The inventory above is a read. The backup is what makes the apply reversible.
+
+```bash
+cd ~/gogo-observability/local-grafana
+./bin/backup.sh
+ls -la backups/ | tail -3
+```
+
+`bin/restore.sh` is the counterpart. Confirm the archive exists and is non-empty
+**before** applying — a backup nobody checked is a backup nobody has.
+
+### 4. Only then apply
+
+```bash
+./bin/render-alerting-env.sh
+docker compose up -d grafana
+docker compose logs --since 2m grafana | grep -iE 'provision|alert' | head -40
+```
+
+Expect no `error` lines. Then re-read the inventory and diff it against the
+before-state:
+
+```bash
+curl -fsS -u "$AUTH" "$G/api/v1/provisioning/policies" > policy-tree-after.json
+diff <(jq -S . preflight/policy-tree-before.json) <(jq -S . policy-tree-after.json)
+```
+
+The only expected difference is **one added child route** matching
+`service = administrative-data`. Anything else — a changed root receiver, a
+disappeared route — means roll back with `bin/restore.sh` and escalate.
+
+Attach `policy-tree-before.json`, the collision-check output and the backup path
+to GoGo-Infra#156. **These files are the evidence that nothing was overwritten,
+and without them the claim is unverifiable.**
+
+Note that the rules are still **paused** at this point. Applying provisioning
+and activating the alerts are two separate steps, in that order, and § Activation
+is the second one.
+
 ## Activation
 
 **All eighteen rules ship paused.** All 39 administrative series are absent
@@ -189,13 +307,10 @@ In increasing order of blast radius:
    `resetPolicies: [1]` and restart. This is why the pre-apply capture below
    exists.
 
-**Capture the routing tree before the first apply**, and attach it to
-GoGo-Infra#156:
-
-```bash
-curl -fsS -u "admin:$GRAFANA_ADMIN_PASSWORD" \
-  http://192.168.68.168:3000/api/v1/provisioning/policies > policy-tree-before.json
-```
+**Capturing the routing tree before the first apply is mandatory**, and it is
+step 1 of § Preflight above, together with the contact-point and rule inventory,
+the uid collision check and the `grafana_data` backup. Rollback option 3 is only
+possible because that capture exists.
 
 ## Backup and restore
 
@@ -549,16 +664,22 @@ has been executed** — Infra#156 authors the configuration only.
 8. Run the backfill in **dry-run** mode.
 9. Review the dry-run results.
 10. **Obtain separate approval before running the backfill in execute mode.**
-11. Activate the Grafana administrative alerts — § Activation above, all seven
+11. **Run § Preflight — the authenticated Grafana inventory and the
+    `grafana_data` backup — and attach its evidence to GoGo-Infra#156.** The
+    unauthenticated 401 probe proved the alerting APIs exist, not that they are
+    empty; provisioning replaces the root notification policy tree, so this step
+    is what makes that reversible. Then apply provisioning, with the rules still
+    paused.
+12. Activate the Grafana administrative alerts — § Activation above, all seven
     conditions recorded first.
-12. Send a Telegram test notification.
-13. Exercise at least one safe synthetic alert and its recovery. The safe one is
+13. Send a Telegram test notification.
+14. Exercise at least one safe synthetic alert and its recovery. The safe one is
     `adm-cache-refresh-failing`: it is a warning, it needs no dataset mutation,
     and its threshold is reachable without breaking anything. **Do not** use
     `adm-dataset-missing` — the only way to trigger it is to un-publish the
     dataset.
-14. Confirm the resolved notification arrives.
-15. Record the evidence on GoGo-Infra#156 and GoGo-BE#463 before closing either.
+15. Confirm the resolved notification arrives.
+16. Record the evidence on GoGo-Infra#156 and GoGo-BE#463 before closing either.
 
 ## Residual gaps
 

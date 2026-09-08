@@ -184,8 +184,18 @@ alert is routed to Telegram.
 
 Consequence worth stating because it is a real hazard: file provisioning of
 `policies:` replaces the org's **entire** root policy tree, not just the child
-route. The runbook therefore requires capturing the current policy before the
-first apply, and `resetPolicies:` is the documented rollback.
+route, and it overwrites alert rules and contact points **by uid, silently**.
+
+The evidence that this Grafana runs unified alerting is an *unauthenticated*
+probe returning 401 rather than 404. **That proved the APIs exist and nothing
+about what they contain** — a 401 does not distinguish an empty Grafana from one
+an operator has been configuring by hand. So the first apply is gated on an
+**authenticated inventory**: export the policy tree, contact points, rules,
+templates and mute timings; refuse to proceed on any pre-existing child route, a
+different root receiver, any resource with `provenance` of `""` or `api`, or a
+uid collision; and back up `grafana_data` before applying. That gate is
+mandatory and is § Preflight of `docs/runbook-administrative-alerts.md`;
+`resetPolicies:` plus that backup is the rollback.
 
 ### F7 — Nothing here changes the network posture
 
