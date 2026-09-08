@@ -154,6 +154,11 @@ dashboard consumes a permissioned admin API on GoGo-BE, never this endpoint and 
 The value is never passed as an argument: arguments land in shell history, in `ps`, and in CI
 logs.
 
+One value does not go through `put.sh`: the OneSignal Identity Verification key is a PEM, and
+the runtime renderers emit one line per variable, so it has to be encoded before it is stored.
+`./scripts/secrets/put-identity-key.sh <pem> <env>` validates the curve, encodes it, and
+verifies the round trip by fingerprint — see [onesignal-identity-key.md](onesignal-identity-key.md).
+
 ## Why Terraform does not manage values
 
 ```hcl
