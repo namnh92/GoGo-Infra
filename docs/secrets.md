@@ -144,16 +144,18 @@ bootstrapping or enabling a feature. It differs in three ways:
 - a SKIPPED namespace **fails**. "I could not look" and "it is fine" produce the same output
   otherwise, and a readiness check that can pass by not looking is the failure it exists to
   prevent. Run it from a developer SSO session, not the deploy role.
-- it checks **feature prerequisites** — the credential groups where a missing member leaves the
-  API booting happily with the capability silently off.
-- it says `READY` rather than `OK`, and states what that does and does not cover.
+- it checks **capability prerequisites** — the feature and pipeline credential groups where a
+  missing member leaves the API booting happily with the capability silently off, or a workflow
+  failing the first time somebody runs it.
+- it says `METADATA READY` rather than `OK`, and states what that does and does not cover. The
+  wording is deliberate: readiness here is about names and types, never permissions.
 
 Per environment:
 
 ```bash
-./scripts/secrets/validate.sh dev     --strict
-./scripts/secrets/validate.sh staging --strict
-./scripts/secrets/validate.sh prod    --strict
+./scripts/secrets/validate.sh dev     --strict                     # what runs today
+./scripts/secrets/validate.sh staging --strict --include-planned   # what it is meant to run
+./scripts/secrets/validate.sh prod    --strict --include-planned
 ```
 
 Each prints exactly what is missing, by path. Provision with `put.sh` (value on stdin, never
@@ -182,26 +184,61 @@ API calls and needs credentials the validator never reads:
 ./scripts/ops/check-provider-keys.sh <env>     # what the Google keys are restricted to
 ```
 
-### Features and their prerequisites
+### Capabilities: what an environment is meant to run
 
-A feature is a group of credentials that only works if all of them are present. `required:`
-cannot express that: `required: []` says the API boots, which is true and useless, because the
-failure mode is that it boots and reports the capability unavailable.
+A capability is a group of credentials that only works if all of them are present, plus the
+environments it runs in. Two kinds, one shape: a **feature** is something the application does
+when its credentials exist; a **pipeline** is a CI workflow that can run when its credentials
+exist.
 
 ```bash
-python3 scripts/lib/manifest.py <env> --features          # enabled in that environment
-python3 scripts/lib/manifest.py <env> --feature-requires  # feature <TAB> path it needs
+python3 scripts/lib/manifest.py <env> --capabilities                    # running today
+python3 scripts/lib/manifest.py <env> --capabilities --include-planned  # …and intended
+python3 scripts/lib/manifest.py <env> --capability-requires --include-planned
 ```
 
-Declared in `config/secrets.manifest.yml` under `features:`, each with the environments it is
-switched **on** in. `--strict` fails when an enabled feature is missing a prerequisite. Turning
-a feature on for a new environment is how you find out what it needs: add the environment to
-`enabled:`, run `--strict`, and provision what it names.
+`enabled:` is where it runs today. `planned:` is where it is intended to run and has not been
+provisioned. `--strict` enforces `enabled`; `--strict --include-planned` enforces both.
 
-This is why the public-bucket rows stay `required: []` and are still enforced on dev. On
-staging and production the API genuinely boots without them; blocking those deploys for a
-capability nobody switched on would be wrong. Leaving them unenforced on dev is how the
-catalogue shipped with every image resolving to a URL that 404s.
+This is what removes the memory step. Bringing up a new environment is one command whose output
+is the list of credentials to create — no row in `parameters:` needs editing, and nobody has to
+recall which `required:` lists to touch. The CI rows deliberately carry `required: []`: they are
+not startup requirements, and what enforces them is the pipeline that names them.
+
+An environment that appears in no capability cannot be reported ready. Omitting the profile is
+not a way to pass — that is the same failure as a namespace nobody could read.
+
+### Bringing up staging or production
+
+```bash
+export AWS_PROFILE=gogo-bootstrap
+
+./scripts/secrets/validate.sh staging --strict --include-planned
+```
+
+Expect it to fail, and read the output — that list is the work. It covers, by name:
+
+- **Terraform** — `ci:terraform/{read,write}/cloudflare-token` and the matching
+  `r2-state-*` S3 key pairs. Read and write are separate credentials because plan runs on pull
+  requests and apply does not.
+- **CMS deployment** — `ci:cms-deploy/cloudflare-token` (Workers Scripts:Edit on that
+  environment's script, no R2) and `ci:cms-deploy/github-read-token` (Contents:Read on
+  GoGo-CMS).
+- **VPS deployment** — `ci:deploy/ssh-private-key` plus the Access service token pair.
+- **Public image uploads** — `backend:r2/public-bucket`, the public credential pair, and
+  `backend:media/public-base-url`. All four or the capability is off: the API boots, reports it
+  unavailable, and every catalogue image resolves to a URL that 404s.
+- **Avatar cache purge** and **share-link edge** — their own two-credential groups.
+
+Then, for each path:
+
+```bash
+./scripts/secrets/put.sh staging <path>      # value on stdin, never an argument
+```
+
+Re-run until it prints `METADATA READY`. Read the row in `config/secrets.manifest.yml` before
+creating each credential — several are deliberately narrower than the obvious choice, and the
+`scope:` field says why.
 
 ## Generated values
 

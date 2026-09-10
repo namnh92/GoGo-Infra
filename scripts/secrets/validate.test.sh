@@ -47,6 +47,9 @@ if [[ "$1" == "ssm" && "$2" == "get-parameters-by-path" ]]; then
   done < "${WORK}/deny"
   # Emit every declared path for this prefix except those listed absent.
   env="$(sed -E 's#^/gogo/(ci/)?([a-z]+).*#\2#' <<< "$prefix")"
+  # An environment nobody has provisioned lists nothing — which is the real
+  # state of staging and prod, and the state a readiness check has to fail on.
+  if grep -qxF "$env" "${WORK}/empty_envs" 2>/dev/null; then echo ""; exit 0; fi
   case "$prefix" in
     /gogo/ci/*)      ns=ci ;;
     */mobile)        ns=mobile ;;
@@ -78,6 +81,7 @@ exit 0
 STUB
   chmod +x "${WORK}/aws"
   : > "${WORK}/deny"; : > "${WORK}/absent"; : > "${WORK}/type_override"
+  printf 'staging\nprod\n' > "${WORK}/empty_envs"
 }
 
 run() { # run <env> [args...] -> output, sets RC
@@ -96,12 +100,12 @@ out="$(run dev --strict)"; rc=$?
 if [[ $rc -eq 0 && "$out" == *"READY: dev"* ]]; then ok "strict mode reports readiness"
 else bad "strict mode should pass" "rc=$rc $out"; fi
 
-# --- a feature prerequisite missing fails readiness -------------------------
+# --- a capability prerequisite missing fails readiness ----------------------
 echo "r2/public-secret-access-key" > "${WORK}/absent"
 out="$(run dev --strict)"; rc=$?
-if [[ $rc -ne 0 && "$out" == *"FEATURE PREREQUISITES MISSING"* && "$out" == *"public_catalogue_uploads"* ]]; then
+if [[ $rc -ne 0 && "$out" == *"CAPABILITY PREREQUISITES MISSING"* && "$out" == *"public_catalogue_uploads"* ]]; then
   ok "missing public-storage prerequisite fails readiness"
-else bad "a missing feature prerequisite must fail --strict" "rc=$rc $out"; fi
+else bad "a missing capability prerequisite must fail --strict" "rc=$rc $out"; fi
 
 # ...and does not fail the deploy-time check, which is the whole distinction.
 out="$(run dev)"; rc=$?
@@ -109,12 +113,16 @@ if [[ $rc -eq 0 ]]; then ok "the same gap does not fail the non-strict deploy ch
 else bad "non-strict must tolerate an unprovisioned optional capability" "rc=$rc $out"; fi
 : > "${WORK}/absent"
 
-# --- a missing required CI credential fails readiness -----------------------
+# --- a missing CI credential fails readiness through its pipeline -----------
+#
+# The ci rows carry `required: []` on purpose: they are not startup
+# requirements. What enforces them is the pipeline capability that names them,
+# which is also what makes a new environment need no row edits.
 echo "terraform/write/cloudflare-token" > "${WORK}/absent"
 out="$(run dev --strict)"; rc=$?
-if [[ $rc -ne 0 && "$out" == *"MISSING"* && "$out" == *"terraform/write/cloudflare-token"* ]]; then
-  ok "missing required CI credential fails readiness"
-else bad "a required ci row must be reported missing" "rc=$rc $out"; fi
+if [[ $rc -ne 0 && "$out" == *"CAPABILITY PREREQUISITES MISSING"* && "$out" == *"terraform needs ci:terraform/write/cloudflare-token"* ]]; then
+  ok "missing CI credential fails readiness via its pipeline"
+else bad "a pipeline must enforce its own credentials" "rc=$rc $out"; fi
 : > "${WORK}/absent"
 
 # --- AccessDenied cannot produce success in strict mode ---------------------
@@ -150,11 +158,70 @@ dev_has="$(python3 "${ROOT}/scripts/lib/manifest.py" dev --namespace backend --c
 if [[ "$prod_only" -eq 1 && "$dev_has" -eq 0 ]]; then ok "environment-specific requirements differ by env"
 else bad "access/aud should be required in prod only" "prod=$prod_only dev=$dev_has"; fi
 
-# --- conditional features are per-environment -------------------------------
-if [[ -n "$(python3 "${ROOT}/scripts/lib/manifest.py" dev --features)" \
-   && -z "$(python3 "${ROOT}/scripts/lib/manifest.py" prod --features)" ]]; then
-  ok "a feature enabled in dev is not demanded of prod"
-else bad "feature enablement must be per-environment" "dev/prod feature lists"; fi
+# --- capability enablement is per-environment -------------------------------
+dev_caps="$(python3 "${ROOT}/scripts/lib/manifest.py" dev --capabilities)"
+staging_now="$(python3 "${ROOT}/scripts/lib/manifest.py" staging --capabilities)"
+staging_planned="$(python3 "${ROOT}/scripts/lib/manifest.py" staging --capabilities --include-planned)"
+if [[ -n "$dev_caps" && -z "$staging_now" && -n "$staging_planned" ]]; then
+  ok "a capability enabled in dev is planned, not demanded, in staging"
+else
+  bad "capability state must differ by environment" "dev/staging enabled+planned lists"
+fi
+
+# --- staging readiness names its CI and public-storage credentials ----------
+#
+# The requirement this file exists to hold: bringing up a new environment must
+# not need anyone to remember which `required:` lists to edit. Selecting the
+# capability is the whole action, and the check names the credentials.
+for env in staging prod; do
+  out="$(run "$env" --strict --include-planned)"; rc=$?
+  if [[ $rc -ne 0 && "$out" == *"CAPABILITY PREREQUISITES MISSING"* ]]; then
+    ok "${env} --include-planned fails before provisioning"
+  else
+    bad "${env} planned readiness must fail while unprovisioned" "rc=$rc"
+  fi
+  if [[ "$out" == *"ci:cms-deploy/cloudflare-token"* && "$out" == *"ci:terraform/write/cloudflare-token"* ]]; then
+    ok "${env} names the CI credentials its pipelines need"
+  else
+    bad "${env} must name missing pipeline credentials" "$out"
+  fi
+  if [[ "$out" == *"backend:r2/public-access-key-id"* && "$out" == *"backend:media/public-base-url"* ]]; then
+    ok "${env} names the public-storage credentials"
+  else
+    bad "${env} must name missing public-storage credentials" "$out"
+  fi
+  if [[ "$out" != *"METADATA READY"* ]]; then
+    ok "${env} is not reported ready while capabilities are unmet"
+  else
+    bad "${env} claimed readiness with missing capabilities" "$out"
+  fi
+done
+
+# --- an environment no capability mentions cannot be ready -----------------
+#
+# Omitting a profile must not be a way to pass. This is the same failure as an
+# unreadable namespace: nothing was checked, so nothing can be claimed.
+probe="$(mktemp -d)"
+sed 's/^    enabled: \[dev\]/    enabled: []/; s/^    planned: \[staging, prod\]/    planned: []/' \
+  "${ROOT}/config/secrets.manifest.yml" > "${probe}/secrets.manifest.yml"
+mkdir -p "${probe}/scripts/lib" "${probe}/config"
+mv "${probe}/secrets.manifest.yml" "${probe}/config/secrets.manifest.yml"
+cp "${ROOT}/scripts/lib/manifest.py" "${probe}/scripts/lib/"
+if ! python3 "${probe}/scripts/lib/manifest.py" dev --declares; then
+  ok "an environment named by no capability reports no profile"
+else
+  bad "--declares must fail when nothing lists the environment" "it returned success"
+fi
+rm -rf "$probe"
+
+# --- the success line separates metadata from provider permission ----------
+out="$(run dev --strict)"
+if [[ "$out" == *"METADATA READY"* && "$out" == *"metadata only"* \
+   && "$out" == *"check-cf-token-scopes.sh"* && "$out" == *"NOT covered"* ]]; then
+  ok "success output distinguishes metadata from provider verification"
+else
+  bad "readiness must not read as a permission guarantee" "$out"
+fi
 
 printf '\n'
 if [[ "$failures" -eq 0 ]]; then echo "validate.sh: all checks passed"; else echo "validate.sh: ${failures} failure(s)"; fi

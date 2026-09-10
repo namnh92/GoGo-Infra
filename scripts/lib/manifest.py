@@ -16,9 +16,14 @@ Usage:
     manifest.py <env> --consumer pipeline
                                          Only rows a CI job loads
     manifest.py <env> --consumer all     Every consumer
-    manifest.py <env> --features         Features enabled in that env, one per line
-    manifest.py <env> --feature-requires Paths every enabled feature needs:
-                                         "feature<TAB>path"
+    manifest.py <env> --capabilities     Capabilities enabled in that env:
+                                         "name<TAB>kind<TAB>state"
+    manifest.py <env> --capability-requires
+                                         Credentials each needs:
+                                         "name<TAB>namespace<TAB>path"
+    manifest.py <env> --include-planned   Widen either of the two above from
+                                         `enabled` to `enabled + planned`, i.e.
+                                         what the environment is intended to run
     manifest.py <env> --field <name>     Append one extra field to each row, so a
                                          caller can read `scope` or `provider`
                                          without a YAML parser
@@ -92,14 +97,51 @@ def parse(section="parameters"):
     for entry in entries:
         entry["required_list"] = _list(entry.get("required", "[]"))
         entry["enabled_list"] = _list(entry.get("enabled", "[]"))
+        entry["planned_list"] = _list(entry.get("planned", "[]"))
         entry["requires_list"] = _list(entry.get("requires", "[]"))
 
     return entries
 
 
-def enabled_features(env):
-    """Features switched on in this environment, with their prerequisites."""
-    return [f for f in parse("features") if env in f["enabled_list"]]
+def capabilities(env, include_planned=False):
+    """Capabilities this environment runs, or intends to.
+
+    `enabled` is what runs today; `planned` is what the environment is meant to
+    run and has not been provisioned for. Readiness widens to include `planned`
+    on request, which is how a new environment is brought up: the check names
+    every credential to create instead of anyone re-reading the workflows.
+    """
+    out = []
+    for cap in parse("capabilities"):
+        if env in cap["enabled_list"]:
+            cap["state"] = "enabled"
+        elif include_planned and env in cap["planned_list"]:
+            cap["state"] = "planned"
+        else:
+            continue
+        out.append(cap)
+    return out
+
+
+def declares(env):
+    """Whether any capability mentions this environment at all.
+
+    An environment named nowhere has no intended shape, so nothing can say it is
+    ready. Reporting READY because a profile was omitted is the same failure as
+    reporting it because a namespace could not be read.
+    """
+    return any(
+        env in cap["enabled_list"] or env in cap["planned_list"]
+        for cap in parse("capabilities")
+    )
+
+
+def split_requirement(entry):
+    """`namespace:path`, defaulting to backend."""
+    if ":" in entry:
+        namespace, path = entry.split(":", 1)
+        return namespace.strip(), path.strip()
+    return "backend", entry.strip()
 
 
 def main():
@@ -113,16 +155,26 @@ def main():
 
     # Feature queries answer a different question and return a different shape,
     # so they short-circuit before the parameter filters below.
-    if "--features" in args:
-        for feature in enabled_features(env):
-            sys.stdout.write(feature["name"] + "\n")
+    include_planned = "--include-planned" in args
+
+    if "--capabilities" in args:
+        for cap in capabilities(env, include_planned):
+            sys.stdout.write(
+                "\t".join([cap["name"], cap.get("kind", "feature"), cap["state"]]) + "\n"
+            )
         return 0
 
-    if "--feature-requires" in args:
-        for feature in enabled_features(env):
-            for path in feature["requires_list"]:
-                sys.stdout.write(feature["name"] + "\t" + path + "\n")
+    if "--capability-requires" in args:
+        for cap in capabilities(env, include_planned):
+            for requirement in cap["requires_list"]:
+                namespace, path = split_requirement(requirement)
+                sys.stdout.write("\t".join([cap["name"], namespace, path]) + "\n")
         return 0
+
+    if "--declares" in args:
+        # Exit status only: 0 when the environment has a profile, 1 when it does
+        # not. Shell callers should not have to parse prose for this.
+        return 0 if declares(env) else 1
 
     extra_field = ""
     if "--field" in args:
