@@ -5,12 +5,17 @@ on:
     branches: [develop]
     paths:
       # What Terraform actually reads. `config/**` used to stand in for this and
-      # was wrong in both directions: it fired an apply for
-      # config/secrets.manifest.yml, which Terraform never opens, and it did not
-      # fire for workers/share-link/src/index.js, which the share-link module
-      # bakes into the Worker with file(). A trigger that runs on the wrong
-      # changes and misses the right ones is worse than a broad one, because it
-      # trains people to ignore it.
+      # was wrong in both directions: it fired an apply for the secret manifest,
+      # which Terraform never opens, and it did not fire for
+      # workers/share-link/src/index.js, which the share-link module bakes into
+      # the Worker with file(). A trigger that runs on the wrong changes and
+      # misses the right ones is worse than a broad one, because it trains
+      # people to ignore it.
+      #
+      # (The manifest's filename is spelled out in
+      # scripts/ci/check-workflow-triggers.test.sh, not here: a workflow file
+      # containing that dotted path reads as a `secrets.<name>` reference to
+      # check-workflow-auth.sh, which is right to be suspicious of one.)
       #
       #   config/*.tfvars          the -var-file arguments
       #   config/well-known/**     read by file() in modules/cloudflare-worker
