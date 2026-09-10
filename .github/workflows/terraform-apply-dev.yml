@@ -4,8 +4,21 @@ on:
   push:
     branches: [develop]
     paths:
+      # What Terraform actually reads. `config/**` used to stand in for this and
+      # was wrong in both directions: it fired an apply for
+      # config/secrets.manifest.yml, which Terraform never opens, and it did not
+      # fire for workers/share-link/src/index.js, which the share-link module
+      # bakes into the Worker with file(). A trigger that runs on the wrong
+      # changes and misses the right ones is worse than a broad one, because it
+      # trains people to ignore it.
+      #
+      #   config/*.tfvars          the -var-file arguments
+      #   config/well-known/**     read by file() in modules/cloudflare-worker
+      #   workers/share-link/**    script_body, same module
       - 'terraform/**'
-      - 'config/**'
+      - 'config/*.tfvars'
+      - 'config/well-known/**'
+      - 'workers/share-link/**'
   workflow_dispatch:
 
 permissions:

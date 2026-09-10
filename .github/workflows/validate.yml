@@ -152,6 +152,13 @@ jobs:
       # The tfvars parser is regression-tested because its previous version
       # failed silently on BSD userlands and returned the whole line, which made
       # an empty required field look populated.
+      # A path filter is a security control that looks like configuration:
+      # terraform-apply-dev.yml runs a real apply on every matching push, so a
+      # filter that is too broad applies drift nobody asked for (GoGo-Infra#172)
+      # and one that is too narrow leaves a Terraform input unwatched.
+      - name: terraform trigger paths
+        run: ./scripts/ci/check-workflow-triggers.test.sh
+
       - name: tfvars parser tests
         run: ./scripts/lib/config.test.sh
 
