@@ -1,12 +1,19 @@
 # ADR 0006 — Grafana Cloud holds the samples; Better Stack and Sentry hold the alerts
 
-**Status:** accepted — 04/09/2026; partially superseded 04/09/2026
+**Status:** accepted — 04/09/2026; partially superseded 04/09/2026 and 08/09/2026
 **Superseded in part by:** [ADR-0007](0007-dev-lan-topology-and-self-hosted-observability.md) (INF-064) —
 **§D1a** and **§D2a**, the halves requiring Grafana *Cloud*, are superseded;
 **§D5** and **§D6** are amended; **§D1b, §D2b, §D3 and §D4 stand**. What changed
 is DEV's location, not this ADR's reasoning: DEV moved onto the local LAN on
 04/09/2026, so a second machine exists to hold the stack. Nothing below is
 rewritten — read it as written, then read ADR-0007.
+**Superseded in part by:** [ADR-0009](0009-grafana-alerting-for-administrative-data.md) (INF-156) —
+**§D3, narrowly**: Grafana Unified Alerting is permitted for the
+administrative-data surface alone, because that surface has what §D3 said did
+not exist — a merged metric contract with bounded labels, and baselines that
+were measured rather than guessed. **§D3 stands unamended for generic latency
+and error-rate alerting without an established baseline**, which is what its
+argument was about. Nothing below is rewritten.
 **Deciders:** product owner + platform
 **Issues:** INF-061. Answers **GoGo-BE ADR-0013 §D3**, which deliberately left this
 open. Constrains gap **G-24** / GoGo-BE#331 (alerts-as-code) and confirms

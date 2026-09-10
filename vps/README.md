@@ -87,11 +87,12 @@ matters; each step exists because reordering it breaks something specific.
 | 2 | `git fetch`, resolve the ref to a commit, `checkout --detach` | Resolving first makes a branch, a tag and a SHA behave identically, and records what actually shipped rather than what a moving branch pointed at when the deploy started |
 | 3 | Ship the rendered env file, `install -m 600` into place | `install(1)` renames atomically. A process restarting mid-copy would otherwise read half a file and fail on a config error that looks like a code bug |
 | 4 | Build `api`, `worker` **and `migrate`** | `migrate` sits behind the `tools` profile, so a bare `build` skips it. Building only the long-running services left migrations running yesterday's code against today's schema — and the deploy reported success, because the container it ran did exactly what it was built to do |
-| 5 | Run migrations | **Before** the new containers take traffic, and expand-only, so the previous revision still runs against this schema if the health check fails |
-| 6 | `up -d --remove-orphans` | Traffic moves only after the schema it needs exists |
-| 7 | Health check, then prune | The check is the deploy's own verdict. On dev there is no automatic rollback: a broken deploy is information, and rolling it back silently hides the thing the developer is trying to see |
+| 5 | `config:check` in a throwaway container | The API validates its whole environment at boot and refuses a half-configured one. On 2026-09-10 that refusal happened inside the **new** container, after the old one was gone: DEV crash-looped for two minutes over an `R2_PUBLIC_BUCKET` with no credentials. Same validation, run where a failure costs nothing, against the env file just installed and the image just built. It also prints which capabilities this environment turns on and off (GoGo-BE#550) |
+| 6 | Run migrations | **Before** the new containers take traffic, and expand-only, so the previous revision still runs against this schema if the health check fails |
+| 7 | `up -d --remove-orphans` | Traffic moves only after the schema it needs exists |
+| 8 | Health check, then prune | The check is the deploy's own verdict. On dev there is no automatic rollback: a broken deploy is information, and rolling it back silently hides the thing the developer is trying to see |
 
-Expand-then-contract is what makes step 5 safe to run before step 6. A destructive migration
+Expand-then-contract is what makes step 6 safe to run before step 7. A destructive migration
 breaks that property — the old code can no longer read its own database — which is why
 `rollback.sh` rolls back **code only** and says so.
 

@@ -84,6 +84,15 @@ one command that needs it (`pull.sh --seed`). See `config/secrets.manifest.yml`.
   good. Any environment still using it must be rotated through CMS account
   management; see "Rotation".
 
+  DEV was in exactly that state until 2026-09-06 and is now rotated (INF-070,
+  #149). Worth knowing why it lasted so long: the parameter written by INF-069
+  was freshly generated, the account predated it, and **the bootstrap never
+  overwrites an existing account** — so SSM and the database had never matched,
+  and reading the parameter gave a value that did not sign in. If a stored value
+  is ever refused at login, that is the first thing to check: storage and
+  provisioning are different acts, and the table at the top of this document is
+  the one that says so.
+
 ## Provisioning a value
 
 Check first, then write. `put.sh` passes `--overwrite`, so a second run replaces

@@ -181,6 +181,15 @@ jobs:
       - name: observability compose runs on the images it ships
         run: ./scripts/ci/observability-compose.test.sh
 
+      # The first alert rules this repository has ever carried (ADR-0009 /
+      # INF-156). The failure they are guarded against is not a syntax error —
+      # it is a rule that loads cleanly and means nothing: alerting on the level
+      # of a baseline that is 1,033 rows by design, reading a lifetime counter
+      # that fires on history, or shipping unpaused into an environment where
+      # none of the 39 series exist yet.
+      - name: administrative alert rules mean something
+        run: ./scripts/ci/alerting-provisioning.test.sh
+
       # The Access SSH deploy path failed twice on things a grep would have
       # caught: the wrong env var names for the service token, and an ingress
       # that pointed at the tunnel container's own loopback.
@@ -226,6 +235,14 @@ jobs:
       # value-carrying variable is ever added back.
       - name: the worker secret never leaves the pipe
         run: ./scripts/secrets/put-worker-secret.test.sh
+
+      # NTF-BE-008. The identity signing key is the one credential here that is
+      # neither a token nor a string: it is a PEM, and the runtime env renderers
+      # emit one line per variable. The tests assert the encoding that survives
+      # that, and that a wrong curve, a public key or an encrypted file is
+      # refused before the upload rather than discovered on a phone.
+      - name: the identity key is validated and encoded before it reaches SSM
+        run: ./scripts/secrets/put-identity-key.test.sh
 
       # The mobile env renderer decides what a client build is allowed to hold.
       # Its tests are the only thing standing between "public config" and a

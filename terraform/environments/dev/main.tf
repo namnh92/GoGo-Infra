@@ -495,6 +495,19 @@ module "github_oidc" {
 
 # --- Infrastructure ----------------------------------------------------------
 
+# Who may upload straight to a bucket from a browser.
+#
+# The deployed console is derived from `cms_host` rather than written out again
+# in tfvars: the two must agree, and a hand-maintained copy is what silently
+# drifts the day the hostname changes. `cors_allowed_origins` stays for the
+# extras a list cannot derive — local dev servers, a preview host.
+locals {
+  upload_origins = distinct(concat(
+    var.cms_host == "" ? [] : ["https://${var.cms_host}"],
+    var.cors_allowed_origins,
+  ))
+}
+
 # Private half: user media, review photos, import scratch. Read only through a
 # presigned GET the BFF signs per request, so a URL that leaks stops working.
 module "assets_bucket" {
@@ -502,7 +515,7 @@ module "assets_bucket" {
 
   account_id           = var.cloudflare_account_id
   bucket_name          = "${module.tags.name_prefix}-assets"
-  cors_allowed_origins = var.cors_allowed_origins
+  cors_allowed_origins = local.upload_origins
 }
 
 # Public half: catalogue photos and banners, served over the CDN.
@@ -514,17 +527,26 @@ module "assets_bucket" {
 # boundary a thing you have to cross deliberately (ADR-0005).
 #
 # No lifecycle rules: everything here is permanent content the catalogue
-# references by object key. No CORS: the browser reads these with a plain image
-# request, which is not a CORS request at all.
+# references by object key.
+#
+# CORS *is* needed here, despite reading being a plain image request that is not
+# a CORS request at all. The console does not only read this bucket, it writes
+# to it: a place photo, banner or campaign image is uploaded by the browser
+# straight to the bucket the URL will be served from (ADR-0005), and a presigned
+# PUT is never a simple request, so the browser preflights it every time.
+# Without a rule the preflight is answered `403 CORS not configured for this
+# bucket` and no editor can upload a picture — while `curl` keeps working,
+# because curl neither preflights nor enforces CORS.
 module "public_assets_bucket" {
   source = "../../modules/cloudflare-r2"
   count  = var.assets_host == "" || var.cloudflare_zone_id == "" ? 0 : 1
 
-  account_id       = var.cloudflare_account_id
-  bucket_name      = "${module.tags.name_prefix}-public"
-  public_domain    = var.assets_host
-  zone_id          = var.cloudflare_zone_id
-  manage_lifecycle = false
+  account_id           = var.cloudflare_account_id
+  bucket_name          = "${module.tags.name_prefix}-public"
+  public_domain        = var.assets_host
+  zone_id              = var.cloudflare_zone_id
+  manage_lifecycle     = false
+  cors_allowed_origins = local.upload_origins
 }
 
 # The share-link edge. Off until share_host is set, so an environment without
@@ -538,7 +560,7 @@ module "share_link_worker" {
   environment                 = var.environment
   script_name                 = "${module.tags.name_prefix}-share-link"
   host                        = var.share_host
-  api_origin                  = var.api_origin
+  api_origin_provisioned      = var.api_origin_provisioned
   tenjin_tracking_template    = var.tenjin_tracking_template
   fallback_url                = var.share_fallback_url
   edge_auth_token_provisioned = var.share_edge_auth_token_provisioned

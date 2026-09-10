@@ -191,11 +191,50 @@ That does not make it a server and this file does not pretend otherwise. What
 makes it survivable is the health check that reports when it stops answering,
 and the restore drill that says what to do next.
 
+## Administrative-data alerting
+
+[ADR-0009](../../docs/adr/0009-grafana-alerting-for-administrative-data.md) /
+INF-156. Eighteen rules in the Grafana folder `GoGo Administrative Data`,
+evaluated by Grafana against `gogo-prometheus-local` and delivered to Telegram.
+
+```
+grafana/provisioning/alerting/
+  administrative-rules.yaml     18 rules, folder + group + 60s interval
+  contact-points.yaml           the Telegram receiver
+  notification-policies.yaml    root policy + ONE child route
+  templates.yaml                the message body
+```
+
+**They ship paused.** `isPaused: ${GOGO_ADM_ALERTS_PAUSED}`, and `.env.example`
+sets it to `true`. All 39 administrative series are absent until a BE build
+containing `cf5989c` is deployed; activation is a recorded step with seven
+preconditions in
+[`docs/runbook-administrative-alerts.md`](../../docs/runbook-administrative-alerts.md).
+
+**The Telegram credential is not in this directory.** Two SecureStrings in SSM
+reach the Grafana container through `bin/render-alerting-env.sh`, which writes a
+mode-0600 `.env.alerting` that compose loads with `required: true`. Nothing is
+committed; a missing file stops the stack and an empty token fails Grafana's
+provisioning rather than producing a channel that silently never delivers.
+
+**Provisioning `policies:` replaces the org's entire root policy tree**, not just
+the child route. Capture the current tree before the first apply — the runbook
+says how — and `resetPolicies: [1]` is the rollback.
+
 ## What is deliberately not here
 
-- **No alert rules.** ADR-0006 §D3 stands: MVP paging is Better Stack +
-  healthchecks.io + Sentry. ADR-0007 moved where samples live, not what wakes a
-  human.
+- **No alert rules outside the administrative-data folder.** ADR-0006 §D3
+  stands for generic latency and error-rate alerting: MVP paging is Better Stack
+  + healthchecks.io + Sentry, and a guessed threshold on a system with no
+  baseline teaches the team to ignore alerts. [ADR-0009](../../docs/adr/0009-grafana-alerting-for-administrative-data.md)
+  supersedes §D3 **narrowly**, for the administrative-data surface only — see
+  § Administrative-data alerting below. A rule for API latency or HTTP error
+  rate does not become permissible because that folder exists.
+- **No Prometheus `rule_files:` and no Alertmanager.** Grafana's embedded
+  Alertmanager evaluates and routes the administrative rules. One condition is
+  evaluated in exactly one place; a second copy is always the one nobody
+  updates. `scripts/ci/alerting-provisioning.test.sh` fails the build if either
+  appears here.
 - **No Alloy config.** The collector runs on the BE host and its single source
   is `GoGo-BE/docker/alloy/config.alloy`. Two descriptions of how to run
   something are worse than one, because the wrong one is right enough that

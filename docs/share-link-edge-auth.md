@@ -145,8 +145,14 @@ Stated rather than implied, because each is someone's judgement to accept:
 
 ## Not yet true
 
-`api_origin` is empty until INF-037, so the Worker never calls the API and none
-of the above has run anywhere. No environment holds a token. The manifest row is
-therefore optional in every environment, and becomes required in the same change
-that sets `api_origin` — that is the deploy where an absent token would silently
-mean one rate-limit bucket for every visitor in the product.
+No environment holds a token, so none of the above has run anywhere yet. The
+manifest row is still optional everywhere.
+
+What changed (GoGo-Infra#153): this used to say the Worker never calls the API,
+because `api_origin` was empty. DEV's edge does call it now —
+`API_ORIGIN` is set in Cloudflare and Terraform carries the binding with
+`inherit` rather than holding a copy. The resolve endpoint is `@Public()`, so
+the edge works without a token; what the token buys is client-IP forwarding, and
+without it every visitor shares one rate-limit bucket at the API. That makes
+putting the token the next thing to do on DEV, not a thing blocked on something
+else.

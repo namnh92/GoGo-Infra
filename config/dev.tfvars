@@ -31,10 +31,15 @@ dns_record_suffix = "-dev.gogo.id.vn"
 # Same reason the remote-first spec writes api-dev.<domain>.
 share_host = "go-dev.gogo.id.vn"
 
-# The dev API is not reachable from the edge yet. The worker still serves
-# /.well-known/ correctly; /l/{slug} answers 502 until this points somewhere,
-# which is the honest failure — better than redirecting to nothing.
-api_origin = ""
+# GoGo-Infra#153. The origin itself lives in Cloudflare now, not here: two
+# authoritative copies of one value drifted, and the copy in this file won.
+# It still said "" — written while the dev API was unreachable — long after
+# api-dev.gogo.id.vn was serving, so the edge answered 502 on every share link
+# until someone clicked one and looked.
+#
+# true because the variable is set on the worker. A new environment sets it in
+# Cloudflare first, then flips this.
+api_origin_provisioned = true
 
 # The hostname has to exist in DNS for the worker routes to be reachable —
 # routes attach to a zone, but a name that does not resolve is never asked for.
@@ -168,6 +173,8 @@ share_fallback_url = ""
 # INF-070: has the share-link Worker's EDGE_AUTH_TOKEN secret been put yet?
 # The token itself never appears here or anywhere else in Terraform — it goes
 # from SSM straight to Cloudflare via scripts/secrets/put-worker-secret.sh.
-# false until api_origin exists (INF-037), because until then the Worker never
-# calls the API and there is nothing to authenticate.
+# false because the token has not been put yet — not, as this said before, because
+# the Worker has no API to call: it does now (GoGo-Infra#153), and the resolve
+# endpoint is public, so the edge works without the token and gains client-IP
+# forwarding with it.
 share_edge_auth_token_provisioned = false

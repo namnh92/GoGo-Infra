@@ -98,6 +98,16 @@ it, and the API's process environment is the wrong place for it. See
 [`adr/0008`](adr/0008-cms-bootstrap-credentials-in-ssm.md) and
 [`cms-bootstrap-ssm.md`](cms-bootstrap-ssm.md).
 
+`consumer: observability` is the third value, added by INF-156, and it is the same argument with
+a different reader. Grafana's Telegram bot token is stored under `backend` — same prefix, same
+deploy and monitor roles, so no IAM change and no secret in Terraform state — and it is loaded by
+a container on `192.168.68.168`, never by the API. `render-env.sh` asks the manifest for
+`--consumer runtime`, so the token cannot reach the process environment of the most
+internet-exposed service here for the benefit of a machine that is not even the same one. It is
+rendered by `observability/local-grafana/bin/render-alerting-env.sh`. See
+[`adr/0009`](adr/0009-grafana-alerting-for-administrative-data.md) and
+[`runbook-administrative-alerts.md`](runbook-administrative-alerts.md).
+
 ## Generated values
 
 Three of these are ours to invent rather than to collect from a provider: the auth signing pair,
@@ -143,6 +153,11 @@ dashboard consumes a permissioned admin API on GoGo-BE, never this endpoint and 
 
 The value is never passed as an argument: arguments land in shell history, in `ps`, and in CI
 logs.
+
+One value does not go through `put.sh`: the OneSignal Identity Verification key is a PEM, and
+the runtime renderers emit one line per variable, so it has to be encoded before it is stored.
+`./scripts/secrets/put-identity-key.sh <pem> <env>` validates the curve, encodes it, and
+verifies the round trip by fingerprint — see [onesignal-identity-key.md](onesignal-identity-key.md).
 
 ## Why Terraform does not manage values
 
@@ -194,7 +209,7 @@ rotated at the provider — removing it from the latest revision changes nothing
 | --- | --- | --- | --- | --- |
 | 2026-09-05 | Grafana Cloud access-policy tokens — `metrics:write` (collector) and `metrics:read` (admin API), Free stack `prometheus-prod-37-prod-ap-southeast-1`, instance `3553140` | ADR-0007: DEV samples moved to the self-hosted Prometheus at `192.168.68.168`; the Cloud store is retired, so its credentials must not stay valid (§E7: revoked last, after the shared end-to-end gate passed) | platform owner (revoked at Grafana Cloud); this change (SSM + manifest) | Revoked at the provider **first**. Then `observability/grafana-prom-url`, `-prom-user`, `-write-token`, `-read-token`, `-retention-days` deleted from SSM and removed from the manifest **together**, because `validate.sh` fails on MISSING and UNDECLARED alike. `check-quotas.sh` Grafana probe retired (§E6). `grafana-url` is unrelated (self-hosted Grafana link) and stays. |
 | 2026-09-05 | `redis/url` (dev) — Upstash database recreated: `gogo-dev` @ `secure-rattler-216851.upstash.io`; the previous `trusting-cougar-204025` no longer exists in the account | Owner recreated the DEV Redis while adding the INF-060 rows (reason: owner to record) | platform owner | The DEV host kept the old URL from the 05:20Z deploy; `.env.dev` `REDIS_URL` was swapped by hand (backup `.env.dev.pre-redis-20260905T063905Z`) and api + worker recreated — readiness answers `redis: ok`. The next deploy-dev renders the same value; it is blocked by `validate.sh` (UNDECLARED) until this manifest lands. |
-| _(pending)_ | CMS bootstrap `super_admin` password, the literal that was in GoGo-BE `libs/database/src/seed.ts` | INF-069 removed the fallback and stored per-environment values in `/gogo/<env>/backend/cms/seed-admin-*`. Removing it from the latest revision changes nothing: it is in GoGo-BE's history, and it applied to every environment that did not override it | | **DEV only** — staging and prod had no such account and now hold freshly generated values, so nothing there was ever exposed. The DEV `admin_users` row still carries the old hash: the bootstrap never rewrites an existing account, by design. Rotate through CMS account management, then `put.sh dev cms/seed-admin-password` so SSM matches, in that order — see `cms-bootstrap-ssm.md` §Rotation |
+| 2026-09-06 | CMS `super_admin` password on DEV — the literal that was in GoGo-BE `libs/database/src/seed.ts` and remains in that repository's history | INF-069 moved credentials to SSM but rotated nothing. The DEV account still authenticated with the committed literal, verified against the running environment on 2026-09-06 (INF-070 / #149) | this change (INF-070) | Rotated through CMS account management (`POST /v1/cms/auth/change-password`), then `put.sh dev cms/seed-admin-password` — that order. Verified: the rotating session survived, the second session was revoked with `revoke_reason = password_changed`, an `admin.password_changed` audit row exists, the committed literal now answers 401, and a login using only what SSM holds answers 201. SSM parameter now at Version 2. **Staging and prod were never exposed** — neither has such an account, and both hold freshly generated values. |
 | _(pending INF-021)_ | APNs auth key `AuthKey_*.p8` | Key file present in the workspace next to the repos | | Upload to OneSignal, delete the local copy, confirm it never entered Git; if it did, revoke on Apple Developer and issue a new key |
 
 ## The permissions boundary is not editable from CI
