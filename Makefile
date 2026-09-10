@@ -49,6 +49,7 @@ test: ## Run the shell unit tests
 	./scripts/lib/config.test.sh
 	./scripts/lib/manifest.test.sh
 	./scripts/ci/check-workflow-auth.test.sh
+	./scripts/ci/check-workflow-triggers.test.sh
 	./scripts/ci/gitleaks-rules.test.sh
 	./scripts/ops/check-quotas.test.sh
 	./scripts/ops/check-provider-keys.test.sh
