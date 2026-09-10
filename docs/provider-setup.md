@@ -55,6 +55,7 @@ Console → **R2** and **Manage Account → Account ID**.
 | secret | R2 access key id + secret for the **asset bucket** | `./scripts/secrets/put.sh <env> r2/access-key-id` / `r2/secret-access-key` |
 | non-secret | name of the **public bucket** (`gogo-<env>-public`) | `./scripts/secrets/put.sh <env> r2/public-bucket` |
 | secret | R2 access key id + secret for the **public bucket**, Object Read & Write, that bucket only | `./scripts/secrets/put.sh <env> r2/public-access-key-id` / `r2/public-secret-access-key` |
+| non-secret | public origin the edge serves that bucket from (`https://assets-<env>.gogo.id.vn`) | `./scripts/secrets/put.sh <env> media/public-base-url` |
 | non-secret | zone id of `gogo.id.vn` | `./scripts/secrets/put.sh <env> cloudflare/zone-id` |
 | secret | API token with exactly **Zone → Cache Purge: Purge** on that zone | `./scripts/secrets/put.sh <env> cloudflare/cache-purge-token` |
 
@@ -65,6 +66,17 @@ there and nothing else, so a leaked private-bucket token cannot publish and a le
 public-bucket token cannot read a check-in photo. The three `r2/public-*` rows are set together
 or not at all — the API refuses a half-configured pair at boot — and an environment without them
 simply reports `capabilities.avatarUpload: unavailable` on `GET /me`.
+
+`media/public-base-url` belongs to that same set even though it is not a credential: the
+capability check requires it, so three credentials without the base URL still report
+`unavailable` — the one combination that looks finished and is not (PROF-INF-002, #165). Set it
+to this environment's `assets_host` with no trailing slash.
+
+There is no `r2/account-id` row on purpose. `R2StorageAdapter` needs an account id, and the
+first label of `r2/endpoint` is that id; GoGo-BE resolves it from there and refuses to boot
+with an R2 credential whose account it cannot resolve (GoGo-BE#548). Before that fix an empty
+account id produced presigned URLs for the host `.r2.cloudflarestorage.com`, returned with a
+200.
 
 The cache-purge token is what lets a removed avatar stop answering from the edge before its
 one-day cache lifetime ends. It is optional and both rows (`cloudflare/zone-id`,
