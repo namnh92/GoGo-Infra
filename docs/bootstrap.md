@@ -160,6 +160,60 @@ Then enable, and treat as part of the security model rather than as process hygi
 branch protection on `master` and `develop`, CODEOWNER review on `.github/workflows/**`, and the
 `production` GitHub Environment with required reviewers.
 
+## Credential readiness, per environment
+
+Before bootstrapping an environment — and again before enabling a feature in one — ask the
+manifest what is missing rather than reading workflows to find out.
+
+```bash
+export AWS_PROFILE=gogo-bootstrap
+
+./scripts/secrets/validate.sh dev     --strict
+./scripts/secrets/validate.sh staging --strict
+./scripts/secrets/validate.sh prod    --strict
+```
+
+`--strict` is the readiness mode: it covers every declared namespace including `ci`, fails when
+a namespace cannot be read rather than skipping it quietly, and fails when a feature is switched
+on without its prerequisites. Run it from a developer SSO session — the deploy role can only see
+`<env>/backend/*` and would report the rest SKIPPED, which in strict mode is a failure by design.
+
+The output names each gap by path. Provision each one with the value on stdin:
+
+```bash
+./scripts/secrets/put.sh <env> <path>
+```
+
+`config/secrets.manifest.yml` is the source of truth for what each path is: which provider
+issues it, which job or process reads it, the minimum permission and resource scope it needs,
+which other parameter it must be paired with, and where an operator creates it. Read the row
+before creating the credential — several are deliberately narrower than the obvious choice, and
+the manifest says why.
+
+### A new environment, in order
+
+1. `validate.sh <env> --strict` — expect it to fail, and read the MISSING list. That list is the
+   work.
+2. Create each credential at its provider, scoped as the manifest's `scope:` field states.
+   Narrower than it looks is usually correct: the CMS deploy token needs Workers only, the
+   Terraform state credentials need one bucket, and the private and public R2 credentials must
+   not be the same token.
+3. `put.sh <env> <path>` for each, value on stdin.
+4. `validate.sh <env> --strict` again until it prints READY.
+5. For each feature the environment should run, add it to `enabled:` in the `features:` block
+   and re-run `--strict`. It will name any prerequisite the feature needs that step 2 missed.
+6. Confirm the credentials can do what they were scoped for — validation checked names and
+   types, not permissions:
+
+   ```bash
+   ./scripts/ops/check-cf-token-scopes.sh <env>
+   ./scripts/ops/check-provider-keys.sh <env>
+   ```
+
+Step 6 is not optional and not covered by step 4. A token stored at the right path with the
+right SSM type can still hold account-wide administration, and nothing in the metadata check
+would notice.
+
 ## A limitation worth knowing
 
 A pull request's OIDC subject is `repo:<owner>/<repo>:pull_request` and does **not** encode the

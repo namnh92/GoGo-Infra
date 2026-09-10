@@ -18,22 +18,36 @@ caller that predates the field keeps exactly the scope it was written with.
 
 ```
 /gogo/ci/<env>/terraform/read/    read-only  — assumable from a pull request
-├── cloudflare-token
-├── r2-state-access-key-id
+├── cloudflare-token              account read: R2, Workers, DNS, Access
+├── r2-state-access-key-id        S3 key pair, state bucket only
 └── r2-state-secret-access-key
 
 /gogo/ci/<env>/terraform/write/   read-write — environment approval required
-├── cloudflare-token
-├── r2-state-access-key-id
+├── cloudflare-token              account edit; the only credential that administers buckets
+├── r2-state-access-key-id        S3 key pair, state bucket read+write
 └── r2-state-secret-access-key
 
-/gogo/ci/<env>/deploy/
-└── ssh-private-key               the host key is pinned in config/known_hosts.<env>
+/gogo/ci/<env>/cms-deploy/
+├── cloudflare-token              Workers Scripts:Edit on gogo-cms-dev — no R2
+└── github-read-token             Contents:Read on GoGo-CMS, for the checkout
 
-/gogo/ci/<env>/sentry/
-├── auth-token                    backend release upload
-└── mobile-auth-token             mobile source-map upload, separate on purpose
+/gogo/ci/<env>/deploy/
+├── ssh-private-key               the host key is pinned in config/known_hosts.<env>
+├── access-client-id              Cloudflare Access service token, id half
+└── access-client-secret          …and its secret half
 ```
+
+Every one of those is declared in `config/secrets.manifest.yml` under `namespace: ci`,
+`consumer: pipeline`, with the consumer that reads it, the minimum permission it needs and
+where an operator creates it. They were undeclared until INF-171, which meant eleven
+credentials existed that no validation checked, no rotation covered, and whose purpose could
+only be recovered by reading every workflow. Declaring them is what makes
+`validate.sh --strict` able to say an environment is ready.
+
+A `ci` row is never rendered into a runtime or build environment. `render-env.sh` asks for
+`--namespace backend --consumer runtime` and `mobile-env.py` for `--namespace mobile`; neither
+can be handed a pipeline credential, and `scripts/lib/manifest.test.sh` pins that. A token that
+can deploy the API has no business in the API's own process environment.
 
 Two dimensions, both required:
 
@@ -107,6 +121,87 @@ internet-exposed service here for the benefit of a machine that is not even the 
 rendered by `observability/local-grafana/bin/render-alerting-env.sh`. See
 [`adr/0009`](adr/0009-grafana-alerting-for-administrative-data.md) and
 [`runbook-administrative-alerts.md`](runbook-administrative-alerts.md).
+
+## Validating an environment
+
+Two commands, two different questions.
+
+```bash
+export AWS_PROFILE=gogo-bootstrap        # the scripts read this, they take no --profile
+
+./scripts/secrets/validate.sh dev              # names and types, best effort
+./scripts/secrets/validate.sh dev --strict     # environment readiness
+```
+
+`validate.sh <env>` is the deploy-time check. A namespace this identity cannot list is
+reported SKIPPED and the run can still pass — that is deliberate, because `deploy-dev.yml`
+runs it under the deploy role, which holds `<env>/backend/*` only and has no business reading
+a mobile build key or a pipeline token.
+
+`validate.sh <env> --strict` is the readiness check, and it is the one to run before
+bootstrapping or enabling a feature. It differs in three ways:
+
+- a SKIPPED namespace **fails**. "I could not look" and "it is fine" produce the same output
+  otherwise, and a readiness check that can pass by not looking is the failure it exists to
+  prevent. Run it from a developer SSO session, not the deploy role.
+- it checks **feature prerequisites** — the credential groups where a missing member leaves the
+  API booting happily with the capability silently off.
+- it says `READY` rather than `OK`, and states what that does and does not cover.
+
+Per environment:
+
+```bash
+./scripts/secrets/validate.sh dev     --strict
+./scripts/secrets/validate.sh staging --strict
+./scripts/secrets/validate.sh prod    --strict
+```
+
+Each prints exactly what is missing, by path. Provision with `put.sh` (value on stdin, never
+an argument):
+
+```bash
+./scripts/secrets/put.sh <env> <path>     # e.g. put.sh staging r2/public-access-key-id
+```
+
+### What validation proves, and what it does not
+
+It proves a parameter **exists** at the declared path with the declared **SSM type**. That is
+metadata, and it is the whole of what it is safe to check without reading values.
+
+It does **not** prove the value is correct, current, or that the credential behind it can do
+what the manifest's `scope:` says. A Cloudflare token with no R2 permission and one with
+account-wide bucket admin are the same `SecureString` from here. Never report a scope as
+verified because it is written in the manifest — that is exactly the mistake the INF-171 audit
+was needed to unwind.
+
+Provider-side permission is a separate step, deliberately not folded in, because it spends real
+API calls and needs credentials the validator never reads:
+
+```bash
+./scripts/ops/check-cf-token-scopes.sh <env>   # what the Cloudflare CI tokens can actually do
+./scripts/ops/check-provider-keys.sh <env>     # what the Google keys are restricted to
+```
+
+### Features and their prerequisites
+
+A feature is a group of credentials that only works if all of them are present. `required:`
+cannot express that: `required: []` says the API boots, which is true and useless, because the
+failure mode is that it boots and reports the capability unavailable.
+
+```bash
+python3 scripts/lib/manifest.py <env> --features          # enabled in that environment
+python3 scripts/lib/manifest.py <env> --feature-requires  # feature <TAB> path it needs
+```
+
+Declared in `config/secrets.manifest.yml` under `features:`, each with the environments it is
+switched **on** in. `--strict` fails when an enabled feature is missing a prerequisite. Turning
+a feature on for a new environment is how you find out what it needs: add the environment to
+`enabled:`, run `--strict`, and provision what it names.
+
+This is why the public-bucket rows stay `required: []` and are still enforced on dev. On
+staging and production the API genuinely boots without them; blocking those deploys for a
+capability nobody switched on would be wrong. Leaving them unenforced on dev is how the
+catalogue shipped with every image resolving to a URL that 404s.
 
 ## Generated values
 

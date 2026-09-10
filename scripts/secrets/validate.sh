@@ -2,11 +2,39 @@
 #
 # Diff SSM against secrets.manifest.yaml.
 #
-#   ./scripts/secrets/validate.sh dev
+#   ./scripts/secrets/validate.sh dev              names and types, best effort
+#   ./scripts/secrets/validate.sh dev --strict     environment readiness
 #
 # Reports parameters that are required but absent, and parameters present in SSM
 # that no longer appear in the manifest (drift is how stale credentials survive).
-# Values are never read or printed.
+# Values are never read or printed, and no value is ever passed as an argument.
+#
+# WHAT THIS PROVES, AND WHAT IT DOES NOT
+#
+# It proves a parameter exists at the declared path with the declared SSM type.
+# That is metadata. It does not prove the value is correct, current, or that the
+# credential behind it can do what `scope:` says — a Cloudflare token with no R2
+# permission and one with account-wide bucket admin are the same SecureString
+# from here. Provider-side permission is a separate question with separate
+# tools:
+#
+#   scripts/ops/check-cf-token-scopes.sh <env>   what the Cloudflare CI tokens can do
+#   scripts/ops/check-provider-keys.sh <env>     what the Google keys are restricted to
+#
+# Those spend real API calls and need credentials this script deliberately never
+# reads, which is why they are not folded in here. Never report a scope as
+# verified because it is written in the manifest.
+#
+# THE TWO MODES
+#
+# Default is best effort: a namespace this identity cannot list is SKIPPED and
+# the run can still succeed. That is what `deploy-dev.yml` needs — the deploy
+# role holds `<env>/backend/*` only, by design.
+#
+# `--strict` is environment readiness: a SKIPPED namespace is a failure, because
+# "I could not look" and "it is fine" are the same output otherwise, and the
+# whole point of a readiness check is that it cannot pass by not looking. Strict
+# also enforces feature prerequisites.
 #
 # Every namespace the manifest declares is checked, not just `backend`. A
 # namespace this caller cannot list is reported as SKIPPED rather than passed
@@ -19,11 +47,21 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 ENVIRONMENT="${1:-}"
 require_env_arg "$ENVIRONMENT"
+
+STRICT=no
+for arg in "${@:2}"; do
+  case "$arg" in
+    --strict) STRICT=yes ;;
+    *) die "unknown option: ${arg}   (usage: validate.sh <env> [--strict])" ;;
+  esac
+done
+
 require_aws
 
 status=0
 declared_total=0
 skipped=()
+present_paths=""
 
 for namespace in $(manifest_namespaces "$ENVIRONMENT"); do
   prefix="$(ssm_prefix "$ENVIRONMENT" "$namespace")"
@@ -46,6 +84,7 @@ for namespace in $(manifest_namespaces "$ENVIRONMENT"); do
   fi
 
   actual="$(echo "$listing" | tr '\t' '\n' | sed "s|^${prefix}/||" | sort)"
+  present_paths+="${actual}"$'\n'
 
   missing="$(comm -23 <(echo "$expected_required") <(echo "$actual"))"
   unknown="$(comm -13 <(echo "$expected_all") <(echo "$actual"))"
@@ -87,15 +126,59 @@ for namespace in $(manifest_namespaces "$ENVIRONMENT"); do
   fi
 done
 
+# Feature prerequisites. A feature is only checked where it is switched on, so
+# an environment that has not adopted it is not blocked by its credentials —
+# and the moment someone adds that environment to `enabled:`, the missing pieces
+# are named here instead of surfacing as a capability that silently reports
+# unavailable.
+#
+# Only meaningful in strict mode: outside it a namespace may have been skipped,
+# and a prerequisite reported missing because nobody could look is worse than
+# not reporting it.
+if [[ "$STRICT" == "yes" ]]; then
+  feature_gaps=""
+  while IFS=$'\t' read -r feature path; do
+    [[ -n "$feature" ]] || continue
+    if ! grep -qxF "$path" <<< "$present_paths"; then
+      feature_gaps+="  - ${feature} needs ${path}"$'\n'
+    fi
+  done < <(python3 "$MANIFEST_READER" "$ENVIRONMENT" --feature-requires)
+
+  if [[ -n "$feature_gaps" ]]; then
+    echo "FEATURE PREREQUISITES MISSING (enabled in ${ENVIRONMENT}, credential absent):"
+    printf '%s' "$feature_gaps"
+    echo "  The API boots without these and reports the capability unavailable, which is why"
+    echo "  a missing one does not fail a deploy. Provision them, or take the environment out"
+    echo "  of the feature's enabled list in config/secrets.manifest.yml."
+    status=1
+  fi
+fi
+
 if [[ "${#skipped[@]}" -gt 0 ]]; then
   echo "SKIPPED (namespace not readable by this identity):"
   printf '  - %s\n' "${skipped[@]}"
-  echo "  Not a failure. The deploy role holds <env>/backend/* only, by design — it has no"
-  echo "  business reading a mobile build key. Run this from a developer session to cover them."
+  if [[ "$STRICT" == "yes" ]]; then
+    echo "  In --strict mode this is a failure. A readiness check that passes because it could"
+    echo "  not look is the failure it exists to prevent. Re-run with an identity that can read"
+    echo "  every namespace — a developer SSO session, not the deploy role."
+    status=1
+  else
+    echo "  Not a failure here. The deploy role holds <env>/backend/* only, by design — it has"
+    echo "  no business reading a mobile build key or a pipeline token. Run --strict from a"
+    echo "  developer session to cover them."
+  fi
 fi
 
 if [[ "$status" -eq 0 ]]; then
-  echo "OK: ${ENVIRONMENT} matches secrets.manifest.yaml (${declared_total} declared across $(manifest_namespaces "$ENVIRONMENT" | wc -l | tr -d ' ') namespace(s), names and types)."
+  namespaces="$(manifest_namespaces "$ENVIRONMENT" | wc -l | tr -d ' ')"
+  if [[ "$STRICT" == "yes" ]]; then
+    features="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --features | wc -l | tr -d ' ')"
+    echo "READY: ${ENVIRONMENT} — ${declared_total} parameter(s) across ${namespaces} namespace(s) present with the declared type, ${features} feature(s) have their prerequisites."
+    echo "  Names and types only. Provider permissions are not checked here — see"
+    echo "  scripts/ops/check-cf-token-scopes.sh and scripts/ops/check-provider-keys.sh."
+  else
+    echo "OK: ${ENVIRONMENT} matches secrets.manifest.yaml (${declared_total} declared across ${namespaces} namespace(s), names and types)."
+  fi
 fi
 
 exit "$status"

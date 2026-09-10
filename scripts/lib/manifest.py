@@ -13,7 +13,15 @@ Usage:
     manifest.py <env> --consumer seed    Only rows a seed/provisioning command loads
     manifest.py <env> --consumer observability
                                          Only rows the observability host loads
+    manifest.py <env> --consumer pipeline
+                                         Only rows a CI job loads
     manifest.py <env> --consumer all     Every consumer
+    manifest.py <env> --features         Features enabled in that env, one per line
+    manifest.py <env> --feature-requires Paths every enabled feature needs:
+                                         "feature<TAB>path"
+    manifest.py <env> --field <name>     Append one extra field to each row, so a
+                                         caller can read `scope` or `provider`
+                                         without a YAML parser
 
 Namespace defaults to `backend` and consumer defaults to `runtime`. Both
 defaults are load-bearing rather than convenient: render-env.sh renders every
@@ -39,8 +47,16 @@ MANIFEST = os.path.join(ROOT, "config", "secrets.manifest.yml")
 FIELD = re.compile(r"^\s{4}([a-z_]+):\s*(.*)$")
 ITEM = re.compile(r"^\s{2}-\s+([a-z_]+):\s*(.*)$")
 
+# A folded scalar (`key: >-`) continues on indented lines. The parser keeps only
+# the first line's text, which is enough for every field it is asked about and
+# avoids pulling in a YAML dependency for prose nobody parses.
+def _list(raw):
+    return [x.strip() for x in raw.strip("[]").split(",") if x.strip()]
 
-def parse():
+
+def parse(section="parameters"):
+    """Rows of one top-level list. `parameters` by default; `features` for the
+    prerequisite groups. Both have the same flat shape, so one parser serves."""
     entries = []
     current = None
     in_parameters = False
@@ -51,9 +67,10 @@ def parse():
             if not line.strip() or line.lstrip().startswith("#"):
                 continue
 
-            if line.startswith("parameters:"):
-                in_parameters = True
-                continue
+            if re.match(r"^[a-z_]+:", line):
+                in_parameters = line.startswith(section + ":")
+                if in_parameters:
+                    continue
 
             if not in_parameters:
                 continue
@@ -73,10 +90,16 @@ def parse():
         entries.append(current)
 
     for entry in entries:
-        required = entry.get("required", "[]").strip("[]")
-        entry["required_list"] = [x.strip() for x in required.split(",") if x.strip()]
+        entry["required_list"] = _list(entry.get("required", "[]"))
+        entry["enabled_list"] = _list(entry.get("enabled", "[]"))
+        entry["requires_list"] = _list(entry.get("requires", "[]"))
 
     return entries
+
+
+def enabled_features(env):
+    """Features switched on in this environment, with their prerequisites."""
+    return [f for f in parse("features") if env in f["enabled_list"]]
 
 
 def main():
@@ -87,6 +110,27 @@ def main():
     env = sys.argv[1]
     args = sys.argv[2:]
     required_only = "--required" in args
+
+    # Feature queries answer a different question and return a different shape,
+    # so they short-circuit before the parameter filters below.
+    if "--features" in args:
+        for feature in enabled_features(env):
+            sys.stdout.write(feature["name"] + "\n")
+        return 0
+
+    if "--feature-requires" in args:
+        for feature in enabled_features(env):
+            for path in feature["requires_list"]:
+                sys.stdout.write(feature["name"] + "\t" + path + "\n")
+        return 0
+
+    extra_field = ""
+    if "--field" in args:
+        index = args.index("--field")
+        if index + 1 >= len(args):
+            sys.stderr.write("--field needs a field name, e.g. scope or provider\n")
+            return 2
+        extra_field = args[index + 1]
 
     namespace = "backend"
     if "--namespace" in args:
@@ -100,7 +144,9 @@ def main():
     if "--consumer" in args:
         index = args.index("--consumer")
         if index + 1 >= len(args):
-            sys.stderr.write("--consumer needs a value: runtime, seed, observability, or all\n")
+            sys.stderr.write(
+                "--consumer needs a value: runtime, seed, observability, pipeline, or all\n"
+            )
             return 2
         consumer = args[index + 1]
 
@@ -111,19 +157,24 @@ def main():
             continue
         if consumer != "all" and entry.get("consumer", "runtime") != consumer:
             continue
-        sys.stdout.write(
-            "\t".join(
-                [
-                    entry["path"],
-                    entry.get("env_var", ""),
-                    entry.get("type", "SecureString"),
-                    ",".join(entry["required_list"]),
-                    entry.get("namespace", "backend"),
-                    entry.get("consumer", "runtime"),
-                ]
-            )
-            + "\n"
-        )
+        # Column order is a contract: render-env.sh and pull.sh read these
+        # positionally. New fields are appended behind --field, never inserted.
+        columns = [
+            entry["path"],
+            # "-" rather than "": bash treats tab as IFS *whitespace*, so a run
+            # of tabs collapses into one delimiter and an empty field shifts
+            # every column after it. `read -r path env_var type required` then
+            # silently puts the type in `env_var`. A placeholder keeps the
+            # positions a contract, which is what every caller assumes.
+            entry.get("env_var", "") or "-",
+            entry.get("type", "SecureString"),
+            ",".join(entry["required_list"]),
+            entry.get("namespace", "backend"),
+            entry.get("consumer", "runtime"),
+        ]
+        if extra_field:
+            columns.append(entry.get(extra_field, ""))
+        sys.stdout.write("\t".join(columns) + "\n")
     return 0
 
 
