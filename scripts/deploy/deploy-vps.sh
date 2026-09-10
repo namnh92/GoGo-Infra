@@ -70,6 +70,21 @@ echo "==> Building images"
 # success because the container it ran did exactly what it was built to do.
 remote "cd '${DEPLOY_PATH}' && ${COMPOSE} build api worker migrate"
 
+echo "==> Checking the configuration before anything is replaced"
+# INF-072 (#167), GoGo-BE#550. The API validates its whole environment at boot
+# and refuses a half-configured one — which is right, and on 2026-09-10 it
+# happened inside the *new* container, after the old one was gone: DEV
+# crash-looped for two minutes over an R2_PUBLIC_BUCKET with no credentials.
+#
+# So run that same validation first, in a container that serves nothing. It
+# reads the env file this deploy just installed and the image it just built, so
+# it catches a bad value and a bad build. A failure here leaves the previous
+# revision running and untouched.
+#
+# --no-deps because this needs no database, no redis and no tunnel: it parses
+# configuration and exits.
+remote "cd '${DEPLOY_PATH}' && ${COMPOSE} run --rm --no-deps api pnpm config:check"
+
 echo "==> Running migrations"
 # Before the new containers take traffic, and expand-only, so the previous
 # revision still runs against this schema if the health check fails.
