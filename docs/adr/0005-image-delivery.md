@@ -90,3 +90,36 @@ object.
   waiting for caches to age out, and a signed-URL path would be the answer;
 - user media grows to a volume where signing per request shows up in latency;
 - an environment needs the public bucket in a different jurisdiction than the private one.
+
+## Addendum 2026-09-10 — `avatars/**` is public (GoGo-BE ADR-0022, PROF-INF-001 #163)
+
+One more prefix joins the public bucket:
+
+| Prefix | Bucket | Delivery |
+| --- | --- | --- |
+| `avatars/**` | `gogo-<env>-public` | `https://assets-<env>.gogo.id.vn/<key>`, `Cache-Control: public, max-age=86400` |
+
+An avatar is a profile picture the person chose to show every co-member in every room they
+join. It is public by that choice, the way a picture on any profile is, and the signed-GET rule
+for user media would only make it worse: every member list would sign N URLs, each URL rotates
+with its signature, and the mobile image cache keys on the URL, so a picture the phone already
+holds is downloaded again on every rotation.
+
+What keeps this inside the decision above rather than against it:
+
+- **Nothing a phone uploads lands in the public bucket.** The original goes to the private
+  bucket under `tmp/avatars/…`, is read once by the API, processed (decoded under a pixel cap,
+  re-encoded to 512×512 WebP with every metadata block dropped) and written to the public bucket
+  under `avatars/<random128>.webp` — no user id, no timestamp, nothing to enumerate. The `tmp/`
+  lifecycle rule deletes the original after a day.
+- **A second credential.** The API holds a separate R2 token scoped to the public bucket
+  (`r2/public-*` in the manifest). The private token keeps no write access to it.
+- **A day, not a year.** Avatars are cached for 24 hours, not the immutable year catalogue images
+  get, and a removal purges the URL at the edge (`cloudflare/cache-purge-token`, optional).
+  **A purge cannot revoke a copy a device already holds** — the phone, a browser, a chat client
+  that unfurled a link, each keeps the bytes until its own cache expires. What removal guarantees
+  is narrower and is stated that way to the user: the origin object is gone, the edge stops
+  serving within the cache lifetime, and no new fetch of that URL succeeds.
+- **Every other user prefix is unchanged.** Check-in and bill photos stay private and keep the
+  signed-GET rule for the day that path is built.
+
