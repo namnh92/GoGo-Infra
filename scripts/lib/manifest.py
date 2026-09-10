@@ -13,7 +13,20 @@ Usage:
     manifest.py <env> --consumer seed    Only rows a seed/provisioning command loads
     manifest.py <env> --consumer observability
                                          Only rows the observability host loads
+    manifest.py <env> --consumer pipeline
+                                         Only rows a CI job loads
     manifest.py <env> --consumer all     Every consumer
+    manifest.py <env> --capabilities     Capabilities enabled in that env:
+                                         "name<TAB>kind<TAB>state"
+    manifest.py <env> --capability-requires
+                                         Credentials each needs:
+                                         "name<TAB>namespace<TAB>path"
+    manifest.py <env> --include-planned   Widen either of the two above from
+                                         `enabled` to `enabled + planned`, i.e.
+                                         what the environment is intended to run
+    manifest.py <env> --field <name>     Append one extra field to each row, so a
+                                         caller can read `scope` or `provider`
+                                         without a YAML parser
 
 Namespace defaults to `backend` and consumer defaults to `runtime`. Both
 defaults are load-bearing rather than convenient: render-env.sh renders every
@@ -39,8 +52,16 @@ MANIFEST = os.path.join(ROOT, "config", "secrets.manifest.yml")
 FIELD = re.compile(r"^\s{4}([a-z_]+):\s*(.*)$")
 ITEM = re.compile(r"^\s{2}-\s+([a-z_]+):\s*(.*)$")
 
+# A folded scalar (`key: >-`) continues on indented lines. The parser keeps only
+# the first line's text, which is enough for every field it is asked about and
+# avoids pulling in a YAML dependency for prose nobody parses.
+def _list(raw):
+    return [x.strip() for x in raw.strip("[]").split(",") if x.strip()]
 
-def parse():
+
+def parse(section="parameters"):
+    """Rows of one top-level list. `parameters` by default; `features` for the
+    prerequisite groups. Both have the same flat shape, so one parser serves."""
     entries = []
     current = None
     in_parameters = False
@@ -51,9 +72,10 @@ def parse():
             if not line.strip() or line.lstrip().startswith("#"):
                 continue
 
-            if line.startswith("parameters:"):
-                in_parameters = True
-                continue
+            if re.match(r"^[a-z_]+:", line):
+                in_parameters = line.startswith(section + ":")
+                if in_parameters:
+                    continue
 
             if not in_parameters:
                 continue
@@ -73,10 +95,53 @@ def parse():
         entries.append(current)
 
     for entry in entries:
-        required = entry.get("required", "[]").strip("[]")
-        entry["required_list"] = [x.strip() for x in required.split(",") if x.strip()]
+        entry["required_list"] = _list(entry.get("required", "[]"))
+        entry["enabled_list"] = _list(entry.get("enabled", "[]"))
+        entry["planned_list"] = _list(entry.get("planned", "[]"))
+        entry["requires_list"] = _list(entry.get("requires", "[]"))
 
     return entries
+
+
+def capabilities(env, include_planned=False):
+    """Capabilities this environment runs, or intends to.
+
+    `enabled` is what runs today; `planned` is what the environment is meant to
+    run and has not been provisioned for. Readiness widens to include `planned`
+    on request, which is how a new environment is brought up: the check names
+    every credential to create instead of anyone re-reading the workflows.
+    """
+    out = []
+    for cap in parse("capabilities"):
+        if env in cap["enabled_list"]:
+            cap["state"] = "enabled"
+        elif include_planned and env in cap["planned_list"]:
+            cap["state"] = "planned"
+        else:
+            continue
+        out.append(cap)
+    return out
+
+
+def declares(env):
+    """Whether any capability mentions this environment at all.
+
+    An environment named nowhere has no intended shape, so nothing can say it is
+    ready. Reporting READY because a profile was omitted is the same failure as
+    reporting it because a namespace could not be read.
+    """
+    return any(
+        env in cap["enabled_list"] or env in cap["planned_list"]
+        for cap in parse("capabilities")
+    )
+
+
+def split_requirement(entry):
+    """`namespace:path`, defaulting to backend."""
+    if ":" in entry:
+        namespace, path = entry.split(":", 1)
+        return namespace.strip(), path.strip()
+    return "backend", entry.strip()
 
 
 def main():
@@ -87,6 +152,37 @@ def main():
     env = sys.argv[1]
     args = sys.argv[2:]
     required_only = "--required" in args
+
+    # Feature queries answer a different question and return a different shape,
+    # so they short-circuit before the parameter filters below.
+    include_planned = "--include-planned" in args
+
+    if "--capabilities" in args:
+        for cap in capabilities(env, include_planned):
+            sys.stdout.write(
+                "\t".join([cap["name"], cap.get("kind", "feature"), cap["state"]]) + "\n"
+            )
+        return 0
+
+    if "--capability-requires" in args:
+        for cap in capabilities(env, include_planned):
+            for requirement in cap["requires_list"]:
+                namespace, path = split_requirement(requirement)
+                sys.stdout.write("\t".join([cap["name"], namespace, path]) + "\n")
+        return 0
+
+    if "--declares" in args:
+        # Exit status only: 0 when the environment has a profile, 1 when it does
+        # not. Shell callers should not have to parse prose for this.
+        return 0 if declares(env) else 1
+
+    extra_field = ""
+    if "--field" in args:
+        index = args.index("--field")
+        if index + 1 >= len(args):
+            sys.stderr.write("--field needs a field name, e.g. scope or provider\n")
+            return 2
+        extra_field = args[index + 1]
 
     namespace = "backend"
     if "--namespace" in args:
@@ -100,7 +196,9 @@ def main():
     if "--consumer" in args:
         index = args.index("--consumer")
         if index + 1 >= len(args):
-            sys.stderr.write("--consumer needs a value: runtime, seed, observability, or all\n")
+            sys.stderr.write(
+                "--consumer needs a value: runtime, seed, observability, pipeline, or all\n"
+            )
             return 2
         consumer = args[index + 1]
 
@@ -111,19 +209,24 @@ def main():
             continue
         if consumer != "all" and entry.get("consumer", "runtime") != consumer:
             continue
-        sys.stdout.write(
-            "\t".join(
-                [
-                    entry["path"],
-                    entry.get("env_var", ""),
-                    entry.get("type", "SecureString"),
-                    ",".join(entry["required_list"]),
-                    entry.get("namespace", "backend"),
-                    entry.get("consumer", "runtime"),
-                ]
-            )
-            + "\n"
-        )
+        # Column order is a contract: render-env.sh and pull.sh read these
+        # positionally. New fields are appended behind --field, never inserted.
+        columns = [
+            entry["path"],
+            # "-" rather than "": bash treats tab as IFS *whitespace*, so a run
+            # of tabs collapses into one delimiter and an empty field shifts
+            # every column after it. `read -r path env_var type required` then
+            # silently puts the type in `env_var`. A placeholder keeps the
+            # positions a contract, which is what every caller assumes.
+            entry.get("env_var", "") or "-",
+            entry.get("type", "SecureString"),
+            ",".join(entry["required_list"]),
+            entry.get("namespace", "backend"),
+            entry.get("consumer", "runtime"),
+        ]
+        if extra_field:
+            columns.append(entry.get(extra_field, ""))
+        sys.stdout.write("\t".join(columns) + "\n")
     return 0
 
 

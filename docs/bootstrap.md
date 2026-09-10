@@ -160,6 +160,63 @@ Then enable, and treat as part of the security model rather than as process hygi
 branch protection on `master` and `develop`, CODEOWNER review on `.github/workflows/**`, and the
 `production` GitHub Environment with required reviewers.
 
+## Credential readiness, per environment
+
+Before bootstrapping an environment — and again before enabling a feature in one — ask the
+manifest what is missing rather than reading workflows to find out.
+
+```bash
+export AWS_PROFILE=gogo-bootstrap
+
+./scripts/secrets/validate.sh dev     --strict                    # what runs today
+./scripts/secrets/validate.sh staging --strict --include-planned  # what it is meant to run
+./scripts/secrets/validate.sh prod    --strict --include-planned
+```
+
+`--strict` is the readiness mode: it covers every declared namespace including `ci`, fails when
+a namespace cannot be read rather than skipping it quietly, and fails when a feature is switched
+on without its prerequisites. Run it from a developer SSO session — the deploy role can only see
+`<env>/backend/*` and would report the rest SKIPPED, which in strict mode is a failure by design.
+
+The output names each gap by path. Provision each one with the value on stdin:
+
+```bash
+./scripts/secrets/put.sh <env> <path>
+```
+
+`config/secrets.manifest.yml` is the source of truth for what each path is: which provider
+issues it, which job or process reads it, the minimum permission and resource scope it needs,
+which other parameter it must be paired with, and where an operator creates it. Read the row
+before creating the credential — several are deliberately narrower than the obvious choice, and
+the manifest says why.
+
+### A new environment, in order
+
+1. `validate.sh <env> --strict --include-planned` — expect it to fail, and read the output.
+   That list is the work: it names every credential the environment's Terraform, CMS deploy,
+   VPS deploy and public-upload capabilities need, resolved from the manifest rather than from
+   anyone re-reading the workflows.
+2. Create each credential at its provider, scoped as the manifest's `scope:` field states.
+   Narrower than it looks is usually correct: the CMS deploy token needs Workers only, the
+   Terraform state credentials need one bucket, and the private and public R2 credentials must
+   not be the same token.
+3. `put.sh <env> <path>` for each, value on stdin.
+4. `validate.sh <env> --strict --include-planned` again until it prints `METADATA READY`.
+5. As each capability comes into service, move the environment from `planned:` to `enabled:` in
+   the `capabilities:` block. Nothing in `parameters:` changes — no `required:` list needs
+   editing, which is the step this design exists to remove.
+6. Confirm the credentials can do what they were scoped for — validation checked names and
+   types, not permissions:
+
+   ```bash
+   ./scripts/ops/check-cf-token-scopes.sh <env>
+   ./scripts/ops/check-provider-keys.sh <env>
+   ```
+
+Step 6 is not optional and not covered by step 4. A token stored at the right path with the
+right SSM type can still hold account-wide administration, and nothing in the metadata check
+would notice.
+
 ## A limitation worth knowing
 
 A pull request's OIDC subject is `repo:<owner>/<repo>:pull_request` and does **not** encode the

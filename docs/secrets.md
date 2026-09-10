@@ -18,22 +18,36 @@ caller that predates the field keeps exactly the scope it was written with.
 
 ```
 /gogo/ci/<env>/terraform/read/    read-only  — assumable from a pull request
-├── cloudflare-token
-├── r2-state-access-key-id
+├── cloudflare-token              account read: R2, Workers, DNS, Access
+├── r2-state-access-key-id        S3 key pair, state bucket only
 └── r2-state-secret-access-key
 
 /gogo/ci/<env>/terraform/write/   read-write — environment approval required
-├── cloudflare-token
-├── r2-state-access-key-id
+├── cloudflare-token              account edit; the only credential that administers buckets
+├── r2-state-access-key-id        S3 key pair, state bucket read+write
 └── r2-state-secret-access-key
 
-/gogo/ci/<env>/deploy/
-└── ssh-private-key               the host key is pinned in config/known_hosts.<env>
+/gogo/ci/<env>/cms-deploy/
+├── cloudflare-token              Workers Scripts:Edit on gogo-cms-dev — no R2
+└── github-read-token             Contents:Read on GoGo-CMS, for the checkout
 
-/gogo/ci/<env>/sentry/
-├── auth-token                    backend release upload
-└── mobile-auth-token             mobile source-map upload, separate on purpose
+/gogo/ci/<env>/deploy/
+├── ssh-private-key               the host key is pinned in config/known_hosts.<env>
+├── access-client-id              Cloudflare Access service token, id half
+└── access-client-secret          …and its secret half
 ```
+
+Every one of those is declared in `config/secrets.manifest.yml` under `namespace: ci`,
+`consumer: pipeline`, with the consumer that reads it, the minimum permission it needs and
+where an operator creates it. They were undeclared until INF-171, which meant eleven
+credentials existed that no validation checked, no rotation covered, and whose purpose could
+only be recovered by reading every workflow. Declaring them is what makes
+`validate.sh --strict` able to say an environment is ready.
+
+A `ci` row is never rendered into a runtime or build environment. `render-env.sh` asks for
+`--namespace backend --consumer runtime` and `mobile-env.py` for `--namespace mobile`; neither
+can be handed a pipeline credential, and `scripts/lib/manifest.test.sh` pins that. A token that
+can deploy the API has no business in the API's own process environment.
 
 Two dimensions, both required:
 
@@ -107,6 +121,124 @@ internet-exposed service here for the benefit of a machine that is not even the 
 rendered by `observability/local-grafana/bin/render-alerting-env.sh`. See
 [`adr/0009`](adr/0009-grafana-alerting-for-administrative-data.md) and
 [`runbook-administrative-alerts.md`](runbook-administrative-alerts.md).
+
+## Validating an environment
+
+Two commands, two different questions.
+
+```bash
+export AWS_PROFILE=gogo-bootstrap        # the scripts read this, they take no --profile
+
+./scripts/secrets/validate.sh dev              # names and types, best effort
+./scripts/secrets/validate.sh dev --strict     # environment readiness
+```
+
+`validate.sh <env>` is the deploy-time check. A namespace this identity cannot list is
+reported SKIPPED and the run can still pass — that is deliberate, because `deploy-dev.yml`
+runs it under the deploy role, which holds `<env>/backend/*` only and has no business reading
+a mobile build key or a pipeline token.
+
+`validate.sh <env> --strict` is the readiness check, and it is the one to run before
+bootstrapping or enabling a feature. It differs in three ways:
+
+- a SKIPPED namespace **fails**. "I could not look" and "it is fine" produce the same output
+  otherwise, and a readiness check that can pass by not looking is the failure it exists to
+  prevent. Run it from a developer SSO session, not the deploy role.
+- it checks **capability prerequisites** — the feature and pipeline credential groups where a
+  missing member leaves the API booting happily with the capability silently off, or a workflow
+  failing the first time somebody runs it.
+- it says `METADATA READY` rather than `OK`, and states what that does and does not cover. The
+  wording is deliberate: readiness here is about names and types, never permissions.
+
+Per environment:
+
+```bash
+./scripts/secrets/validate.sh dev     --strict                     # what runs today
+./scripts/secrets/validate.sh staging --strict --include-planned   # what it is meant to run
+./scripts/secrets/validate.sh prod    --strict --include-planned
+```
+
+Each prints exactly what is missing, by path. Provision with `put.sh` (value on stdin, never
+an argument):
+
+```bash
+./scripts/secrets/put.sh <env> <path>     # e.g. put.sh staging r2/public-access-key-id
+```
+
+### What validation proves, and what it does not
+
+It proves a parameter **exists** at the declared path with the declared **SSM type**. That is
+metadata, and it is the whole of what it is safe to check without reading values.
+
+It does **not** prove the value is correct, current, or that the credential behind it can do
+what the manifest's `scope:` says. A Cloudflare token with no R2 permission and one with
+account-wide bucket admin are the same `SecureString` from here. Never report a scope as
+verified because it is written in the manifest — that is exactly the mistake the INF-171 audit
+was needed to unwind.
+
+Provider-side permission is a separate step, deliberately not folded in, because it spends real
+API calls and needs credentials the validator never reads:
+
+```bash
+./scripts/ops/check-cf-token-scopes.sh <env>   # what the Cloudflare CI tokens can actually do
+./scripts/ops/check-provider-keys.sh <env>     # what the Google keys are restricted to
+```
+
+### Capabilities: what an environment is meant to run
+
+A capability is a group of credentials that only works if all of them are present, plus the
+environments it runs in. Two kinds, one shape: a **feature** is something the application does
+when its credentials exist; a **pipeline** is a CI workflow that can run when its credentials
+exist.
+
+```bash
+python3 scripts/lib/manifest.py <env> --capabilities                    # running today
+python3 scripts/lib/manifest.py <env> --capabilities --include-planned  # …and intended
+python3 scripts/lib/manifest.py <env> --capability-requires --include-planned
+```
+
+`enabled:` is where it runs today. `planned:` is where it is intended to run and has not been
+provisioned. `--strict` enforces `enabled`; `--strict --include-planned` enforces both.
+
+This is what removes the memory step. Bringing up a new environment is one command whose output
+is the list of credentials to create — no row in `parameters:` needs editing, and nobody has to
+recall which `required:` lists to touch. The CI rows deliberately carry `required: []`: they are
+not startup requirements, and what enforces them is the pipeline that names them.
+
+An environment that appears in no capability cannot be reported ready. Omitting the profile is
+not a way to pass — that is the same failure as a namespace nobody could read.
+
+### Bringing up staging or production
+
+```bash
+export AWS_PROFILE=gogo-bootstrap
+
+./scripts/secrets/validate.sh staging --strict --include-planned
+```
+
+Expect it to fail, and read the output — that list is the work. It covers, by name:
+
+- **Terraform** — `ci:terraform/{read,write}/cloudflare-token` and the matching
+  `r2-state-*` S3 key pairs. Read and write are separate credentials because plan runs on pull
+  requests and apply does not.
+- **CMS deployment** — `ci:cms-deploy/cloudflare-token` (Workers Scripts:Edit on that
+  environment's script, no R2) and `ci:cms-deploy/github-read-token` (Contents:Read on
+  GoGo-CMS).
+- **VPS deployment** — `ci:deploy/ssh-private-key` plus the Access service token pair.
+- **Public image uploads** — `backend:r2/public-bucket`, the public credential pair, and
+  `backend:media/public-base-url`. All four or the capability is off: the API boots, reports it
+  unavailable, and every catalogue image resolves to a URL that 404s.
+- **Avatar cache purge** and **share-link edge** — their own two-credential groups.
+
+Then, for each path:
+
+```bash
+./scripts/secrets/put.sh staging <path>      # value on stdin, never an argument
+```
+
+Re-run until it prints `METADATA READY`. Read the row in `config/secrets.manifest.yml` before
+creating each credential — several are deliberately narrower than the obvious choice, and the
+`scope:` field says why.
 
 ## Generated values
 

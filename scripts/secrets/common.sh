@@ -56,11 +56,19 @@ require_aws() {
 # ssm_prefix <env> [namespace]
 #
 # Namespace defaults to `backend`, so every caller written before namespaces
-# existed keeps the exact scope it had. `ci` has no namespace: it is a separate
-# top-level tree for pipeline credentials, not an environment.
+# existed keeps the exact scope it had.
+#
+# `ci` appears on both sides of this and means the same tree either way:
+#   ssm_prefix ci            -> /gogo/ci          (the whole pipeline tree)
+#   ssm_prefix dev ci        -> /gogo/ci/dev      (one environment's slice)
+# The second form is what the `ci` namespace in the manifest resolves to. The
+# tree is /gogo/ci/<env>/… rather than /gogo/<env>/ci/… because the IAM policies
+# and the plan/apply role split are written against that prefix (INF-171).
 ssm_prefix() {
   if [[ "$1" == "ci" ]]; then
     printf '/gogo/ci'
+  elif [[ "${2:-backend}" == "ci" ]]; then
+    printf '/gogo/ci/%s' "$1"
   else
     printf '/gogo/%s/%s' "$1" "${2:-backend}"
   fi

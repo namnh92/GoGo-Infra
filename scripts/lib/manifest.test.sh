@@ -28,7 +28,69 @@ READER="${DIR}/manifest.py"
 failures=0
 
 ok() { printf '  ok    %s\n' "$1"; }
-bad() { printf '  FAIL  %s\n        %s\n' "$1" "$2"; failures=$((failures + 1)); }
+bad() { 
+# --- the ci namespace never reaches a runtime environment -------------------
+#
+# INF-171. A pipeline credential in the API's process environment would hand an
+# internet-facing process the ability to deploy itself, and a mobile build key
+# in there is the blast radius namespaces exist to bound. render-env.sh asks for
+# `--namespace backend --consumer runtime` and mobile-env.py for
+# `--namespace mobile`; this pins that neither can be handed a ci row.
+render_rows="$(python3 "$READER" dev --namespace backend --consumer runtime | cut -f1)"
+ci_rows="$(python3 "$READER" dev --namespace ci --consumer all | cut -f1)"
+
+leaked=""
+while read -r ci_path; do
+  [[ -n "$ci_path" ]] || continue
+  grep -qxF "$ci_path" <<< "$render_rows" && leaked+="  ${ci_path}"$'\n'
+done <<< "$ci_rows"
+
+if [[ -z "$leaked" ]]; then
+  ok "no ci row reaches the backend/runtime rendering set"
+else
+  bad "a ci credential would be rendered into the API environment" "$leaked"
+fi
+
+if [[ -n "$ci_rows" ]]; then
+  ok "the ci namespace is non-empty ($(echo "$ci_rows" | grep -c .) row(s))"
+else
+  bad "the ci namespace is empty" "eleven pipeline credentials should be declared"
+fi
+
+# The default output must stay backend-only now that a third namespace exists.
+ci_in_default="$(python3 "$READER" dev | awk -F'\t' '$5 == "ci" { print $1 }')"
+if [[ -z "$ci_in_default" ]]; then
+  ok "default output still excludes ci"
+else
+  bad "ci rows appeared in the default output" "$ci_in_default"
+fi
+
+# Mobile rendering must not pick them up either.
+mobile_rows="$(python3 "$READER" dev --namespace mobile --consumer all | cut -f1)"
+overlap=""
+while read -r ci_path; do
+  [[ -n "$ci_path" ]] || continue
+  grep -qxF "$ci_path" <<< "$mobile_rows" && overlap+="  ${ci_path}"$'\n'
+done <<< "$ci_rows"
+if [[ -z "$overlap" ]]; then
+  ok "no ci row reaches the mobile build set"
+else
+  bad "a ci credential would be baked into a mobile binary" "$overlap"
+fi
+
+# --- every column is populated, so positional readers cannot shift ----------
+#
+# Tab is IFS whitespace in bash, so an empty field collapses and `read -r path
+# env_var type` silently puts the type in env_var. The reader emits "-" for an
+# absent env_var to keep positions fixed; this is the guard for that.
+short="$(python3 "$READER" dev --namespace all --consumer all | awk -F'\t' 'NF != 6 { print NR": "NF" fields" }')"
+if [[ -z "$short" ]]; then
+  ok "every row emits all six columns"
+else
+  bad "a row emitted the wrong number of columns" "$short"
+fi
+
+printf '  FAIL  %s\n        %s\n' "$1" "$2"; failures=$((failures + 1)); }
 
 # --- the default namespace is backend, and only backend --------------------
 strays="$(python3 "$READER" dev | awk -F'\t' '$5 != "backend" { print $1 " (" $5 ")" }')"
@@ -67,8 +129,8 @@ fi
 # --- every row declares a namespace the tooling knows ----------------------
 # A typo'd namespace is invisible: the row simply stops appearing anywhere, and
 # a parameter nobody renders and nobody validates is a parameter nobody rotates.
-unknown_ns="$(python3 "$READER" dev --namespace all \
-  | awk -F'\t' '$5 != "backend" && $5 != "mobile" { print $1 " (" $5 ")" }')"
+unknown_ns="$(python3 "$READER" dev --namespace all --consumer all \
+  | awk -F'\t' '$5 != "backend" && $5 != "mobile" && $5 != "ci" { print $1 " (" $5 ")" }')"
 if [[ -z "$unknown_ns" ]]; then
   ok "every row declares a known namespace"
 else
@@ -190,19 +252,20 @@ fi
 count_runtime=$(python3 "$READER" dev --namespace all | wc -l | tr -d ' ')
 count_seed=$(python3 "$READER" dev --namespace all --consumer seed | wc -l | tr -d ' ')
 count_obs=$(python3 "$READER" dev --namespace all --consumer observability | wc -l | tr -d ' ')
+count_pipeline=$(python3 "$READER" dev --namespace all --consumer pipeline | wc -l | tr -d ' ')
 count_consumer_all=$(python3 "$READER" dev --namespace all --consumer all | wc -l | tr -d ' ')
-if [[ "$count_consumer_all" -eq $(( count_runtime + count_seed + count_obs )) ]]; then
-  ok "--consumer all is exactly runtime + seed + observability (${count_consumer_all})"
+if [[ "$count_consumer_all" -eq $(( count_runtime + count_seed + count_obs + count_pipeline )) ]]; then
+  ok "--consumer all is exactly runtime + seed + observability + pipeline (${count_consumer_all})"
 else
   bad "--consumer all is not the union" \
-      "all=${count_consumer_all}, runtime=${count_runtime}, seed=${count_seed}, observability=${count_obs} — a consumer exists that no test covers"
+      "all=${count_consumer_all}, runtime=${count_runtime}, seed=${count_seed}, observability=${count_obs}, pipeline=${count_pipeline} — a consumer exists that no test covers"
 fi
 
 # A typo'd consumer has the same failure mode as a typo'd namespace: the row
 # stops appearing anywhere, and a parameter nobody renders and nobody validates
 # is a parameter nobody rotates.
 unknown_consumer="$(python3 "$READER" dev --namespace all --consumer all \
-  | awk -F'\t' '$6 != "runtime" && $6 != "seed" && $6 != "observability" { print $1 " (" $6 ")" }')"
+  | awk -F'\t' '$6 != "runtime" && $6 != "seed" && $6 != "observability" && $6 != "pipeline" { print $1 " (" $6 ")" }')"
 if [[ -z "$unknown_consumer" ]]; then
   ok "every row declares a known consumer"
 else

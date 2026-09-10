@@ -48,6 +48,7 @@ apply: ## terraform apply for $(ENV) — prefer the CI workflow for prod
 test: ## Run the shell unit tests
 	./scripts/lib/config.test.sh
 	./scripts/lib/manifest.test.sh
+	./scripts/secrets/validate.test.sh
 	./scripts/ci/check-workflow-auth.test.sh
 	./scripts/ci/check-workflow-triggers.test.sh
 	./scripts/ci/gitleaks-rules.test.sh

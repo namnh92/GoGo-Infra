@@ -2,11 +2,43 @@
 #
 # Diff SSM against secrets.manifest.yaml.
 #
-#   ./scripts/secrets/validate.sh dev
+#   ./scripts/secrets/validate.sh dev              names and types, best effort
+#   ./scripts/secrets/validate.sh dev --strict     readiness for what runs today
+#   ./scripts/secrets/validate.sh staging --strict --include-planned
+#                                                  readiness for what it is
+#                                                  intended to run — use this
+#                                                  before provisioning
 #
 # Reports parameters that are required but absent, and parameters present in SSM
 # that no longer appear in the manifest (drift is how stale credentials survive).
-# Values are never read or printed.
+# Values are never read or printed, and no value is ever passed as an argument.
+#
+# WHAT THIS PROVES, AND WHAT IT DOES NOT
+#
+# It proves a parameter exists at the declared path with the declared SSM type.
+# That is metadata. It does not prove the value is correct, current, or that the
+# credential behind it can do what `scope:` says — a Cloudflare token with no R2
+# permission and one with account-wide bucket admin are the same SecureString
+# from here. Provider-side permission is a separate question with separate
+# tools:
+#
+#   scripts/ops/check-cf-token-scopes.sh <env>   what the Cloudflare CI tokens can do
+#   scripts/ops/check-provider-keys.sh <env>     what the Google keys are restricted to
+#
+# Those spend real API calls and need credentials this script deliberately never
+# reads, which is why they are not folded in here. Never report a scope as
+# verified because it is written in the manifest.
+#
+# THE TWO MODES
+#
+# Default is best effort: a namespace this identity cannot list is SKIPPED and
+# the run can still succeed. That is what `deploy-dev.yml` needs — the deploy
+# role holds `<env>/backend/*` only, by design.
+#
+# `--strict` is environment readiness: a SKIPPED namespace is a failure, because
+# "I could not look" and "it is fine" are the same output otherwise, and the
+# whole point of a readiness check is that it cannot pass by not looking. Strict
+# also enforces feature prerequisites.
 #
 # Every namespace the manifest declares is checked, not just `backend`. A
 # namespace this caller cannot list is reported as SKIPPED rather than passed
@@ -19,11 +51,31 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 ENVIRONMENT="${1:-}"
 require_env_arg "$ENVIRONMENT"
+
+STRICT=no
+INCLUDE_PLANNED=no
+for arg in "${@:2}"; do
+  case "$arg" in
+    --strict) STRICT=yes ;;
+    --include-planned) INCLUDE_PLANNED=yes ;;
+    *) die "unknown option: ${arg}   (usage: validate.sh <env> [--strict] [--include-planned])" ;;
+  esac
+done
+
+if [[ "$INCLUDE_PLANNED" == "yes" && "$STRICT" != "yes" ]]; then
+  die "--include-planned only means something with --strict"
+fi
+
+PLANNED_FLAG=()
+[[ "$INCLUDE_PLANNED" == "yes" ]] && PLANNED_FLAG=(--include-planned)
+
 require_aws
 
 status=0
 declared_total=0
 skipped=()
+present_paths=""
+read_namespaces=()
 
 for namespace in $(manifest_namespaces "$ENVIRONMENT"); do
   prefix="$(ssm_prefix "$ENVIRONMENT" "$namespace")"
@@ -46,6 +98,12 @@ for namespace in $(manifest_namespaces "$ENVIRONMENT"); do
   fi
 
   actual="$(echo "$listing" | tr '\t' '\n' | sed "s|^${prefix}/||" | sort)"
+  # Namespace-qualified: two trees can hold the same suffix, and a capability
+  # names which one it means.
+  while read -r seen; do
+    [[ -n "$seen" ]] && present_paths+="${namespace}:${seen}"$'\n'
+  done <<< "$actual"
+  read_namespaces+=("$namespace")
 
   missing="$(comm -23 <(echo "$expected_required") <(echo "$actual"))"
   unknown="$(comm -13 <(echo "$expected_all") <(echo "$actual"))"
@@ -87,15 +145,97 @@ for namespace in $(manifest_namespaces "$ENVIRONMENT"); do
   fi
 done
 
+# Capability prerequisites.
+#
+# A capability is only checked where the environment declares it — `enabled` for
+# what runs today, plus `planned` when asked. That is what removes the memory
+# step: bringing up staging is one command whose output is the list of
+# credentials to create, not a diff against someone's recollection of which
+# `required:` lists to edit.
+#
+# Only meaningful in strict mode. Outside it a namespace may have been skipped,
+# and reporting a credential missing because nobody could look is worse than not
+# reporting it.
+if [[ "$STRICT" == "yes" ]]; then
+  # An environment no capability mentions has no declared shape, so nothing here
+  # can call it ready.
+  if ! python3 "$MANIFEST_READER" "$ENVIRONMENT" --declares; then
+    echo "NO CAPABILITY PROFILE for ${ENVIRONMENT}:"
+    echo "  No capability in config/secrets.manifest.yml lists ${ENVIRONMENT} under enabled: or"
+    echo "  planned:, so there is nothing to be ready for. Declare what this environment is"
+    echo "  meant to run before asking whether it can run it — a readiness check that passes"
+    echo "  because the requirements were omitted is the failure it exists to prevent."
+    status=1
+  fi
+
+  cap_gaps=""
+  while IFS=$'\t' read -r capability namespace path; do
+    [[ -n "$capability" ]] || continue
+    # A requirement in a namespace this identity could not read is unresolved,
+    # not satisfied. The SKIPPED block below is what fails the run; naming it
+    # here as well would report the same gap twice.
+    if [[ " ${read_namespaces[*]-} " != *" ${namespace} "* ]]; then
+      continue
+    fi
+    if ! grep -qxF "${namespace}:${path}" <<< "$present_paths"; then
+      cap_gaps+="  - ${capability} needs ${namespace}:${path}"$'\n'
+    fi
+  done < <(python3 "$MANIFEST_READER" "$ENVIRONMENT" --capability-requires "${PLANNED_FLAG[@]-}")
+
+  if [[ -n "$cap_gaps" ]]; then
+    echo "CAPABILITY PREREQUISITES MISSING in ${ENVIRONMENT}:"
+    printf '%s' "$cap_gaps"
+    echo "  These are not startup requirements — the API boots without them and reports the"
+    echo "  capability unavailable, and a pipeline without its credentials simply fails when"
+    echo "  someone runs it. Provision each with:"
+    echo "      ./scripts/secrets/put.sh ${ENVIRONMENT} <path>"
+    echo "  or take ${ENVIRONMENT} out of that capability's enabled:/planned: list."
+    status=1
+  fi
+fi
+
 if [[ "${#skipped[@]}" -gt 0 ]]; then
   echo "SKIPPED (namespace not readable by this identity):"
   printf '  - %s\n' "${skipped[@]}"
-  echo "  Not a failure. The deploy role holds <env>/backend/* only, by design — it has no"
-  echo "  business reading a mobile build key. Run this from a developer session to cover them."
+  if [[ "$STRICT" == "yes" ]]; then
+    echo "  In --strict mode this is a failure. A readiness check that passes because it could"
+    echo "  not look is the failure it exists to prevent. Re-run with an identity that can read"
+    echo "  every namespace — a developer SSO session, not the deploy role."
+    status=1
+  else
+    echo "  Not a failure here. The deploy role holds <env>/backend/* only, by design — it has"
+    echo "  no business reading a mobile build key or a pipeline token. Run --strict from a"
+    echo "  developer session to cover them."
+  fi
 fi
 
 if [[ "$status" -eq 0 ]]; then
-  echo "OK: ${ENVIRONMENT} matches secrets.manifest.yaml (${declared_total} declared across $(manifest_namespaces "$ENVIRONMENT" | wc -l | tr -d ' ') namespace(s), names and types)."
+  namespaces="$(manifest_namespaces "$ENVIRONMENT" | wc -l | tr -d ' ')"
+  if [[ "$STRICT" == "yes" ]]; then
+    caps="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --capabilities "${PLANNED_FLAG[@]-}")"
+    cap_count="$(echo "$caps" | grep -c . || true)"
+    planned_count="$(echo "$caps" | awk -F'\t' '$3 == "planned"' | grep -c . || true)"
+    scope_label="running today"
+    [[ "$INCLUDE_PLANNED" == "yes" ]] && scope_label="running today and planned"
+
+    echo "METADATA READY: ${ENVIRONMENT}"
+    echo "  ${declared_total} parameter(s) across ${namespaces} namespace(s) exist with the declared SSM type."
+    planned_note=""
+    [[ "$planned_count" -gt 0 ]] && planned_note=" — ${planned_count} of them planned, not yet in service"
+    echo "  ${cap_count} capability/capabilities (${scope_label}) have every credential they name${planned_note}."
+    echo
+    echo "  This is metadata only. It proves a value is stored at the declared path with the"
+    echo "  declared type — not that the value is correct, current, or that the credential"
+    echo "  behind it holds the permissions the manifest's scope: field describes. A token"
+    echo "  with no access and one with account-wide administration are the same SecureString"
+    echo "  from here."
+    echo
+    echo "  Provider permissions are a separate check and are NOT covered by the line above:"
+    echo "      ./scripts/ops/check-cf-token-scopes.sh ${ENVIRONMENT}"
+    echo "      ./scripts/ops/check-provider-keys.sh ${ENVIRONMENT}"
+  else
+    echo "OK: ${ENVIRONMENT} matches secrets.manifest.yaml (${declared_total} declared across ${namespaces} namespace(s), names and types)."
+  fi
 fi
 
 exit "$status"
