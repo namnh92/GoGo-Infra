@@ -1,15 +1,22 @@
 /**
  * Share-link edge worker.
  *
- * Two jobs on one host:
+ * Every path it answers on its host:
  *
  *   /.well-known/apple-app-site-association   app association files
  *   /.well-known/assetlinks.json
  *   /l/{slug}                                 canonical share link
+ *   /r/{inviteCode}                           room invite the app shares directly
+ *   /                                         the bare host
  *
  * The association files come first, deliberately. If the redirect route ever
  * swallowed /.well-known/*, universal links would stop verifying with no error
  * anywhere — Apple and Google simply stop trusting the domain.
+ *
+ * Each of these is a named route in terraform/modules/cloudflare-worker. A path
+ * with no route never reaches this code: it goes to the DNS record's placeholder
+ * origin and Cloudflare answers 522 after ~20 s — which is what /r/* and / did
+ * until GoGo-Infra#174.
  */
 
 const WELL_KNOWN = {
@@ -32,6 +39,15 @@ const TTL = {
 }
 
 const SLUG = /^\/l\/([A-Za-z0-9_-]{6,64})$/
+
+/**
+ * A room invite as the app shares it: https://<host>/r/<inviteCode>.
+ *
+ * GoGo-BE mints invite codes as base64url (128 bits, 22 characters; the room
+ * share code is 12) and accepts 10–128 characters on join. Same alphabet and
+ * bounds here, so a malformed path is a 404 that never reaches the API.
+ */
+const INVITE = /^\/r\/[A-Za-z0-9_-]{10,128}$/
 
 function json(body, status, extraHeaders = {}) {
   return new Response(body, {
@@ -160,6 +176,49 @@ function fallback(canonical, env) {
   )
 }
 
+/**
+ * The page behind /r/{inviteCode} when the app did not take the link.
+ *
+ * Reaching this at all means no installed app claimed the URL (a universal or
+ * app link opens the app before any HTTP happens). Three things it deliberately
+ * does not do:
+ *
+ *   - ask the API whether the invite is valid. There is no public invite lookup,
+ *     and the only endpoints that take a code (POST /rooms/join, /join/guest)
+ *     *consume* it. A lookup would also be an enumeration oracle. The app checks
+ *     the invite when it opens and says so if it expired or was revoked — so
+ *     this page claims nothing about validity, and names no room.
+ *   - redirect to FALLBACK_URL. The /l/ path appends the canonical link to that
+ *     URL; here the canonical link *is* the invite code, and a credential sent to
+ *     another origin's query string is a credential in someone else's logs.
+ *   - get cached, or leak the URL onward: no-store, no Referer, not indexed.
+ *
+ * It depends on nothing upstream, so an API outage cannot turn it into an error.
+ */
+function inviteLanding() {
+  return new Response(
+    'Lời mời vào kèo GoGo. Mở liên kết này trên điện thoại đã cài ứng dụng GoGo để tham gia — ứng dụng sẽ kiểm tra lời mời khi mở.\n' +
+      'GoGo room invite. Open this link on a phone with the GoGo app installed to join — the app checks the invite when it opens.\n',
+    {
+      status: 200,
+      headers: {
+        'content-type': 'text/plain; charset=utf-8',
+        'cache-control': 'no-store',
+        'referrer-policy': 'no-referrer',
+        'x-robots-tag': 'noindex',
+      },
+    },
+  )
+}
+
+/** The bare host: a deliberate, static answer — not a website, not an origin. */
+function home() {
+  return new Response('GoGo. Mở ứng dụng GoGo để tiếp tục.\nGoGo. Open the GoGo app to continue.\n', {
+    status: 200,
+    headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'public, max-age=300' },
+  })
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url)
@@ -176,6 +235,9 @@ export default {
     if (request.method !== 'GET' && request.method !== 'HEAD') {
       return json(JSON.stringify({ error: 'method_not_allowed' }), 405)
     }
+
+    if (url.pathname === '/') return home()
+    if (INVITE.test(url.pathname)) return inviteLanding()
 
     const match = url.pathname.match(SLUG)
     if (!match) return notFound('no such link')
