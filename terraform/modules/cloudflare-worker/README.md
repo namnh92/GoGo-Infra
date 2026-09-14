@@ -2,6 +2,17 @@
 
 The share-link edge. Implements INF-012.
 
+## Status of invite links (owner decision, 2026-09-14)
+
+The `/r/*` and `/` routes are an **interim DEV fix** for the 522 in GoGo-Infra#174. They are not
+acceptance of the complete sharing and deep-link flow. Two known gaps remain, both described
+below:
+
+- The invite page does **not** validate the invite code. An expired, revoked or unknown code gets
+  the same page as a valid one when the app is not installed; only the app reports the real state.
+- The association files also claim `/plans/*`, `/places/*` and `/room/*`. Those paths are **not
+  routed** and still answer `522` after about 20 seconds.
+
 ## What it serves
 
 | Route | Purpose |
