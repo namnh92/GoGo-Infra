@@ -184,3 +184,111 @@ describe('forwarding the visitor address to the API (INF-070)', () => {
     assert.equal(withToken.headers.get('location'), without.headers.get('location'))
   })
 })
+
+describe('invite links and the bare host (GoGo-Infra#174)', () => {
+  // 22 characters of base64url: the shape GoGo-BE mints (randomBytes(16)).
+  const CODE = 'Qm9yZWQtaW52aXRlLWNvZGU'.slice(0, 22)
+  const INVITE_URL = `https://${HOST}/r/${CODE}`
+  let apiCalls = 0
+
+  beforeEach(() => {
+    apiCalls = 0
+    // Neither path may reach the API: an invite lookup would consume or leak the
+    // code, and the bare host has nothing to ask.
+    globalThis.fetch = async () => {
+      apiCalls += 1
+      throw new Error('the API must not be called for this path')
+    }
+  })
+  afterEach(() => {
+    globalThis.fetch = originalFetch
+  })
+
+  const get = (url, e = env(), init) => worker.fetch(new Request(url, init), e, {})
+
+  it('answers an invite link without the app, uncached, unindexed and without a referrer', async () => {
+    const res = await get(INVITE_URL)
+    assert.equal(res.status, 200)
+    assert.match(res.headers.get('content-type'), /^text\/plain/)
+    assert.equal(res.headers.get('cache-control'), 'no-store')
+    assert.equal(res.headers.get('referrer-policy'), 'no-referrer')
+    assert.equal(res.headers.get('x-robots-tag'), 'noindex')
+    assert.equal(res.headers.get('location'), null)
+    const text = await res.text()
+    assert.doesNotMatch(text, new RegExp(CODE), 'the page never repeats the code')
+    assert.doesNotMatch(text, /https?:\/\//, 'names no URL')
+    assert.equal(apiCalls, 0)
+  })
+
+  it('never forwards the invite code to an attribution or landing URL', async () => {
+    const res = await get(
+      INVITE_URL,
+      env({
+        FALLBACK_URL: 'https://gogo.id.vn/get-app',
+        TENJIN_TRACKING_TEMPLATE: 'https://track.tenjin.com/v0/click/Local',
+      }),
+    )
+    assert.equal(res.status, 200)
+    assert.equal(res.headers.get('location'), null)
+    assert.equal(apiCalls, 0)
+  })
+
+  it('keeps answering while the API is down — the page depends on nothing upstream', async () => {
+    const res = await get(INVITE_URL, env({ API_ORIGIN: '' }))
+    assert.equal(res.status, 200)
+    assert.equal(apiCalls, 0)
+  })
+
+  it('treats a malformed invite path as an unknown link', async () => {
+    for (const path of [
+      '/r/',
+      '/r/short',
+      `/r/${CODE}/extra`,
+      '/r/has space in it',
+      '/r/%3Cscript%3E',
+      `/r/${'a'.repeat(129)}`,
+    ]) {
+      const res = await get(`https://${HOST}${path}`)
+      assert.equal(res.status, 404, path)
+      assert.equal(res.headers.get('cache-control'), 'no-store', path)
+    }
+    assert.equal(apiCalls, 0)
+  })
+
+  it('accepts the shortest and longest codes GoGo-BE accepts on join', async () => {
+    for (const code of ['a'.repeat(10), 'b'.repeat(128), 'AbC-_dEf12']) {
+      const res = await get(`https://${HOST}/r/${code}`)
+      assert.equal(res.status, 200, code)
+    }
+  })
+
+  it('refuses anything but GET and HEAD on an invite link', async () => {
+    const post = await get(INVITE_URL, env(), { method: 'POST' })
+    assert.equal(post.status, 405)
+    const head = await get(INVITE_URL, env(), { method: 'HEAD' })
+    assert.equal(head.status, 200)
+  })
+
+  it('gives the bare host a deliberate static answer', async () => {
+    const res = await get(`https://${HOST}/`)
+    assert.equal(res.status, 200)
+    assert.match(res.headers.get('content-type'), /^text\/plain/)
+    assert.equal(res.headers.get('location'), null)
+    assert.doesNotMatch(await res.text(), /https?:\/\//)
+    assert.equal(apiCalls, 0)
+  })
+
+  it('leaves share links, association files and unknown paths exactly as they were', async () => {
+    globalThis.fetch = originalFetch
+    apiAnswering(404, { code: 'NOT_FOUND' })
+    const gone = await click(env())
+    assert.equal(gone.status, 404)
+    const aasa = await get(
+      `https://${HOST}/.well-known/apple-app-site-association`,
+      env({ AASA: '{"applinks":{}}' }),
+    )
+    assert.equal(aasa.status, 200)
+    const other = await get(`https://${HOST}/plans/anything`)
+    assert.equal(other.status, 404)
+  })
+})

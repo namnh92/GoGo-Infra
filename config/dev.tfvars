@@ -46,9 +46,12 @@ api_origin_provisioned = true
 #
 # 192.0.2.1 is TEST-NET-1 from RFC 5737, reserved for documentation and
 # guaranteed to route nowhere. With proxied = true the worker answers before
-# Cloudflare ever tries the origin, so the address is a placeholder that exists
-# only to make the record valid. A real address here would be a lie about where
-# the traffic goes, and one day someone would follow it.
+# Cloudflare ever tries the origin — but only on the paths the worker module
+# routes (/.well-known/*, /l/*, /r/*, /). Any other path *is* sent to this
+# address, and Cloudflare answers 522 after ~20 s; that was every invite link
+# until GoGo-Infra#174. The address is a placeholder that exists only to make the
+# record valid. A real address here would be a lie about where the traffic goes,
+# and one day someone would follow it.
 dns_records = {
   share = {
     name    = "go-dev.gogo.id.vn"

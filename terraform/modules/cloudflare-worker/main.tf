@@ -87,11 +87,15 @@ resource "cloudflare_workers_script" "share_link" {
   )
 }
 
-# Two routes, not one wildcard on the host.
+# Named routes, not one wildcard on the host.
 #
 # A single `<host>/*` route would work and would hide a mistake: it makes the
 # worker responsible for every path, so a bug in slug matching starts answering
 # for /.well-known/ too. Naming the paths keeps that impossible.
+#
+# The cost of naming them: a path with no route is sent to the DNS record's
+# placeholder origin (192.0.2.1) and Cloudflare answers 522 after ~20 s. Every
+# path the app issues or the association files claim needs a route here.
 resource "cloudflare_workers_route" "well_known" {
   zone_id = var.zone_id
   pattern = "${var.host}/.well-known/*"
@@ -101,5 +105,23 @@ resource "cloudflare_workers_route" "well_known" {
 resource "cloudflare_workers_route" "share_link" {
   zone_id = var.zone_id
   pattern = "${var.host}/l/*"
+  script  = cloudflare_workers_script.share_link.script_name
+}
+
+# GoGo-Infra#174. The app shares room invites as https://<host>/r/<code>, and the
+# association files claim /r/* — but only /.well-known/* and /l/* were routed, so
+# every invite opened without the app reached the placeholder origin and timed
+# out as 522.
+resource "cloudflare_workers_route" "invite" {
+  zone_id = var.zone_id
+  pattern = "${var.host}/r/*"
+  script  = cloudflare_workers_script.share_link.script_name
+}
+
+# The bare host. A pattern without a trailing wildcard matches that exact path,
+# so this is `/` alone; it does not widen the worker to the rest of the host.
+resource "cloudflare_workers_route" "root" {
+  zone_id = var.zone_id
+  pattern = "${var.host}/"
   script  = cloudflare_workers_script.share_link.script_name
 }

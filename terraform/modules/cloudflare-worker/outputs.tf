@@ -8,6 +8,8 @@ output "routes" {
   value = [
     cloudflare_workers_route.well_known.pattern,
     cloudflare_workers_route.share_link.pattern,
+    cloudflare_workers_route.invite.pattern,
+    cloudflare_workers_route.root.pattern,
   ]
 }
 
