@@ -97,6 +97,40 @@ fi
 #   "${var.host}/${each.value}/*"    with for_each = toset(["a", "b"])
 #   "${var.host}/.well-known/*"      association files
 #   "${var.host}/"                   bare host
+# Comments are removed first, string-aware: `#` and `//` to end of line and
+# `/* ... */` across lines, but never inside a quoted string — the patterns
+# themselves contain `/*`. Without this a commented-out block, or an old
+# assignment left inside a block comment, would read as live configuration.
+main_tf_code="$(awk '
+  {
+    # HCL strings never span lines (heredocs aside), so string state resets here.
+    out = ""; i = 1; n = length($0); instr = 0
+    while (i <= n) {
+      c = substr($0, i, 1); c2 = substr($0, i, 2)
+      if (inblock) {
+        if (c2 == "*/") { inblock = 0; i += 2 } else i++
+        continue
+      }
+      if (instr) {
+        out = out c
+        if (c == "\\") { out = out substr($0, i + 1, 1); i += 2; continue }
+        if (c == "\"") instr = 0
+        i++; continue
+      }
+      if (c == "\"") { instr = 1; out = out c; i++; continue }
+      if (c2 == "/*") { inblock = 1; i += 2; continue }
+      if (c == "#" || c2 == "//") break
+      out = out c; i++
+    }
+    print out
+  }
+  END { if (inblock) print "UNTERMINATED_BLOCK_COMMENT" }
+' "$MAIN_TF")"
+
+if grep -q '^UNTERMINATED_BLOCK_COMMENT$' <<<"$main_tf_code"; then
+  bad "main.tf parses" "unterminated /* comment in ${MAIN_TF#"${REPO_ROOT}/"}"
+fi
+
 route_report="$(awk '
   function flush(   r, n, i, items, v) {
     if (name == "") return
@@ -104,12 +138,15 @@ route_report="$(awk '
       print "BAD " name " bound to \"" script "\", not cloudflare_workers_script.share_link.script_name"
     } else if (pattern == "") {
       print "BAD " name " has no pattern"
-    } else if (pattern == "${var.host}/.well-known/*" || pattern == "${var.host}/") {
-      print "FIXED " name
+    } else if (pattern == "${var.host}/.well-known/*") {
+      print "WELLKNOWN " name
+    } else if (pattern == "${var.host}/") {
+      print "ROOT " name
     } else if (pattern == "${var.host}/${each.value}/*") {
       if (match(foreach, /^toset\(\[.*\]\)$/)) {
         r = substr(foreach, 8, length(foreach) - 9)
         n = split(r, items, ",")
+        if (n == 0) print "BAD " name " has an empty for_each set"
         for (i = 1; i <= n; i++) {
           v = items[i]; gsub(/[ \t]/, "", v)
           if (v ~ /^"[A-Za-z0-9_.-]+"$/) { gsub(/"/, "", v); print "EACH " name " " v }
@@ -142,7 +179,7 @@ route_report="$(awk '
       sub(/^[^=]*=[ \t]*/, "", line); sub(/[ \t]*$/, "", line); foreach = line
     }
   }
-' "$MAIN_TF")"
+' <<<"$main_tf_code")"
 
 route_bad="$(sed -nE 's/^BAD //p' <<<"$route_report")"
 if [[ -n "$route_bad" ]]; then
@@ -192,7 +229,9 @@ fi
 # Not a path list question, but the same file and the same failure mode: if a
 # route match ever swallowed /.well-known/*, universal links would stop
 # verifying with no error anywhere.
-if grep -qE 'pattern[[:space:]]*=[[:space:]]*"\$\{var\.host\}/\.well-known/\*"' "$MAIN_TF"; then
+# From the parsed, comment-free routes — a commented-out well_known block must
+# not count.
+if grep -q '^WELLKNOWN ' <<<"$route_report"; then
   ok "/.well-known/* is still routed to the Worker"
 else
   bad "/.well-known/* is still routed to the Worker" \

@@ -95,6 +95,21 @@ edit 's#(resource "cloudflare_workers_route" "invite" \{\n)#${1}  \# pattern = "
   "${root}/terraform/modules/cloudflare-worker/main.tf"
 expect fail "a commented-out pattern does not count as a route" "$root" "/events/*"
 
+# 7. Round 2 F-03: the whole well_known block commented out with `#`.
+root="$(fresh commented-well-known)"
+edit 's#(resource "cloudflare_workers_route" "well_known" \{.*?\n\}\n)#join("", map { "\# $_\n" } split(/\n/, $1))#se' \
+  "${root}/terraform/modules/cloudflare-worker/main.tf"
+expect fail "a commented-out well_known block does not count" "$root" \
+  "FAIL  /.well-known/* is still routed"
+
+# 8. Round 2 F-01 (sa): an empty for_each set with the old assignment left in a
+#    /* block comment */.
+root="$(fresh block-comment)"
+edit 's#for_each = toset\((\[[^\]]*\])\)#for_each = toset([])\n  /*\n  for_each = toset($1)\n  */#' \
+  "${root}/terraform/modules/cloudflare-worker/main.tf"
+expect fail "an assignment inside a /* block comment */ is not configuration" "$root" \
+  "empty for_each set"
+
 printf '\n'
 if [[ "$failures" -gt 0 ]]; then
   echo "${failures} failing case(s)" >&2
