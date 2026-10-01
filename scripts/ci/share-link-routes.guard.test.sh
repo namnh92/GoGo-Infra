@@ -110,6 +110,17 @@ edit 's#for_each = toset\((\[[^\]]*\])\)#for_each = toset([])\n  /*\n  for_each 
 expect fail "an assignment inside a /* block comment */ is not configuration" "$root" \
   "empty for_each set"
 
+# 9-10. Round 3 F-04: a fixed route disabled by a zero-instance meta-argument.
+root="$(fresh count-zero)"
+edit 's#(resource "cloudflare_workers_route" "well_known" \{\n)#${1}  count = 0\n#' \
+  "${root}/terraform/modules/cloudflare-worker/main.tf"
+expect fail "a well_known route with count = 0 does not count" "$root" "FAIL  /.well-known/* is still routed"
+
+root="$(fresh foreach-empty-fixed)"
+edit 's#(resource "cloudflare_workers_route" "well_known" \{\n)#${1}  for_each = toset([])\n#' \
+  "${root}/terraform/modules/cloudflare-worker/main.tf"
+expect fail "a well_known route with an empty for_each does not count" "$root" "FAIL  /.well-known/* is still routed"
+
 printf '\n'
 if [[ "$failures" -gt 0 ]]; then
   echo "${failures} failing case(s)" >&2

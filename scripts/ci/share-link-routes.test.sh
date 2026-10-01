@@ -138,6 +138,10 @@ route_report="$(awk '
       print "BAD " name " bound to \"" script "\", not cloudflare_workers_script.share_link.script_name"
     } else if (pattern == "") {
       print "BAD " name " has no pattern"
+    } else if (count != "") {
+      print "BAD " name " sets count = " count " — a route with count may create zero instances; unsupported"
+    } else if (foreach != "" && pattern != "${var.host}/${each.value}/*") {
+      print "BAD " name " has an unsupported pattern for a for_each route (want \"${var.host}/${each.value}/*\"): " pattern
     } else if (pattern == "${var.host}/.well-known/*") {
       print "WELLKNOWN " name
     } else if (pattern == "${var.host}/") {
@@ -164,7 +168,7 @@ route_report="$(awk '
     name = ""
   }
   /^resource "cloudflare_workers_route" "[^"]+"/ {
-    name = $3; gsub(/"/, "", name); pattern = ""; script = ""; foreach = ""; next
+    name = $3; gsub(/"/, "", name); pattern = ""; script = ""; foreach = ""; count = ""; next
   }
   name != "" && /^}/ { flush(); next }
   name != "" {
@@ -175,6 +179,8 @@ route_report="$(awk '
       sub(/^[^=]*=[ \t]*"/, "", line); sub(/"[ \t]*$/, "", line); pattern = line
     } else if (line ~ /^[ \t]*script[ \t]*=/) {
       sub(/^[^=]*=[ \t]*/, "", line); sub(/[ \t]*$/, "", line); script = line
+    } else if (line ~ /^[ \t]*count[ \t]*=/) {
+      sub(/^[^=]*=[ \t]*/, "", line); sub(/[ \t]*$/, "", line); count = line
     } else if (line ~ /^[ \t]*for_each[ \t]*=/) {
       sub(/^[^=]*=[ \t]*/, "", line); sub(/[ \t]*$/, "", line); foreach = line
     }
