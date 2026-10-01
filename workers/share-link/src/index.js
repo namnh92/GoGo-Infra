@@ -7,6 +7,7 @@
  *   /.well-known/assetlinks.json
  *   /l/{slug}                                 canonical share link
  *   /r/{inviteCode}                           room invite the app shares directly
+ *   /plans/*  /places/*  /room/*              paths the association files claim
  *   /                                         the bare host
  *
  * The association files come first, deliberately. If the redirect route ever
@@ -48,6 +49,32 @@ const SLUG = /^\/l\/([A-Za-z0-9_-]{6,64})$/
  * bounds here, so a malformed path is a 404 that never reaches the API.
  */
 const INVITE = /^\/r\/[A-Za-z0-9_-]{10,128}$/
+
+/**
+ * The three prefixes the association files claim beside /l/* and /r/*.
+ *
+ * GoGo-Infra#176. `scripts/deploy/render-well-known.sh:58` claims
+ * `/plans/*`, `/places/*` and `/room/*` because GoGo-MobileApp handles them,
+ * and nothing routed them — so opening one of these links without the app
+ * reached the DNS placeholder origin and sat for ~20 s before Cloudflare
+ * answered 522. Same failure as /r/* before GoGo-Infra#174.
+ *
+ * Only the first segment is matched. What follows is a resource id whose shape
+ * belongs to the app, not to the edge, and this page says nothing about it —
+ * guessing at the id format here would turn a working link into a 404 the day
+ * the app changes one.
+ */
+const APP_PATH = /^\/(plans|places|room)(?:\/|$)/
+
+/**
+ * What the visitor was sent, in their own words. Derived from the path segment
+ * only — never from a lookup, so there is nothing to be wrong about.
+ */
+const APP_PATH_NOUN = {
+  plans: ['Kế hoạch GoGo', 'A GoGo plan'],
+  places: ['Địa điểm GoGo', 'A GoGo place'],
+  room: ['Kèo GoGo', 'A GoGo room'],
+}
 
 function json(body, status, extraHeaders = {}) {
   return new Response(body, {
@@ -211,6 +238,53 @@ function inviteLanding() {
   )
 }
 
+/**
+ * The page behind /plans/*, /places/* and /room/* when the app did not take it.
+ *
+ * GoGo-Infra#176 AC 1 asked for one of three dispositions. Two of them are not
+ * available from this repository:
+ *
+ *   - *Redirect to /l/* needs a slug, and there is no way to turn `/plans/<id>`
+ *     into one: slugs are minted by GoGo-BE per share, and the edge has no
+ *     endpoint that maps a resource id to an existing link. It would have to
+ *     invent one.
+ *   - *Drop them from the association files* would stop the installed app from
+ *     claiming paths it handles today, which breaks the links that currently
+ *     work — the opposite of the bug.
+ *
+ * So: a static page, the same shape as the invite page, which turns a 20-second
+ * timeout into an immediate answer and claims nothing. It is a stopgap and is
+ * written to be replaced: when the web app serves these paths, this becomes a
+ * redirect there, and nothing else in the Worker has to move.
+ *
+ * It does not use FALLBACK_URL. That URL takes `?link=<canonical>`, and the
+ * canonical form of one of these paths is the path itself — so the redirect
+ * would hand a resource id to another origin's query string and logs for a page
+ * that, today, nobody has confirmed serves it. An honest page beats a redirect
+ * into a 404.
+ *
+ * `no-store` rather than a short cache, for the same reason as the stopgap
+ * note: a cached placeholder is a placeholder that outlives its replacement.
+ * `no-referrer` and `noindex` keep the resource id out of another origin's
+ * Referer header and out of a search index.
+ */
+function appPathLanding(kind) {
+  const [vi, en] = APP_PATH_NOUN[kind]
+  return new Response(
+    `${vi}. Mở liên kết này trên điện thoại đã cài ứng dụng GoGo để xem.\n` +
+      `${en}. Open this link on a phone with the GoGo app installed to view it.\n`,
+    {
+      status: 200,
+      headers: {
+        'content-type': 'text/plain; charset=utf-8',
+        'cache-control': 'no-store',
+        'referrer-policy': 'no-referrer',
+        'x-robots-tag': 'noindex',
+      },
+    },
+  )
+}
+
 /** The bare host: a deliberate, static answer — not a website, not an origin. */
 function home() {
   return new Response('GoGo. Mở ứng dụng GoGo để tiếp tục.\nGoGo. Open the GoGo app to continue.\n', {
@@ -238,6 +312,11 @@ export default {
 
     if (url.pathname === '/') return home()
     if (INVITE.test(url.pathname)) return inviteLanding()
+
+    // Before the slug match, like /r/*: these are their own paths, not
+    // malformed share links, and the API has nothing to resolve for them.
+    const appPath = url.pathname.match(APP_PATH)
+    if (appPath) return appPathLanding(appPath[1])
 
     const match = url.pathname.match(SLUG)
     if (!match) return notFound('no such link')

@@ -288,7 +288,150 @@ describe('invite links and the bare host (GoGo-Infra#174)', () => {
       env({ AASA: '{"applinks":{}}' }),
     )
     assert.equal(aasa.status, 200)
-    const other = await get(`https://${HOST}/plans/anything`)
+    // `/plans/anything` used to assert 404 here. It never reached the worker in
+    // production — the path had no route, so it hit the placeholder origin and
+    // timed out as 522 — and GoGo-Infra#176 routes and answers it. An unknown
+    // path with no claim on it still 404s:
+    const other = await get(`https://${HOST}/nothing/anything`)
     assert.equal(other.status, 404)
+  })
+})
+
+describe('the paths the association files claim (GoGo-Infra#176)', () => {
+  // The three prefixes in scripts/deploy/render-well-known.sh:58, beside /l/*
+  // and /r/*. Routed and answered as of #176; before it, each one opened
+  // without the app reached the DNS placeholder and timed out as 522.
+  const CLAIMED = ['/plans/pl_123', '/places/plc_abc', '/room/rm_7']
+  let apiCalls = 0
+
+  beforeEach(() => {
+    apiCalls = 0
+    // None of these may reach the API. There is no endpoint that turns a
+    // resource id into a share link, so a call here could only be a mistake.
+    globalThis.fetch = async () => {
+      apiCalls += 1
+      throw new Error('the API must not be called for this path')
+    }
+  })
+  afterEach(() => {
+    globalThis.fetch = originalFetch
+  })
+
+  const get = (url, e = env(), init) => worker.fetch(new Request(url, init), e, {})
+
+  it('answers immediately instead of timing out, unindexed and without a referrer', async () => {
+    for (const path of CLAIMED) {
+      const res = await get(`https://${HOST}${path}`)
+      assert.equal(res.status, 200, path)
+      assert.match(res.headers.get('content-type'), /^text\/plain/, path)
+      assert.equal(res.headers.get('cache-control'), 'no-store', path)
+      assert.equal(res.headers.get('referrer-policy'), 'no-referrer', path)
+      assert.equal(res.headers.get('x-robots-tag'), 'noindex', path)
+      assert.equal(res.headers.get('location'), null, path)
+    }
+    assert.equal(apiCalls, 0)
+  })
+
+  it('names what was shared and nothing it would have to look up', async () => {
+    const plan = await get(`https://${HOST}/plans/pl_123`)
+    const planText = await plan.text()
+    assert.match(planText, /Kế hoạch GoGo/)
+    assert.doesNotMatch(planText, /pl_123/, 'the page never repeats the resource id')
+    assert.doesNotMatch(planText, /https?:\/\//, 'names no URL')
+
+    assert.match(await (await get(`https://${HOST}/places/plc_abc`)).text(), /Địa điểm GoGo/)
+    assert.match(await (await get(`https://${HOST}/room/rm_7`)).text(), /Kèo GoGo/)
+  })
+
+  it('never forwards the resource id to an attribution or landing URL', async () => {
+    // FALLBACK_URL takes `?link=<canonical>`; the canonical form of these paths
+    // is the path itself, so a redirect would put the id in another origin's
+    // query string and logs — for a page nobody has confirmed serves it.
+    for (const path of CLAIMED) {
+      const res = await get(
+        `https://${HOST}${path}`,
+        env({
+          FALLBACK_URL: 'https://gogo.id.vn/get-app',
+          TENJIN_TRACKING_TEMPLATE: 'https://track.tenjin.com/v0/click/Local',
+        }),
+      )
+      assert.equal(res.status, 200, path)
+      assert.equal(res.headers.get('location'), null, path)
+    }
+    assert.equal(apiCalls, 0)
+  })
+
+  it('keeps answering while the API is down — the page depends on nothing upstream', async () => {
+    for (const path of CLAIMED) {
+      const res = await get(`https://${HOST}${path}`, env({ API_ORIGIN: '' }))
+      assert.equal(res.status, 200, path)
+    }
+    assert.equal(apiCalls, 0)
+  })
+
+  it('does not guess the id format — any id under a claimed prefix is answered', async () => {
+    // The segment after the prefix belongs to the app. Pinning its shape here
+    // would turn a working link into a 404 the day the app changes one.
+    for (const path of [
+      '/plans/1',
+      '/plans/a'.concat('b'.repeat(200)),
+      '/places/a-b_c.d~e',
+      '/room/abc/itinerary',
+      '/plans/%E1%BA%BF',
+      // The Cloudflare pattern is `<host>/plans/*` and `*` matches zero
+      // characters, so this one is routed too.
+      '/plans/',
+    ]) {
+      const res = await get(`https://${HOST}${path}`)
+      assert.equal(res.status, 200, path)
+    }
+    assert.equal(apiCalls, 0)
+  })
+
+  it('answers the bare prefix too, though nothing routes or claims it', async () => {
+    // `<host>/plans/*` does not match `/plans`, and the association files claim
+    // `/plans/*`, so this path still reaches the placeholder origin in
+    // production. The worker handles it anyway: if a route is ever added, the
+    // answer is already the honest page and not a 404 nobody expected.
+    const res = await get(`https://${HOST}/plans`)
+    assert.equal(res.status, 200)
+    assert.equal(apiCalls, 0)
+  })
+
+  it('claims only the three prefixes, and only as whole path segments', async () => {
+    // A prefix match on the string rather than the segment would hand
+    // /plansomething to this page and hide a real 404.
+    for (const path of [
+      '/plansomething/x',
+      '/placesx',
+      '/rooms/abc',
+      '/x/plans/abc',
+      '/PLANS/abc',
+      '/nothing',
+    ]) {
+      const res = await get(`https://${HOST}${path}`)
+      assert.equal(res.status, 404, path)
+      assert.equal(res.headers.get('cache-control'), 'no-store', path)
+    }
+    assert.equal(apiCalls, 0)
+  })
+
+  it('refuses anything but GET and HEAD', async () => {
+    const post = await get(`https://${HOST}/plans/pl_123`, env(), { method: 'POST' })
+    assert.equal(post.status, 405)
+    const head = await get(`https://${HOST}/plans/pl_123`, env(), { method: 'HEAD' })
+    assert.equal(head.status, 200)
+  })
+
+  it('does not shadow the association files', async () => {
+    // They are served before any path matching for a reason: if a route match
+    // ever swallowed /.well-known/*, universal links would stop verifying with
+    // no error anywhere.
+    const aasa = await get(
+      `https://${HOST}/.well-known/assetlinks.json`,
+      env({ ASSETLINKS: '[]' }),
+    )
+    assert.equal(aasa.status, 200)
+    assert.equal(aasa.headers.get('content-type'), 'application/json')
   })
 })

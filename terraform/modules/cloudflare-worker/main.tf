@@ -118,6 +118,23 @@ resource "cloudflare_workers_route" "invite" {
   script  = cloudflare_workers_script.share_link.script_name
 }
 
+# GoGo-Infra#176. The association files claim three more prefixes —
+# `scripts/deploy/render-well-known.sh:58` lists /plans/*, /places/* and
+# /room/* because GoGo-MobileApp handles them. None was routed, so each one
+# opened without the app reached the placeholder origin and timed out as 522,
+# exactly as /r/* did before #174.
+#
+# One `for_each` rather than three near-identical blocks, and still named
+# routes: the set below is the whole list, so widening it is a visible edit and
+# a path outside it still cannot reach the worker.
+resource "cloudflare_workers_route" "app_path" {
+  for_each = toset(["plans", "places", "room"])
+
+  zone_id = var.zone_id
+  pattern = "${var.host}/${each.value}/*"
+  script  = cloudflare_workers_script.share_link.script_name
+}
+
 # The bare host. A pattern without a trailing wildcard matches that exact path,
 # so this is `/` alone; it does not widen the worker to the rest of the host.
 resource "cloudflare_workers_route" "root" {

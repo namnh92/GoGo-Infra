@@ -5,13 +5,20 @@ The share-link edge. Implements INF-012.
 ## Status of invite links (owner decision, 2026-09-14)
 
 The `/r/*` and `/` routes are an **interim DEV fix** for the 522 in GoGo-Infra#174. They are not
-acceptance of the complete sharing and deep-link flow. Two known gaps remain, both described
-below:
+acceptance of the complete sharing and deep-link flow. Of the two gaps recorded there:
 
-- The invite page does **not** validate the invite code. An expired, revoked or unknown code gets
-  the same page as a valid one when the app is not installed; only the app reports the real state.
-- The association files also claim `/plans/*`, `/places/*` and `/room/*`. Those paths are **not
-  routed** and still answer `522` after about 20 seconds.
+- `/plans/*`, `/places/*` and `/room/*` are **routed and answered** as of GoGo-Infra#176 — the
+  static page below. They no longer time out. Nothing about the resource is resolved, so this is
+  a stopgap, not the final disposition (see *Paths the association files claim*).
+- The invite page still does **not** validate the invite code. An expired, revoked or unknown code
+  gets the same page as a valid one when the app is not installed; only the app reports the real
+  state. **Not implementable from this repository** — it needs an endpoint that does not exist, and
+  the shape of that endpoint is an owner/GoGo-BE decision, not an edge change. See
+  *Validating an invite at the edge* below.
+
+`scripts/ci/share-link-routes.test.sh` now holds the claim list, the routes and the Worker's
+branches against each other, because this failure has been the same missing line twice (#174,
+then #176).
 
 ## What it serves
 
@@ -20,6 +27,7 @@ below:
 | `<host>/.well-known/*` | `apple-app-site-association` and `assetlinks.json` |
 | `<host>/l/*` | canonical share link → attribution → app or store |
 | `<host>/r/*` | room invite the app shares as `/r/<inviteCode>` → static "open in the app" page |
+| `<host>/plans/*` `<host>/places/*` `<host>/room/*` | paths the association files claim → static "open in the app" page |
 | `<host>/` | the bare host → static answer (exact path only) |
 
 Named routes, not one `<host>/*`. A wildcard would work and would hide a mistake: it makes the
@@ -29,10 +37,60 @@ no error anywhere — Apple and Google simply stop trusting the domain.
 
 The price is that **a path with no route never reaches the worker**. The DNS record points at a
 placeholder (`192.0.2.1`), so Cloudflare tries that origin and answers `522` after about 20 seconds.
-That is exactly how `/r/*` failed until GoGo-Infra#174: the app shared invite links on a path the
-association files claimed but no route served. The files also claim `/plans/*`, `/places/*` and
-`/room/*`; nothing issues those as https links today, so they are not routed — add a route (and
-worker handling) before anything starts sharing them.
+That is exactly how `/r/*` failed until GoGo-Infra#174, and `/plans/*`, `/places/*` and `/room/*`
+until GoGo-Infra#176: paths the association files claimed and no route served.
+
+`scripts/ci/share-link-routes.test.sh` fails CI when the two lists drift again. It compares
+`PATHS` in `scripts/deploy/render-well-known.sh` against the route patterns here, and the
+`for_each` set against the Worker's `APP_PATH` branch — a routed path with no branch falls through
+to the slug match and `404`s; a branch with no route is dead code that reads as working. It is a
+file comparison: it cannot tell whether an apply has actually run.
+
+## Paths the association files claim (`/plans/*`, `/places/*`, `/room/*`)
+
+GoGo-Infra#176 AC 1 listed three dispositions. Two are not available from this repository:
+
+- **Redirect to `/l/`** needs a slug. Slugs are minted by GoGo-BE per share and there is no
+  endpoint that maps a resource id to an existing link, so the edge would have to invent one.
+- **Drop them from the association files** would stop the installed app from claiming paths it
+  handles today, breaking links that currently work.
+
+So: **a static page**, the same shape as the invite page — `no-store`, `no-referrer`, `noindex`,
+no upstream call. It names what was shared (*Kế hoạch / Địa điểm / Kèo*, derived from the path
+segment) and nothing it would have to look up. It does not redirect to `fallback_url`: that URL
+takes `?link=<canonical>`, the canonical form of these paths is the path itself, and nobody has
+confirmed the landing page serves them — an honest page beats a redirect into a `404`.
+
+Only the first segment is matched; the id after it belongs to the app. This is a stopgap written
+to be replaced: when the web app serves these paths, this becomes a redirect there and nothing
+else in the Worker moves.
+
+The bare `/plans` (no trailing slash) is **not** routed — `<host>/plans/*` does not match it and
+the association files do not claim it. The Worker answers it anyway, so adding a route later needs
+no code change.
+
+## Validating an invite at the edge (GoGo-Infra#176 AC 2) — not done, not an edge decision
+
+The `/r/` page still claims nothing about the code. Closing that gap is **blocked on a contract
+that does not exist**, and the work is not in this repository:
+
+1. GoGo-BE would need a public, read-only invite-status endpoint. The endpoints that accept a code
+   today (`POST /rooms/join`, `/rooms/join/guest`) **consume** it, so the edge cannot call them to
+   look.
+2. Such an endpoint is an enumeration oracle by construction. It would need: a response that
+   distinguishes only `usable` / `not usable` with no room name, member count or host identity;
+   rate limiting keyed on the caller the Worker forwards (`x-gogo-client-ip`, INF-070) rather than
+   on the Cloudflare egress address; and a uniform answer for expired, revoked and never-existed,
+   or the error code itself tells an attacker which codes are real.
+3. The edge change after that is small — one `fetch` with a short timeout and a page per state —
+   and it must keep the current failure mode: the API being unreachable renders the neutral page,
+   never an error, because an invite that works in the app must not look broken on the web.
+
+What the edge rejects today without any API: a code outside GoGo-BE's join bounds (base64url,
+10–128 characters) is a `404`. That is a syntax check, not a validity check, and the page says so.
+
+**Owner decision needed first** (whether to check at all), then a GoGo-BE issue for the contract.
+Until both exist, the page is correct as written: it makes no claim it cannot support.
 
 ## Invite links (`/r/<inviteCode>`)
 
