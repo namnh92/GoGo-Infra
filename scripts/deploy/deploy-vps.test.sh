@@ -139,6 +139,7 @@ trap 'rm -rf "$SANDBOX"' EXIT
 #   nohead  the sentinel the real command emits when there is no HEAD
 #   noise   exit 0 with something that is not a commit
 #   ok      a commit, after which the next command fails so the script stops
+#   cdfail  exit 1 — the remote command failed (no clone at DEPLOY_PATH), not ssh
 cat >"${SANDBOX}/ssh" <<'FAKE'
 #!/usr/bin/env bash
 # remote() hands ssh `bash -lc <printf %q of the command>`, so spaces arrive
@@ -151,7 +152,13 @@ case "$cmd" in
       nohead) echo __NO_HEAD__ ;;
       noise)  echo "Welcome to the host" ;;
       ok)     echo 1111111111111111111111111111111111111111 ;;
+      cdfail) exit 1 ;;
     esac
+    ;;
+  *deployed-revision*)
+    # A host from before `.deployed-revision`: the read reports none, and the
+    # adoption write succeeds. These cases are about the HEAD read.
+    echo __NONE__
     ;;
   *previous-revision*)
     echo "MARKER-WRITE-ATTEMPTED" >>"${SANDBOX_LOG}"
@@ -203,7 +210,7 @@ check_case() {
 # The regression. A dropped connection must not write, must not claim a first
 # deploy, and must say that the existing marker is intact.
 check_case "a dropped connection stops the deploy and leaves .previous-revision alone" \
-  drop no "could not read the running revision"
+  drop no "ssh itself failed (255)"
 
 # The only shape allowed to continue without a rollback target. No marker is
 # written: there is nothing to roll back to, and writing the sentinel would hand
@@ -216,9 +223,100 @@ check_case "a checkout with no HEAD is the one real first deploy, and writes no 
 check_case "a successful read that is not a commit is refused, not recorded" \
   noise no "did not return a commit"
 
+# F-02: a failed remote command is not a dropped tunnel, and says so.
+check_case "a remote command failure (not ssh 255) names DEPLOY_PATH as the likely cause" \
+  cdfail no "must already be a git clone"
+
 # The normal path still records.
 check_case "a revision that reads cleanly is recorded for rollback" \
   ok yes "current: 1111111111111111111111111111111111111111"
+
+# --- INF-148 F-01: the rollback target is what ran, not what is checked out ----
+#
+# The #148 timeline, replayed against a real git checkout standing in for the
+# host. Run 1 starts with A running, checks out B, and loses the tunnel during
+# the build — so A is still what serves traffic. Run 2 is the retry. Recording
+# HEAD there would write B (never started) into `.previous-revision` and lose A.
+#
+# Here the fake `ssh` actually runs each remote command, locally, against the
+# sandbox "host"; `scp` copies; `docker` is a no-op. DROP_ON names the command
+# at which the tunnel dies (ssh exits 255 without running it).
+
+HOST_SB="$(mktemp -d)"
+trap 'rm -rf "$SANDBOX" "$HOST_SB"' EXIT
+mkdir -p "${HOST_SB}/bin"
+
+git_q() { git -c user.email=t@t -c user.name=t -c init.defaultBranch=develop "$@" >/dev/null 2>&1; }
+git_q init "${HOST_SB}/work"
+git_q -C "${HOST_SB}/work" commit --allow-empty -m A
+REV_A="$(git -C "${HOST_SB}/work" rev-parse HEAD)"
+git_q -C "${HOST_SB}/work" commit --allow-empty -m B
+REV_B="$(git -C "${HOST_SB}/work" rev-parse HEAD)"
+git_q clone --bare "${HOST_SB}/work" "${HOST_SB}/origin.git"
+git_q clone "${HOST_SB}/origin.git" "${HOST_SB}/host"
+git_q -C "${HOST_SB}/host" checkout --detach "$REV_A"
+
+cat >"${HOST_SB}/bin/ssh" <<'FAKE'
+#!/usr/bin/env bash
+cmd="${*: -1}"
+if [[ -n "${DROP_ON:-}" && "$cmd" == *"${DROP_ON}"* ]]; then
+  echo "client_loop: send disconnect: Broken pipe" >&2
+  exit 255
+fi
+# remote() sends `bash -lc <quoted>`; run it without the login profile.
+eval "bash -c ${cmd#bash -lc }"
+FAKE
+cat >"${HOST_SB}/bin/scp" <<'FAKE'
+#!/usr/bin/env bash
+src="${*: -2:1}"; dst="${*: -1}"
+cp "$src" "${dst#*:}"
+FAKE
+# `compose ps` reports every service running, so the verify step passes when
+# nothing dropped; everything else succeeds silently.
+cat >"${HOST_SB}/bin/docker" <<'FAKE'
+#!/usr/bin/env bash
+[[ " $* " == *" ps "* ]] && printf '%s running\n' cloudflared api worker
+exit 0
+FAKE
+chmod +x "${HOST_SB}/bin/"*
+
+host_run() {
+  DROP_ON="$1" PATH="${HOST_SB}/bin:${PATH}" \
+    DEPLOY_HOST=fake.invalid DEPLOY_USER=deploy DEPLOY_PATH="${HOST_SB}/host" \
+    KNOWN_HOSTS_FILE=/dev/null SSH_KEY_FILE=/dev/null REMOTE_ENV_FILE=.env.dev \
+    COMPOSE_EDGE=docker/docker-compose.edge-tunnel.yml \
+    bash "$DEPLOY" "$REV_B" /dev/null >/dev/null 2>&1
+}
+
+marker() { cat "${HOST_SB}/host/$1" 2>/dev/null; }
+
+for start in steady legacy; do
+  rm -f "${HOST_SB}/host/.previous-revision" "${HOST_SB}/host/.deployed-revision"
+  git_q -C "${HOST_SB}/host" checkout --detach "$REV_A"
+  # steady: a host whose last deploy was verified. legacy: one deployed before
+  # `.deployed-revision` existed, adopting its checkout on the first run.
+  [[ "$start" == steady ]] && printf '%s' "$REV_A" >"${HOST_SB}/host/.deployed-revision"
+
+  host_run "build"   # run 1: checks out B, tunnel dies during the build
+  host_head="$(git -C "${HOST_SB}/host" rev-parse HEAD)"
+  host_run "build"   # run 2: the retry, dies at the same place
+
+  if [[ "$host_head" != "$REV_B" ]]; then
+    fail "F-01 (${start}): run 1 did not reach the checkout of B — the replay is not testing the timeline"
+  elif [[ "$(marker .previous-revision)" != "$REV_A" ]]; then
+    fail "F-01 (${start}): after an interrupted deploy and its retry, .previous-revision is $(marker .previous-revision), wanted A ${REV_A}"
+  else
+    pass "F-01 (${start}): an interrupted deploy and its retry keep A, the revision still running, as the rollback target"
+  fi
+done
+
+# And a deploy that completes moves the verified record forward.
+host_run ""
+if [[ "$(marker .deployed-revision)" == "$REV_B" && "$(marker .previous-revision)" == "$REV_A" ]]; then
+  pass "F-01: a verified deploy records B as deployed, with A as its rollback target"
+else
+  fail "F-01: after a completed deploy, deployed=$(marker .deployed-revision) previous=$(marker .previous-revision); wanted B ${REV_B} / A ${REV_A}"
+fi
 
 # And the source-level guard: the construct that caused this must not come back
 # on the revision read.
