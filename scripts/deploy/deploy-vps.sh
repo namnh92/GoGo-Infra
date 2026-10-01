@@ -36,12 +36,54 @@ if ! remote "true" >/dev/null 2>&1; then
   exit 1
 fi
 
-previous="$(remote "cd '${DEPLOY_PATH}' && git rev-parse HEAD" 2>/dev/null || true)"
-if [[ -n "$previous" ]]; then
+# INF-148. The probe above narrows the window; it does not close it. The tunnel
+# that died in run 34028506404 died *between* commands, and `|| true` here turned
+# the failed read into an empty string, which the old `[[ -n ]]` read as "no
+# previous revision" — so `.previous-revision` was never written, and the
+# rollback path was gone at the exact moment it was needed.
+#
+# Two states produce no revision and they are not the same state:
+#
+#   could not read   SSH failed, `cd` failed, docker is gone — unknown, not
+#                    empty. Hard stop, and crucially: leave the existing
+#                    `.previous-revision` alone. A stale marker pointing at a
+#                    real revision beats no marker.
+#   nothing to read  the checkout genuinely has no HEAD. That is a first
+#                    deploy, and the only shape that may continue without one.
+#
+# The sentinel is what tells them apart: `git rev-parse` failing is converted to
+# a word *on the host*, so the command still exits 0 and a non-zero status can
+# only mean the read itself did not happen.
+read_failed=0
+previous="$(remote "cd '${DEPLOY_PATH}' && { git rev-parse HEAD 2>/dev/null || echo __NO_HEAD__; }")" || read_failed=$?
+previous="$(printf '%s' "$previous" | tr -d '[:space:]')"
+
+if [[ "$read_failed" -ne 0 ]]; then
+  echo "could not read the running revision (exit ${read_failed}) — refusing to deploy." >&2
+  echo "The host answered a moment ago, so this is most likely the access tunnel" >&2
+  echo "dropping mid-deploy. ${DEPLOY_PATH}/.previous-revision has NOT been touched;" >&2
+  echo "whatever it held is still the rollback target. Re-run the deploy." >&2
+  exit 1
+fi
+
+if [[ "$previous" == "__NO_HEAD__" ]]; then
+  # No marker is written: there is nothing to roll back to, and writing the
+  # sentinel would hand `rollback.sh` a ref git cannot resolve.
+  previous=""
+  echo "    the checkout has no HEAD — first deploy to this host"
+elif [[ ! "$previous" =~ ^[0-9a-f]{40}$ ]]; then
+  # Exit 0, but not a commit object name. `git rev-parse HEAD` cannot do that:
+  # either it returned nothing (something between here and the host swallowed
+  # it) or something else on the connection is talking. Neither is a revision,
+  # and neither is a first deploy — and a marker written from it is a rollback
+  # target git cannot resolve, discovered during the next incident.
+  echo "the revision read succeeded but did not return a commit — refusing to deploy." >&2
+  echo "  got: '${previous:-<empty>}'" >&2
+  echo "${DEPLOY_PATH}/.previous-revision has NOT been touched." >&2
+  exit 1
+else
   echo "    current: ${previous}"
   remote "printf '%s' '${previous}' > '${DEPLOY_PATH}/.previous-revision'"
-else
-  echo "    no previous revision recorded — treating as a first deploy"
 fi
 
 echo "==> Fetching ${RELEASE_REF}"
