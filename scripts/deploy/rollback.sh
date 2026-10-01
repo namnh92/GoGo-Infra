@@ -32,7 +32,16 @@ remote "cd '${DEPLOY_PATH}' && git checkout --detach '${TARGET_REF}'"
 # The environment file is left alone. It is rendered from SSM and is not
 # versioned with the code; rolling it back would silently undo a secret rotation.
 echo "==> Rebuilding and restarting"
-remote "cd '${DEPLOY_PATH}' && ${COMPOSE} build api worker && ${COMPOSE} up -d --remove-orphans"
+#
+# No --remove-orphans: it deletes every container outside this compose set — the
+# Alloy collector whenever the observability overlay is not exported here, and
+# any separately managed access container (INF-071).
+remote "cd '${DEPLOY_PATH}' && ${COMPOSE} build api worker && ${COMPOSE} up -d"
+
+# A bind-mounted config.alloy that changed is not a changed service definition,
+# so `up -d` alone leaves Alloy on the configuration being rolled back from
+# (GoGo-BE#408). Only with COMPOSE_OBSERVABILITY set, as the deploy sets it.
+refresh_alloy
 
 # INF-148: this is now what is running, so it is what the next deploy records as
 # its rollback target. Left unwritten, that deploy would record the revision

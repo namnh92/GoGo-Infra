@@ -326,6 +326,97 @@ else
   pass "the revision read no longer swallows a failure with '|| true'"
 fi
 
+# --- GoGo-BE#408: a changed config.alloy recreates Alloy, and only then -------
+#
+# Compose cannot see a bind-mounted file change, so the scripts have to. Same
+# fake host as above, but the revisions carry docker/alloy/config.alloy:
+#   A1  config v1      B2  config v2      C2  config v2 + an unrelated change
+# The fake `docker` logs every compose call; what is asserted is whether an
+# `up` naming alloy carries --force-recreate.
+
+AL_SB="$(mktemp -d)"
+trap 'rm -rf "$SANDBOX" "$HOST_SB" "$AL_SB"' EXIT
+mkdir -p "${AL_SB}/bin" "${AL_SB}/work/docker/alloy"
+git_q init "${AL_SB}/work"
+echo 'v1' >"${AL_SB}/work/docker/alloy/config.alloy"
+git_q -C "${AL_SB}/work" add -A
+git_q -C "${AL_SB}/work" commit -m A1
+AL_A="$(git -C "${AL_SB}/work" rev-parse HEAD)"
+echo 'v2' >"${AL_SB}/work/docker/alloy/config.alloy"
+git_q -C "${AL_SB}/work" commit -am B2
+AL_B="$(git -C "${AL_SB}/work" rev-parse HEAD)"
+echo 'x' >"${AL_SB}/work/README"
+git_q -C "${AL_SB}/work" add -A
+git_q -C "${AL_SB}/work" commit -m C2
+AL_C="$(git -C "${AL_SB}/work" rev-parse HEAD)"
+git_q clone --bare "${AL_SB}/work" "${AL_SB}/origin.git"
+git_q clone "${AL_SB}/origin.git" "${AL_SB}/host"
+
+cp "${HOST_SB}/bin/ssh" "${HOST_SB}/bin/scp" "${AL_SB}/bin/"
+cat >"${AL_SB}/bin/docker" <<'FAKE'
+#!/usr/bin/env bash
+echo "$*" >>"${DOCKER_LOG}"
+[[ " $* " == *" ps "* ]] && printf '%s running\n' cloudflared api worker alloy
+exit 0
+FAKE
+chmod +x "${AL_SB}/bin/"*
+
+# $1 script, $2 ref (empty for rollback.sh's recorded one), $3 overlay or ""
+al_run() {
+  : >"${AL_SB}/docker.log"
+  DOCKER_LOG="${AL_SB}/docker.log" DROP_ON="" PATH="${AL_SB}/bin:${PATH}" \
+    DEPLOY_HOST=fake.invalid DEPLOY_USER=deploy DEPLOY_PATH="${AL_SB}/host" \
+    KNOWN_HOSTS_FILE=/dev/null SSH_KEY_FILE=/dev/null REMOTE_ENV_FILE=.env.dev \
+    COMPOSE_EDGE=docker/docker-compose.edge-tunnel.yml COMPOSE_OBSERVABILITY="$3" \
+    bash "$1" ${2:+"$2"} ${2:+/dev/null} >"${AL_SB}/out" 2>&1
+}
+al_forced() { grep -E ' up .*--force-recreate.* alloy$' "${AL_SB}/docker.log" >/dev/null; }
+al_upped()  { grep -E ' up -d .*alloy$' "${AL_SB}/docker.log" >/dev/null; }
+OBS=docker/docker-compose.observability.yml
+ROLLBACK="${DIR}/rollback.sh"
+
+# Alloy is running A1's configuration, then B2 ships a different one.
+git_q -C "${AL_SB}/host" checkout --detach "$AL_A"
+printf '%s' "$AL_A" >"${AL_SB}/host/.deployed-revision"
+al_run "$DEPLOY" "$AL_A" "$OBS"   # A1 again: records the tree Alloy runs
+al_run "$DEPLOY" "$AL_B" "$OBS"
+if [[ "$(cat "${AL_SB}/host/.deployed-revision")" != "$AL_B" ]]; then
+  fail "#408: the B2 deploy did not complete — the cases below test nothing ($(tr '\n' '|' <"${AL_SB}/out"))"
+fi
+if al_forced; then
+  pass "#408: a deploy that changes docker/alloy/config.alloy recreates Alloy"
+else
+  fail "#408: a deploy that changes docker/alloy/config.alloy recreates Alloy (compose calls: $(tr '\n' '|' <"${AL_SB}/docker.log"))"
+fi
+
+al_run "$DEPLOY" "$AL_C" "$OBS"
+if al_upped && ! al_forced; then
+  pass "#408: a deploy that leaves config.alloy alone starts Alloy without recreating it"
+else
+  fail "#408: a deploy that leaves config.alloy alone starts Alloy without recreating it (compose calls: $(tr '\n' '|' <"${AL_SB}/docker.log"))"
+fi
+
+al_run "$DEPLOY" "$AL_C" ""
+if grep -q alloy "${AL_SB}/docker.log"; then
+  fail "#408: without the observability overlay the deploy never names alloy"
+else
+  pass "#408: without the observability overlay the deploy never names alloy"
+fi
+
+# Roll back from B2/C2 to A1: the configuration goes back, so Alloy must too.
+printf '%s' "$AL_A" >"${AL_SB}/host/.previous-revision"
+al_run "$ROLLBACK" "" "$OBS"
+if al_forced; then
+  pass "#408: a rollback across a config.alloy change recreates Alloy"
+else
+  fail "#408: a rollback across a config.alloy change recreates Alloy (compose calls: $(tr '\n' '|' <"${AL_SB}/docker.log"))"
+fi
+if grep -q -- '--remove-orphans' "${AL_SB}/docker.log"; then
+  fail "rollback.sh does not pass --remove-orphans (it deletes Alloy when the overlay is not exported)"
+else
+  pass "rollback.sh does not pass --remove-orphans (it deletes Alloy when the overlay is not exported)"
+fi
+
 echo
 if [[ "$FAILED" -eq 0 ]]; then
   echo "All deploy-vps tests passed."

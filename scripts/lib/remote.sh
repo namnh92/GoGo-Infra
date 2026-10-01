@@ -141,3 +141,57 @@ scp_opts=("${common_opts[@]}" -P "$DEPLOY_PORT")
 remote() {
   ssh "${ssh_opts[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" "bash -lc $(printf '%q' "$*")"
 }
+
+# GoGo-BE#408 — Alloy reads its configuration once, at start.
+#
+# docker/alloy/ is bind-mounted into the container, and compose's service hash
+# covers the service *definition* only: a changed config.alloy is not a changed
+# definition, so `up -d` leaves the running collector exactly as it was. Neither
+# the bind mount nor a `configs:` entry changes that (measured with
+# `docker compose config --hash alloy` on compose v5.5.0). On 2026-09-05 that
+# left Alloy writing to the old store while the new API read the new one — the
+# split ADR-0007 §E7 forbids — until someone restarted it by hand.
+#
+# So the deploy remembers which content Alloy was last started with: the git
+# tree id of docker/alloy at the checked-out revision, kept in a marker beside
+# .deployed-revision. A different tree (or no marker) recreates Alloy; the same
+# tree leaves it alone, so a deploy that does not touch the config does not
+# bounce the collector.
+#
+# --no-deps: api and worker are already up, and this must not touch them.
+# Never fatal. The application is deployed and verified by the time this runs,
+# and observability must never be able to look like an outage — a failure here
+# is a loud warning and an unwritten marker, so the next deploy tries again.
+ALLOY_MARKER=".alloy-config-tree"
+
+refresh_alloy() {
+  [[ -n "$COMPOSE_OBSERVABILITY" ]] || return 0
+  local want have recreate="" state
+  echo "==> Making sure Alloy runs the configuration this revision ships"
+  if ! want="$(remote "cd '${DEPLOY_PATH}' && git rev-parse --verify --quiet 'HEAD:docker/alloy'")"; then
+    echo "::warning::could not read docker/alloy at HEAD — Alloy left as it is" >&2
+    return 0
+  fi
+  want="$(printf '%s' "$want" | tr -d '[:space:]')"
+  # A failed read is an empty marker, which only costs one extra recreate.
+  have="$(remote "cat '${DEPLOY_PATH}/${ALLOY_MARKER}' 2>/dev/null || true" || true)"
+  have="$(printf '%s' "$have" | tr -d '[:space:]')"
+  if [[ "$want" != "$have" ]]; then
+    recreate="--force-recreate"
+    echo "    docker/alloy changed (${have:-none} -> ${want}) — recreating Alloy"
+  else
+    echo "    docker/alloy unchanged (${want})"
+  fi
+  if ! remote "cd '${DEPLOY_PATH}' && ${COMPOSE} up -d --no-deps ${recreate} alloy"; then
+    echo "::warning::Alloy did not come up — it may be running an old configuration (GoGo-BE#408)" >&2
+    return 0
+  fi
+  state="$(remote "cd '${DEPLOY_PATH}' && ${COMPOSE} ps --format '{{.Service}} {{.State}}' 2>/dev/null | awk '\$1==\"alloy\" {print \$2}'" || true)"
+  state="$(printf '%s' "$state" | tr -d '[:space:]')"
+  if [[ "$state" != "running" ]]; then
+    echo "::warning::Alloy is ${state:-absent} after the recreate — marker not written (GoGo-BE#408)" >&2
+    return 0
+  fi
+  remote "printf '%s' '${want}' > '${DEPLOY_PATH}/${ALLOY_MARKER}'" ||
+    echo "::warning::could not record ${ALLOY_MARKER}; the next deploy recreates Alloy again" >&2
+}
