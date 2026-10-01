@@ -34,6 +34,11 @@ remote "cd '${DEPLOY_PATH}' && git checkout --detach '${TARGET_REF}'"
 echo "==> Rebuilding and restarting"
 remote "cd '${DEPLOY_PATH}' && ${COMPOSE} build api worker && ${COMPOSE} up -d --remove-orphans"
 
+# INF-148: this is now what is running, so it is what the next deploy records as
+# its rollback target. Left unwritten, that deploy would record the revision
+# this rollback just backed away from.
+remote "cd '${DEPLOY_PATH}' && git rev-parse HEAD > .deployed-revision"
+
 cat <<EOM
 
 Rolled back to ${TARGET_REF}.

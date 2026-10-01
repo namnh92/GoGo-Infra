@@ -36,12 +36,90 @@ if ! remote "true" >/dev/null 2>&1; then
   exit 1
 fi
 
-previous="$(remote "cd '${DEPLOY_PATH}' && git rev-parse HEAD" 2>/dev/null || true)"
+# INF-148. The probe above narrows the window; it does not close it. The tunnel
+# that died in run 34028506404 died *between* commands, and `|| true` here turned
+# the failed read into an empty string, which the old `[[ -n ]]` read as "no
+# previous revision" — so `.previous-revision` was never written, and the
+# rollback path was gone at the exact moment it was needed.
+#
+# And HEAD is not "what is running". Run 34028006279 checked out the new
+# revision and then lost the tunnel during the build, with the containers still
+# serving the old one. A retry that recorded HEAD would have written the
+# never-started revision into `.previous-revision` and thrown away the one that
+# was actually live. So the rollback target comes from `.deployed-revision`,
+# which is written only after a deploy (or a rollback) has been verified
+# running and reachable — never from the checkout.
+#
+# Every read below converts "nothing there" into a sentinel *on the host*, so
+# the command still exits 0 and a non-zero status can only mean the read itself
+# did not happen. That is unknown, not empty: a hard stop that leaves the
+# existing markers alone. A stale marker pointing at a real revision beats none.
+
+# Reads one value from the host; exits the deploy if the read does not happen.
+read_remote() {
+  local what="$1" cmd="$2" out code=0
+  out="$(remote "cd '${DEPLOY_PATH}' && ${cmd}")" || code=$?
+  if [[ "$code" -ne 0 ]]; then
+    echo "could not read ${what} (exit ${code}) — refusing to deploy." >&2
+    if [[ "$code" -eq 255 ]]; then
+      echo "ssh itself failed (255): the host answered a moment ago, so this is most" >&2
+      echo "likely the access tunnel dropping mid-deploy. Re-run the deploy." >&2
+    else
+      echo "the remote command failed: ${DEPLOY_PATH} must already be a git clone" >&2
+      echo "of GoGo-BE (scripts/deploy/seed-vps.sh) and readable by ${DEPLOY_USER}." >&2
+    fi
+    echo "${DEPLOY_PATH}/.previous-revision and .deployed-revision have NOT been touched." >&2
+    exit 1
+  fi
+  printf '%s' "$out" | tr -d '[:space:]'
+}
+
+require_commit() {
+  local what="$1" value="$2"
+  # Exit 0, but not a commit object name. Neither git nor `cat` of a marker this
+  # script wrote can do that: either nothing came back (something between here
+  # and the host swallowed it) or something else on the connection is talking —
+  # login-shell profile output, say. A marker written from it is a rollback
+  # target git cannot resolve, discovered during the next incident.
+  if [[ ! "$value" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "the ${what} read succeeded but did not return a commit — refusing to deploy." >&2
+    echo "  got: '${value:-<empty>}'" >&2
+    echo "${DEPLOY_PATH}/.previous-revision and .deployed-revision have NOT been touched." >&2
+    exit 1
+  fi
+}
+
+deployed="$(read_remote "the last verified revision" \
+  "{ if [ -s .deployed-revision ]; then cat .deployed-revision; else echo __NONE__; fi; }")"
+head="$(read_remote "the checked-out revision" \
+  "{ git rev-parse HEAD 2>/dev/null || echo __NO_HEAD__; }")"
+
+previous=""
+if [[ "$deployed" != "__NONE__" ]]; then
+  require_commit "last verified revision" "$deployed"
+  previous="$deployed"
+  if [[ "$head" != "$deployed" ]]; then
+    echo "    checkout is at ${head}, but the last verified deploy is ${deployed}:"
+    echo "    an earlier deploy stopped part-way. Recording the verified one."
+  fi
+elif [[ "$head" == "__NO_HEAD__" ]]; then
+  # No marker is written: there is nothing to roll back to, and writing the
+  # sentinel would hand `rollback.sh` a ref git cannot resolve.
+  echo "    the checkout has no HEAD — first deploy to this host"
+else
+  # A host deployed before `.deployed-revision` existed. Its HEAD is taken as
+  # running this once — the assumption every deploy made until now — and
+  # written down immediately, so that a deploy interrupted from here on cannot
+  # promote its own unstarted checkout into the rollback target.
+  require_commit "checked-out revision" "$head"
+  echo "    no verified-deploy record yet — adopting the checkout ${head} as running"
+  remote "printf '%s' '${head}' > '${DEPLOY_PATH}/.deployed-revision'"
+  previous="$head"
+fi
+
 if [[ -n "$previous" ]]; then
   echo "    current: ${previous}"
   remote "printf '%s' '${previous}' > '${DEPLOY_PATH}/.previous-revision'"
-else
-  echo "    no previous revision recorded — treating as a first deploy"
 fi
 
 echo "==> Fetching ${RELEASE_REF}"
@@ -144,6 +222,8 @@ if [[ -n "$not_running" ]]; then
       echo "  cd ${DEPLOY_PATH} && ${COMPOSE} up -d --no-recreate ${ACCESS_SERVICES}" >&2
       exit 1
     fi
+    # Running again, so it is once more the revision a later rollback returns to.
+    remote "printf '%s' '${previous}' > '${DEPLOY_PATH}/.deployed-revision'"
     echo "    rolled back and verified running"
     exit 1
   fi
@@ -161,6 +241,10 @@ if ! remote "true" >/dev/null 2>&1; then
   exit 1
 fi
 echo "    ok"
+
+# Only now — running and reachable — does this revision become the one a later
+# deploy records as its rollback target (INF-148).
+remote "printf '%s' '${target}' > '${DEPLOY_PATH}/.deployed-revision'"
 
 echo "==> Pruning dangling images"
 remote "docker image prune -f >/dev/null"
