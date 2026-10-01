@@ -19,6 +19,8 @@
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 # shellcheck source=../lib/place-refresh-budget.sh
 source "${REPO_ROOT}/scripts/lib/place-refresh-budget.sh"
+# shellcheck source=../lib/env-file.sh
+source "${REPO_ROOT}/scripts/lib/env-file.sh"
 
 ENVIRONMENT="${1:-}"
 require_env_arg "$ENVIRONMENT"
@@ -95,7 +97,7 @@ if [[ "$missing" -gt 0 ]]; then
 fi
 
 install -m 600 "$tmp_file" "$OUT_FILE"
-variable_count=$(grep -cE '^[A-Z_]+=' "$OUT_FILE")
+variable_count=$(env_variable_count "$OUT_FILE")
 echo "wrote ${OUT_FILE} (mode 0600, ${variable_count} variables)"
 
 if [[ "$CONSUMER" == "all" ]]; then

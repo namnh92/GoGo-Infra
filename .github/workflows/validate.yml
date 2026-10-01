@@ -217,6 +217,15 @@ jobs:
       - name: the place-refresh budget gate still tells refuse from configured
         run: ./scripts/lib/place-refresh-budget.test.sh
 
+      # INF-051. The variable count is the only thing the person running a
+      # render or a pull sees to decide whether it finished. Counting with a
+      # character class that had no digit in it dropped every `R2_*` name and
+      # read as "parameters did not come back" — a missing-credential hunt for
+      # credentials that were in SSM and in the file. The test also fails if a
+      # third copy of that grep appears.
+      - name: the variable count includes names with digits
+        run: ./scripts/lib/env-file.test.sh
+
       # The production seed guard lives in two places — here and in GoGo-BE's
       # seed — and is only two guards if the confirmation reaches both. It did
       # not: the compose invocation forwarded APP_ENV and nothing else, so a

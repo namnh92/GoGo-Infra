@@ -19,6 +19,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MANIFEST_READER="${REPO_ROOT}/scripts/lib/manifest.py"
 # shellcheck source=../lib/place-refresh-budget.sh
 source "${REPO_ROOT}/scripts/lib/place-refresh-budget.sh"
+# shellcheck source=../lib/env-file.sh
+source "${REPO_ROOT}/scripts/lib/env-file.sh"
 prefix="/gogo/${ENVIRONMENT}/backend"
 
 command -v aws >/dev/null || { echo "aws CLI required" >&2; exit 1; }
@@ -65,7 +67,11 @@ fi
 
 # Only the count is logged. Never the names of failed lookups with values, and
 # never the file contents.
-echo "rendered $(grep -cE '^[A-Z_]+=' "$OUT_FILE") variables into ${OUT_FILE} (mode 0600)"
+# Assigned before the echo: a failure inside `$(...)` in an argument list does
+# not trip `set -e`, so the count would print empty and the render would read
+# as finished.
+variable_count="$(env_variable_count "$OUT_FILE")"
+echo "rendered ${variable_count} variables into ${OUT_FILE} (mode 0600)"
 
 # INF-057. The hard budget for `google.places.refresh` is default-deny in
 # GoGo-BE: an unset ceiling refuses, and the two scope-wide ceilings refuse the
