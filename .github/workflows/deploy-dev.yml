@@ -174,6 +174,9 @@ jobs:
         run: |
           echo "Deploy failed. To go back:" >&2
           echo "  ./scripts/deploy/rollback.sh" >&2
+          echo "  (with the same DEPLOY_*/REMOTE_ENV_FILE/COMPOSE_EDGE environment; it" >&2
+          echo "  enables the Alloy overlay itself when PROMETHEUS_REMOTE_WRITE_URL is" >&2
+          echo "  in the host's env file, and recreates Alloy if docker/alloy changed)" >&2
 
       - name: shred temporary credentials
         if: always()

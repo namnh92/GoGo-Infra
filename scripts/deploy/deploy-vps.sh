@@ -224,6 +224,8 @@ if [[ -n "$not_running" ]]; then
     fi
     # Running again, so it is once more the revision a later rollback returns to.
     remote "printf '%s' '${previous}' > '${DEPLOY_PATH}/.deployed-revision'"
+    # The checkout moved back, and with it docker/alloy (GoGo-BE#408).
+    refresh_alloy
     echo "    rolled back and verified running"
     exit 1
   fi
@@ -245,6 +247,10 @@ echo "    ok"
 # Only now — running and reachable — does this revision become the one a later
 # deploy records as its rollback target (INF-148).
 remote "printf '%s' '${target}' > '${DEPLOY_PATH}/.deployed-revision'"
+
+# Alloy is not in DEPLOY_SERVICES (it depends on api and worker, not the other
+# way round), so `up -d ${DEPLOY_SERVICES}` never touches it (GoGo-BE#408).
+refresh_alloy
 
 echo "==> Pruning dangling images"
 remote "docker image prune -f >/dev/null"

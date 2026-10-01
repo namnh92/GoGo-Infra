@@ -326,6 +326,193 @@ else
   pass "the revision read no longer swallows a failure with '|| true'"
 fi
 
+# --- GoGo-BE#408: a changed config.alloy recreates Alloy, and only then -------
+#
+# Compose cannot see a bind-mounted file change, so the scripts have to. Same
+# fake host as above, but the revisions carry docker/alloy/config.alloy:
+#   A1  config v1      B2  config v2      C2  config v2 + an unrelated change
+# The fake `docker` logs every compose call; what is asserted is whether an
+# `up` naming alloy carries --force-recreate.
+
+AL_SB="$(mktemp -d)"
+trap 'rm -rf "$SANDBOX" "$HOST_SB" "$AL_SB"' EXIT
+mkdir -p "${AL_SB}/bin" "${AL_SB}/work/docker/alloy"
+git_q init "${AL_SB}/work"
+echo 'v1' >"${AL_SB}/work/docker/alloy/config.alloy"
+git_q -C "${AL_SB}/work" add -A
+git_q -C "${AL_SB}/work" commit -m A1
+AL_A="$(git -C "${AL_SB}/work" rev-parse HEAD)"
+echo 'v2' >"${AL_SB}/work/docker/alloy/config.alloy"
+git_q -C "${AL_SB}/work" commit -am B2
+AL_B="$(git -C "${AL_SB}/work" rev-parse HEAD)"
+echo 'x' >"${AL_SB}/work/README"
+git_q -C "${AL_SB}/work" add -A
+git_q -C "${AL_SB}/work" commit -m C2
+AL_C="$(git -C "${AL_SB}/work" rev-parse HEAD)"
+git_q clone --bare "${AL_SB}/work" "${AL_SB}/origin.git"
+git_q clone "${AL_SB}/origin.git" "${AL_SB}/host"
+
+cp "${HOST_SB}/bin/ssh" "${HOST_SB}/bin/scp" "${AL_SB}/bin/"
+# Knobs: ALLOY_UP_FAIL=1 fails any `up ... alloy`; ALLOY_STATE is what
+# `compose ps` reports for alloy (absent = no row); WORKER_OK_AFTER=n reports
+# worker exited until the n-th `up -d api worker`; ALLOY_CONTAINER is what a
+# plain `docker ps -aq` returns.
+cat >"${AL_SB}/bin/docker" <<'FAKE'
+#!/usr/bin/env bash
+echo "$*" >>"${DOCKER_LOG}"
+if [[ "$1" == ps ]]; then echo "${ALLOY_CONTAINER:-}"; exit 0; fi
+if [[ " $* " == *" ps "* ]]; then
+  printf '%s running\n' cloudflared api
+  ups="$(grep -cE ' up -d api worker$' "${DOCKER_LOG}")"
+  if (( ups >= ${WORKER_OK_AFTER:-0} )); then echo "worker running"; else echo "worker exited"; fi
+  st="${ALLOY_STATE:-running}"
+  [[ "$st" != absent ]] && echo "alloy ${st}"
+  exit 0
+fi
+if [[ "${ALLOY_UP_FAIL:-}" == 1 && " $* " == *" up "* && "$*" == *" alloy" ]]; then exit 1; fi
+exit 0
+FAKE
+chmod +x "${AL_SB}/bin/"*
+
+# $1 script, $2 ref (empty for rollback.sh's recorded one), $3 overlay or ""
+al_run() {
+  : >"${AL_SB}/docker.log"
+  DOCKER_LOG="${AL_SB}/docker.log" DROP_ON="" PATH="${AL_SB}/bin:${PATH}" \
+    DEPLOY_HOST=fake.invalid DEPLOY_USER=deploy DEPLOY_PATH="${AL_SB}/host" \
+    KNOWN_HOSTS_FILE=/dev/null SSH_KEY_FILE=/dev/null REMOTE_ENV_FILE=.env.dev \
+    COMPOSE_EDGE="${AL_EDGE:-docker/docker-compose.edge-tunnel.yml}" COMPOSE_OBSERVABILITY="$3" \
+    bash "$1" ${2:+"$2"} ${2:+/dev/null} >"${AL_SB}/out" 2>&1
+}
+al_forced() { grep -E ' up .*--force-recreate.* alloy$' "${AL_SB}/docker.log" >/dev/null; }
+al_upped()  { grep -E ' up -d .*alloy$' "${AL_SB}/docker.log" >/dev/null; }
+OBS=docker/docker-compose.observability.yml
+ROLLBACK="${DIR}/rollback.sh"
+
+# Alloy is running A1's configuration, then B2 ships a different one.
+git_q -C "${AL_SB}/host" checkout --detach "$AL_A"
+printf '%s' "$AL_A" >"${AL_SB}/host/.deployed-revision"
+al_run "$DEPLOY" "$AL_A" "$OBS"   # A1 again: records the tree Alloy runs
+al_run "$DEPLOY" "$AL_B" "$OBS"
+if [[ "$(cat "${AL_SB}/host/.deployed-revision")" != "$AL_B" ]]; then
+  fail "#408: the B2 deploy did not complete — the cases below test nothing ($(tr '\n' '|' <"${AL_SB}/out"))"
+fi
+if al_forced; then
+  pass "#408: a deploy that changes docker/alloy/config.alloy recreates Alloy"
+else
+  fail "#408: a deploy that changes docker/alloy/config.alloy recreates Alloy (compose calls: $(tr '\n' '|' <"${AL_SB}/docker.log"))"
+fi
+
+al_run "$DEPLOY" "$AL_C" "$OBS"
+if al_upped && ! al_forced; then
+  pass "#408: a deploy that leaves config.alloy alone starts Alloy without recreating it"
+else
+  fail "#408: a deploy that leaves config.alloy alone starts Alloy without recreating it (compose calls: $(tr '\n' '|' <"${AL_SB}/docker.log"))"
+fi
+
+al_run "$DEPLOY" "$AL_C" ""
+if grep -q alloy "${AL_SB}/docker.log"; then
+  fail "#408: without the observability overlay the deploy never names alloy"
+else
+  pass "#408: without the observability overlay the deploy never names alloy"
+fi
+
+# Roll back from B2/C2 to A1: the configuration goes back, so Alloy must too.
+printf '%s' "$AL_A" >"${AL_SB}/host/.previous-revision"
+al_run "$ROLLBACK" "" "$OBS"
+if al_forced; then
+  pass "#408: a rollback across a config.alloy change recreates Alloy"
+else
+  fail "#408: a rollback across a config.alloy change recreates Alloy (compose calls: $(tr '\n' '|' <"${AL_SB}/docker.log"))"
+fi
+if grep -q -- '--remove-orphans' "${AL_SB}/docker.log"; then
+  fail "rollback.sh does not pass --remove-orphans (it deletes Alloy when the overlay is not exported)"
+else
+  pass "rollback.sh does not pass --remove-orphans (it deletes Alloy when the overlay is not exported)"
+fi
+
+# --- #408 F-01: a hand-run rollback derives the overlay like deploy-dev -------
+
+al_tree() { git -C "${AL_SB}/host" rev-parse "$1:docker/alloy"; }
+al_marker() { cat "${AL_SB}/host/.alloy-config-tree" 2>/dev/null; }
+# Host at $1, verified, with Alloy running $2's configuration.
+al_reset() {
+  git_q -C "${AL_SB}/host" checkout --detach "$1"
+  printf '%s' "$1" >"${AL_SB}/host/.deployed-revision"
+  printf '%s' "$(al_tree "$2")" >"${AL_SB}/host/.alloy-config-tree"
+}
+
+al_reset "$AL_B" "$AL_B"
+printf '%s' "$AL_A" >"${AL_SB}/host/.previous-revision"
+printf 'PROMETHEUS_REMOTE_WRITE_URL=http://prom.invalid/api/v1/write\n' >"${AL_SB}/host/.env.dev"
+al_run "$ROLLBACK" "" ""
+if al_forced && [[ "$(al_marker)" == "$(al_tree "$AL_A")" ]]; then
+  pass "#408 F-01: plain rollback.sh enables the overlay from the host env file and recreates Alloy"
+else
+  fail "#408 F-01: plain rollback.sh enables the overlay from the host env file and recreates Alloy ($(tr '\n' '|' <"${AL_SB}/out"))"
+fi
+
+al_reset "$AL_B" "$AL_B"
+: >"${AL_SB}/host/.env.dev"
+ALLOY_CONTAINER=0123abcd al_run "$ROLLBACK" "" ""
+if grep -q '::warning::an Alloy container exists' "${AL_SB}/out" \
+   && grep -q 'up -d --no-deps --force-recreate alloy' "${AL_SB}/out" && ! al_upped; then
+  pass "#408 F-01: overlay off but an Alloy container exists — warns with the recreate command"
+else
+  fail "#408 F-01: overlay off but an Alloy container exists — warns with the recreate command ($(tr '\n' '|' <"${AL_SB}/out"))"
+fi
+
+# --- #408 F-02: a tunnel-host rollback never recreates the access tunnel ------
+
+al_reset "$AL_B" "$AL_B"
+al_run "$ROLLBACK" "" "$OBS"
+if grep -qE ' up -d --no-recreate cloudflared$' "${AL_SB}/docker.log" \
+   && grep -qE ' up -d api worker$' "${AL_SB}/docker.log" \
+   && ! grep -qE ' up -d$' "${AL_SB}/docker.log"; then
+  pass "#408 F-02: tunnel rollback brings cloudflared up --no-recreate and names api worker"
+else
+  fail "#408 F-02: tunnel rollback brings cloudflared up --no-recreate and names api worker ($(tr '\n' '|' <"${AL_SB}/docker.log"))"
+fi
+
+al_reset "$AL_B" "$AL_B"
+AL_EDGE=docker/docker-compose.edge-caddy.yml al_run "$ROLLBACK" "" ""
+if grep -qE ' up -d$' "${AL_SB}/docker.log" && ! grep -q -- '--no-recreate' "${AL_SB}/docker.log"; then
+  pass "#408 F-02: Caddy-edge (production) rollback keeps its unscoped 'up -d' unchanged"
+else
+  fail "#408 F-02: Caddy-edge (production) rollback keeps its unscoped 'up -d' unchanged ($(tr '\n' '|' <"${AL_SB}/docker.log"))"
+fi
+
+# --- #408 F-04: an Alloy failure never fails the deploy -----------------------
+
+al_nonfatal() {
+  local name="$1" code
+  shift
+  al_reset "$AL_A" "$AL_A"
+  ( for kv in "$@"; do export "${kv?}"; done; al_run "$DEPLOY" "$AL_B" "$OBS" )
+  code=$?
+  if [[ "$code" -eq 0 && "$(cat "${AL_SB}/host/.deployed-revision")" == "$AL_B" ]] \
+     && grep -q '::warning::' "${AL_SB}/out" \
+     && [[ "$(al_marker)" == "$(al_tree "$AL_A")" ]]; then
+    pass "#408 F-04: ${name} — deploy exits 0, B recorded, warning printed, marker unchanged"
+  else
+    fail "#408 F-04: ${name} — exit ${code}, deployed $(cat "${AL_SB}/host/.deployed-revision"), marker $(al_marker) ($(tr '\n' '|' <"${AL_SB}/out"))"
+  fi
+}
+al_nonfatal "the 'up ... alloy' call fails" ALLOY_UP_FAIL=1
+al_nonfatal "Alloy exits after the recreate" ALLOY_STATE=exited
+al_nonfatal "Alloy is absent after the recreate" ALLOY_STATE=absent
+
+# The verify-failure rollback branch: B's worker never comes up, the deploy
+# rolls back to A, and Alloy — found on B's configuration — follows it back.
+al_reset "$AL_A" "$AL_B"
+( export WORKER_OK_AFTER=2; al_run "$DEPLOY" "$AL_B" "$OBS" )
+code=$?
+if [[ "$code" -ne 0 && "$(cat "${AL_SB}/host/.deployed-revision")" == "$AL_A" ]] && al_forced \
+   && [[ "$(al_marker)" == "$(al_tree "$AL_A")" ]]; then
+  pass "#408 F-04: the deploy's own rollback branch recreates Alloy on A's configuration"
+else
+  fail "#408 F-04: the deploy's own rollback branch recreates Alloy on A's configuration (exit ${code}; $(tr '\n' '|' <"${AL_SB}/out"))"
+fi
+
 echo
 if [[ "$FAILED" -eq 0 ]]; then
   echo "All deploy-vps tests passed."
