@@ -203,6 +203,17 @@ jobs:
       - name: the Access SSH deploy path is wired to what cloudflared reads
         run: ./scripts/ci/access-ssh.test.sh
 
+      # GoGo-Infra#174 and #176 were the same missing line twice: a path the app
+      # association files claim, with no Worker route. Such a path never reaches
+      # the Worker — it goes to the DNS placeholder origin and answers 522 after
+      # ~20 s, logging nothing, because there is nothing to log.
+      - name: every claimed deep-link path has a share-link route
+        run: ./scripts/ci/share-link-routes.test.sh
+
+      # The guard above is only worth something if it refuses a broken tree.
+      - name: the share-link route guard catches what it claims to
+        run: ./scripts/ci/share-link-routes.guard.test.sh
+
       # The provider probe's whole value is the reason code it reports. Routes
       # errors arrive as a JSON array, and reading them as an object turned a
       # live BILLING_DISABLED into "no machine-readable reason" — a confident
