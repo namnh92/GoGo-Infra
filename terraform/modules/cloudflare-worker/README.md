@@ -87,7 +87,9 @@ that does not exist**, and the work is not in this repository:
    never an error, because an invite that works in the app must not look broken on the web.
 
 What the edge rejects today without any API: a code outside GoGo-BE's join bounds (base64url,
-10–128 characters) is a `404`. That is a syntax check, not a validity check, and the page says so.
+10–128 characters) is a `404`. That is a syntax check, not a validity check: a well-formed code
+that is expired, revoked or unknown gets the same page as a valid one. The page claims nothing about
+the code — it says only that the app checks the invite when it opens.
 
 **Owner decision needed first** (whether to check at all), then a GoGo-BE issue for the contract.
 Until both exist, the page is correct as written: it makes no claim it cannot support.

@@ -46,22 +46,113 @@ done
 
 # --- what the association files claim --------------------------------------
 # PATHS=("/l/*" "/r/*" "/plans/*" "/places/*" "/room/*")
-paths_line="$(grep -m1 -E '^PATHS=\(' "$WELL_KNOWN")" || {
+#
+# The whole array, from `PATHS=(` to its closing `)`, however many lines it
+# spans. Reading only the opening line would let an entry added on a
+# continuation line go unchecked — the exact drift this guard exists for. Every
+# token must be a quoted "/<segment>/*"; anything else (a comment, a variable,
+# an unquoted word) is refused rather than skipped, so a shape this parser does
+# not understand fails loudly instead of shrinking the list.
+grep -qE '^PATHS=\(' "$WELL_KNOWN" || {
   echo "no PATHS=( line in ${WELL_KNOWN} — the claim list moved" >&2
   exit 1
 }
-claimed="$(printf '%s\n' "$paths_line" | tr ' ' '\n' | sed -nE 's#.*"/([^/"]+)/\*".*#\1#p' | sort -u)"
+paths_body="$(awk '
+  /^PATHS=\(/ { on = 1; sub(/^PATHS=\(/, "") }
+  on {
+    done = index($0, ")") > 0
+    if (done) sub(/\).*$/, "")
+    print
+    if (done) exit
+  }
+' "$WELL_KNOWN")"
 
-[[ -n "$claimed" ]] || { echo "parsed no prefixes out of: ${paths_line}" >&2; exit 1; }
+claimed=""
+unparsed=""
+for token in $paths_body; do
+  if [[ "$token" =~ ^\"/([A-Za-z0-9_.-]+)/\*\"$ ]]; then
+    claimed="${claimed}${BASH_REMATCH[1]}"$'\n'
+  else
+    unparsed="${unparsed} ${token}"
+  fi
+done
+claimed="$(printf '%s' "$claimed" | grep -vE '^$' | sort -u)"
+
+if [[ -n "$unparsed" ]]; then
+  bad "the claim list parses completely" \
+    "tokens in PATHS=( ... ) that are not a quoted \"/<segment>/*\":${unparsed}"
+else
+  ok "the claim list parses completely"
+fi
+[[ -n "$claimed" ]] || { echo "parsed no prefixes out of PATHS in ${WELL_KNOWN}" >&2; exit 1; }
 
 # --- what Terraform routes -------------------------------------------------
-# Literal patterns, e.g. pattern = "${var.host}/l/*"
-literal="$(grep -oE 'pattern[[:space:]]*=[[:space:]]*"\$\{var\.host\}/[A-Za-z0-9_.-]+/\*"' "$MAIN_TF" \
-  | sed -E 's#.*/([A-Za-z0-9_.-]+)/\*"#\1#' | sort -u)"
+# Each `resource "cloudflare_workers_route"` block is read as a whole: its
+# pattern, its for_each and the script it binds. A route counts only when it is
+# bound to this Worker and its pattern is one of the shapes below; any other
+# shape is a failure, never a silent skip. Commented lines are ignored, so a
+# commented-out pattern routes nothing.
+#
+#   "${var.host}/<segment>/*"        literal named route
+#   "${var.host}/${each.value}/*"    with for_each = toset(["a", "b"])
+#   "${var.host}/.well-known/*"      association files
+#   "${var.host}/"                   bare host
+route_report="$(awk '
+  function flush(   r, n, i, items, v) {
+    if (name == "") return
+    if (script != "cloudflare_workers_script.share_link.script_name") {
+      print "BAD " name " bound to \"" script "\", not cloudflare_workers_script.share_link.script_name"
+    } else if (pattern == "") {
+      print "BAD " name " has no pattern"
+    } else if (pattern == "${var.host}/.well-known/*" || pattern == "${var.host}/") {
+      print "FIXED " name
+    } else if (pattern == "${var.host}/${each.value}/*") {
+      if (match(foreach, /^toset\(\[.*\]\)$/)) {
+        r = substr(foreach, 8, length(foreach) - 9)
+        n = split(r, items, ",")
+        for (i = 1; i <= n; i++) {
+          v = items[i]; gsub(/[ \t]/, "", v)
+          if (v ~ /^"[A-Za-z0-9_.-]+"$/) { gsub(/"/, "", v); print "EACH " name " " v }
+          else print "BAD " name " for_each item " v " is not a quoted segment"
+        }
+      } else {
+        print "BAD " name " uses each.value without for_each = toset([\"...\"]): " foreach
+      }
+    } else if (pattern ~ /^\$\{var\.host\}\/[A-Za-z0-9_.-]+\/\*$/ && foreach == "") {
+      v = pattern; sub(/^\$\{var\.host\}\//, "", v); sub(/\/\*$/, "", v)
+      print "ROUTE " name " " v
+    } else {
+      print "BAD " name " has an unsupported pattern: " pattern
+    }
+    name = ""
+  }
+  /^resource "cloudflare_workers_route" "[^"]+"/ {
+    name = $3; gsub(/"/, "", name); pattern = ""; script = ""; foreach = ""; next
+  }
+  name != "" && /^}/ { flush(); next }
+  name != "" {
+    line = $0
+    if (line ~ /^[ \t]*(#|\/\/)/) next
+    sub(/[ \t]+#.*$/, "", line)
+    if (line ~ /^[ \t]*pattern[ \t]*=/) {
+      sub(/^[^=]*=[ \t]*"/, "", line); sub(/"[ \t]*$/, "", line); pattern = line
+    } else if (line ~ /^[ \t]*script[ \t]*=/) {
+      sub(/^[^=]*=[ \t]*/, "", line); sub(/[ \t]*$/, "", line); script = line
+    } else if (line ~ /^[ \t]*for_each[ \t]*=/) {
+      sub(/^[^=]*=[ \t]*/, "", line); sub(/[ \t]*$/, "", line); foreach = line
+    }
+  }
+' "$MAIN_TF")"
 
-# The for_each set behind the `${var.host}/${each.value}/*` pattern.
-each_set="$(sed -nE 's/^[[:space:]]*for_each[[:space:]]*=[[:space:]]*toset\(\[(.*)\]\).*/\1/p' "$MAIN_TF" \
-  | tr -d '" ' | tr ',' '\n' | grep -E '^[A-Za-z0-9_.-]+$' | sort -u)"
+route_bad="$(sed -nE 's/^BAD //p' <<<"$route_report")"
+if [[ -n "$route_bad" ]]; then
+  bad "every route is bound to the Worker with a supported pattern" "$route_bad"
+else
+  ok "every route is bound to the Worker with a supported pattern"
+fi
+
+literal="$(sed -nE 's/^ROUTE [^ ]+ //p' <<<"$route_report" | sort -u)"
+each_set="$(sed -nE 's/^EACH [^ ]+ //p' <<<"$route_report" | sort -u)"
 
 routed="$(printf '%s\n%s\n' "$literal" "$each_set" | grep -vE '^$' | sort -u)"
 
