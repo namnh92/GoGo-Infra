@@ -43,19 +43,19 @@ if [[ "$code" != 200 ]]; then
   exit 1
 fi
 
-# An absent field reads as "missing", never as false.
-read -r enabled previews < <(jq -r \
-  '[(.result.enabled | if . == null then "missing" else tostring end),
-    (.result.previews_enabled | if . == null then "missing" else tostring end)] | @tsv' \
-  "$body" 2>/dev/null) || {
-  echo "::error::unreadable response for ${script_name} subdomain setting"
-  exit 1
-}
-
-if [[ "$enabled" == false && "$previews" == false ]]; then
+# The verdict: exactly one JSON document, both fields boolean false. Slurping
+# makes trailing garbage a parse error and a second document a length of 2;
+# `== false` is type-strict, so the string "false" does not pass.
+if jq -s -e 'length == 1
+    and .[0].result.enabled == false
+    and .[0].result.previews_enabled == false' "$body" >/dev/null 2>&1; then
   echo "workers.dev and preview URLs are off for ${script_name}"
   exit 0
 fi
 
-echo "::error::${script_name} answers outside Access: workers.dev enabled=${enabled}, previews_enabled=${previews}. Turn both off (Workers → Settings → Domains & Routes), then re-run."
+# Only for the message. JSON strings keep their quotes, so "false" (string)
+# and false (boolean) read differently in the log.
+values="$(jq -r '"enabled=\(.result.enabled | tojson), previews_enabled=\(.result.previews_enabled | tojson)"' \
+  "$body" 2>/dev/null | head -1)" || true
+echo "::error::${script_name} answers outside Access or the response is unreadable: ${values:-unparseable body}. Turn workers.dev and preview URLs off (Workers → Settings → Domains & Routes), then re-run."
 exit 1

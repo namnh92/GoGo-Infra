@@ -59,6 +59,9 @@ expect 1 'both on fails' 200 '{"success":true,"result":{"enabled":true,"previews
 expect 1 'missing previews_enabled fails' 200 '{"success":true,"result":{"enabled":false}}'
 expect 1 'null result fails' 200 '{"success":false,"result":null}'
 expect 1 'non-JSON body fails' 200 'not json'
+expect 1 'string "false" is not boolean false' 200 '{"result":{"enabled":"false","previews_enabled":"false"}}'
+expect 1 'trailing garbage after an off object fails' 200 '{"result":{"enabled":false,"previews_enabled":false}} garbage'
+expect 1 'second object after an off object fails' 200 '{"result":{"enabled":false,"previews_enabled":false}}{"result":{"enabled":true}}'
 expect 1 'token without read access fails' 403 '{"success":false,"errors":[{"code":10000}]}'
 expect 1 'unknown script fails' 404 '{"success":false}'
 expect 1 'curl failure fails' '' '' 7
