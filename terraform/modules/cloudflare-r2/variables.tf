@@ -50,6 +50,15 @@ variable "lifecycle_rules" {
       prefix               = "imports/tmp/"
       expire_after_seconds = 604800
     },
+    # GoGo-BE#256 / ADR-0031 backstop. An export artifact lives 24h after it is
+    # ready and the worker sweep deletes it; this only catches what the sweep
+    # missed (a crash between upload and the database row, a dead-lettered
+    # cleanup). Two days, so it never races the sweep on a live artifact.
+    {
+      id                   = "expire-privacy-exports"
+      prefix               = "privacy-exports/"
+      expire_after_seconds = 172800
+    },
   ]
 
   validation {
