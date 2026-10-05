@@ -17,9 +17,8 @@ resource "cloudflare_r2_bucket" "this" {
 }
 
 # Lifecycle rules keep temporary data from accumulating (spec §23):
-#   tmp/*              -> 24h
-#   imports/tmp/*      -> 7d
-#   privacy-exports/*  -> 2d (secure-export backstop, GoGo-BE#256)
+#   tmp/*          -> 24h
+#   imports/tmp/*  -> 7d
 # Permanent prefixes (places/, users/, reviews/) never get an expiry rule.
 #
 # Guarded by a flag because lifecycle management moved between provider

@@ -21,7 +21,7 @@ Object storage buckets for assets. Implements INF-010.
 | Bucket | Holds | Read path |
 | --- | --- | --- |
 | `gogo-<env>-public` | `places/`, `banners/` | `https://assets-<env>.gogo.id.vn/<key>`, cached at the edge, immutable |
-| `gogo-<env>-assets` | `users/`, `reviews/`, `rooms/`, `imports/`, `tmp/`, `privacy-exports/` | presigned GET signed per request by GoGo-BE |
+| `gogo-<env>-assets` | `users/`, `reviews/`, `rooms/`, `imports/`, `tmp/` | presigned GET signed per request by GoGo-BE |
 
 Nothing that is not meant to be public may be written to the public bucket, and "be careful
 with prefixes" is not a control. The controls are the bucket split, separate credentials, and
@@ -41,7 +41,6 @@ rooms/{roomId}/...
 imports/{jobId}/...
 tmp/...                  # expires after 24h
 imports/tmp/...          # expires after 7d
-privacy-exports/...      # encrypted export artifacts; worker sweep at 24h, expiry backstop 2d (GoGo-BE#256)
 ```
 
 ## Credentials
