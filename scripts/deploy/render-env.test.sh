@@ -45,6 +45,11 @@ if [[ "$name" == *"/${AWS_STUB_PATH}" ]]; then
       echo "An error occurred (ThrottlingException) when calling the GetParameter operation: Rate exceeded" >&2
       exit 254
       ;;
+    collision)
+      # A different error whose text happens to contain the token.
+      echo "An error occurred (AccessDeniedException) when calling the GetParameter operation: User is not authorized on resource arn:aws:ssm:x:1:parameter/ParameterNotFound" >&2
+      exit 254
+      ;;
   esac
   exit 0
 fi
@@ -78,7 +83,7 @@ else
   fail "an absent optional parameter renders nothing (exit ${status}): $(cat "$tmp/stderr")"
 fi
 
-for mode in denied throttled; do
+for mode in denied throttled collision; do
   run "$mode"
   status=$?
   if [[ $status -ne 0 ]] && [[ ! -e "$tmp/out.env" ]] \
@@ -87,7 +92,7 @@ for mode in denied throttled; do
   else
     fail "an unreadable optional parameter (${mode}) aborts the deploy (exit ${status}, file $([[ -e "$tmp/out.env" ]] && echo present || echo absent))"
   fi
-  if grep -qE 'AccessDenied|Throttling|Rate exceeded' "$tmp/stderr"; then
+  if grep -qE 'AccessDenied|Throttling|Rate exceeded|not authorized' "$tmp/stderr"; then
     fail "the AWS error text (${mode}) stays out of the log"
   else
     ok "the AWS error text (${mode}) stays out of the log"

@@ -53,7 +53,10 @@ while IFS=$'\t' read -r path env_var _type required _namespace; do
   if value="$(aws ssm get-parameter --name "${prefix}/${path}" --with-decryption --query 'Parameter.Value' --output text 2>"$aws_err")"; then
     printf '%s=%s\n' "$env_var" "$value" >>"$OUT_FILE"
     unset value
-  elif grep -q 'ParameterNotFound' "$aws_err"; then
+  # Matched on the error-code field the AWS CLI prints, anchored to the
+  # GetParameter operation — never a bare substring, which an ARN or a message
+  # in a different error could contain (review F-01).
+  elif grep -qE '^An error occurred \(ParameterNotFound\) when calling the GetParameter operation' "$aws_err"; then
     if [[ ",${required}," == *",${ENVIRONMENT},"* ]]; then
       missing+=("${prefix}/${path}")
     fi
