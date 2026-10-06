@@ -89,6 +89,14 @@ jobs:
           echo "::add-mask::${gh}"
           echo "CMS_READ_TOKEN=${gh}" >> "$GITHUB_ENV"
 
+      # This repository's own checks, under infra/. Before the CMS checkout and
+      # in its own directory, so neither checkout cleans the other.
+      - name: check out GoGo-Infra deploy checks
+        uses: actions/checkout@v4
+        with:
+          path: infra
+          sparse-checkout: scripts/deploy
+
       # Checked out on both paths, including rollback: `wrangler versions deploy`
       # reads the Worker name from wrangler.jsonc, and the repository's own
       # pinned wrangler is the one that should talk to the account. Only the
@@ -210,6 +218,14 @@ jobs:
               ;;
             *) echo "::warning::unexpected HTTP ${code} from ${CMS_URL}" ;;
           esac
+
+      # The other door. `versions upload` / `versions deploy` never apply
+      # wrangler.jsonc's `workers_dev` / `preview_urls`, so a workers.dev or
+      # preview URL switched on in the dashboard would survive every deploy and
+      # serve the console outside Access. Asserts the live setting; a token that
+      # cannot read it fails rather than skips (GoGo-Infra#182).
+      - name: no workers.dev or preview URL beside Access
+        run: ./infra/scripts/deploy/check-worker-subdomain.sh "${CMS_SCRIPT_NAME}"
 
       - name: summary
         if: always()

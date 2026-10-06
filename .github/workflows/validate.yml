@@ -162,6 +162,11 @@ jobs:
       - name: tfvars parser tests
         run: ./scripts/lib/config.test.sh
 
+      # The CMS deploy's only guard on workers.dev / preview URLs. A check that
+      # cannot turn red is a door left open with a sign saying it is shut.
+      - name: CMS workers.dev check fails when it should
+        run: ./scripts/deploy/check-worker-subdomain.test.sh
+
       # INF-024 acceptance is "no automation depends on OAuth". That was prose
       # in docs/accounts.md until this step; prose does not survive the next
       # person in a hurry.
