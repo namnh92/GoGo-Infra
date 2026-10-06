@@ -409,7 +409,9 @@ that passes Access but has no row in `admin_users` gets a 403 from GoGo-BE, not 
 
 ## Access-only CMS on an environment
 
-GoGo-BE ADR-0032 (GoGo-BE#679). DEV runs like this. The password door
+GoGo-BE ADR-0032 (GoGo-BE#679). DEV ran like this on 2026-10-06 and was rolled back the same day:
+closing the door for every role locked out staff whose addresses are not on the Access allow list.
+DEV now runs the narrower mode in the next section. The password door
 (`cms/password-login-enabled`) is a separate switch from SSO (`access/*`). Each step below leaves a
 working door. Do not move to the next step until the gate on this one has been observed.
 
@@ -456,6 +458,52 @@ Any other error aborts the deploy, and the previous revision keeps running (GoGo
 **What it does not protect against.** An outage at Access or its identity provider makes
 `cms-<env>` unreachable whatever this switch says. Re-opening the password door restores API and
 script access, not the browser console.
+
+## `super_admin` through Access only, other roles by password
+
+GoGo-BE ADR-0034 (GoGo-BE#687). DEV runs like this: `cms/password-login-enabled` stays `true`, and
+`cms/super-admin-sso-only` is `true`. The super admin's password login answers
+`403 SUPER_ADMIN_SSO_ONLY`, and its password sessions stop refreshing. `editor`, `moderator` and
+`ops_admin` keep signing in with the passwords the super admin gave them. `GET /v1/cms/auth/methods`
+reports `superAdminSsoOnly`.
+
+| Step | Action | Doors after (super admin / others) | Gate |
+| --- | --- | --- | --- |
+| R0 | Record the baseline from the previous section's R0 list. Capture one super admin password session for the refresh check (keep the token `0600` in a scratch file, delete it after the check) | password + SSO / password + SSO | — |
+| R1 | Deploy a GoGo-BE that contains ADR-0034 (`deploy-dev`) | same | `methods` → `{password:true, accessSso:true, superAdminSsoOnly:false}`; super admin password login 201 |
+| R2 | Deploy a GoGo-CMS that renders `superAdminSsoOnly` (`deploy-cms-dev`) | same | sign-in screen unchanged |
+| R3a | Merge the manifest row `cms/super-admin-sso-only` (this repository). That merge is the **Infra floor** | same | `validate.sh dev` lists the path as declared, optional, absent |
+| R3b | **Prove the SSO door first.** (a) In a **fresh** browser session, sign in through Access and open a super-admin page. (b) The integration harness with `CMS_AUTH=sso` and a fresh `CF_ACCESS_TOKEN` reaches its first `/cms/*` call | same | **all of:** `GET /v1/cms/auth/admins` 200 inside the SSO session; a matching `admin.login.sso` row for the super admin in the same minute; (b) passes; the BE and CMS revisions from R1/R2 are still the ones running. If any is missing, do not go to R4 |
+| R4 | `put.sh <env> cms/super-admin-sso-only true` → `deploy-dev` | SSO / password + SSO | `methods` → `superAdminSsoOnly:true`; super admin login with the correct and with a wrong password → both 403 `SUPER_ADMIN_SSO_ONLY` (first check that the account is not locked out and the runner's IP is under the login rate limit; otherwise a 429 is BLOCKED, not FAIL); the R0 session fails to refresh (401 `SESSION_REVOKED`); another role signs in by password in the browser; SSO still opens a super-admin page; the R0 list returns the same statuses |
+
+The SSM write in R4 needs its own order from the owner, every time.
+
+**Rollback.** `put.sh <env> cms/super-admin-sso-only false`, then `deploy-dev`. Then confirm from
+outside that the super admin's password login answers 201. This holds only while
+`cms/password-login-enabled` is `true`; otherwise set that to `true` as well. This is one action, with no console
+deploy. Revoked sessions stay revoked.
+
+**Compatibility while the value is `true`.** Each of these floors, once crossed, rolls back the
+decision. Record it as a rollback.
+
+- **GoGo-BE** below the first revision with ADR-0034: the API ignores the variable and re-opens the
+  super admin's password door.
+- **GoGo-Infra** below the R3a merge: `deploy-dev` renders the env from the manifest of the ref it
+  runs on. An older manifest does not render the variable, and the API reads `false`. Dispatch
+  `deploy-dev` only from a ref at or above R3a.
+- **GoGo-CMS** below the first build that reads `methods` (ADR-0032's minimum SSO-capable build):
+  that build has no SSO button. Re-open the door and check that it works first.
+
+**Super admin address.** Its `admin_users.email` and `cms/seed-admin-email` must be addresses the
+Access policy admits. Change the address only while `cms/super-admin-sso-only` is `false`, and
+`cms/password-login-enabled` is `true`. To recover from a wrong address: set
+`cms/super-admin-sso-only` to `false` **and** `cms/password-login-enabled` to `true`, deploy, and
+check that the super admin's password login answers 201. Then correct the address, and restore the
+intended values. Turning off only the first switch does not help while the global door is closed.
+
+**Interaction with the global switch.** Setting `cms/password-login-enabled` to `false` closes the
+password door for every role again, the super admin included. It re-locks out staff who are not on
+the Access allow list, and that is what was rolled back on 2026-10-06.
 
 ## Grafana Cloud (INF-054)
 
