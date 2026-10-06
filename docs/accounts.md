@@ -5,9 +5,9 @@ three things, and none of them are cosmetic.
 
 ## 1. The GitHub account is the root of trust
 
-Neon, Upstash, OneSignal, Tenjin and Cloudflare are all reachable by whoever controls the
+Neon, Upstash, OneSignal, Tenjin, Cloudflare and Sentry are all reachable by whoever controls the
 GitHub identity they were created with. Compromise of that one account is compromise of the
-database, the queue, push delivery, attribution and DNS at once — there is no second factor
+database, the queue, push delivery, attribution, DNS and error monitoring at once — there is no second factor
 sitting between GitHub and the provider consoles.
 
 Required, not optional:
@@ -36,6 +36,7 @@ automation credential be rotated without touching anyone's login.
 | Google Cloud | Google account | server API keys, split per API | `/gogo/<env>/backend/google/*` |
 | Google Cloud (client) | Google account | Maps SDK keys, one per platform — ship in the app binary, restricted by app id | `/gogo/<env>/mobile/google/*` |
 | Grafana Cloud | GitHub OAuth | access policy tokens, one per scope (`metrics:write` for the collector, `metrics:read` for the admin API). **Retired 2026-09-05** — ADR-0007 moved the DEV store self-hosted on 2026-09-04; tokens revoked at the provider after the shared end-to-end gate passed, SSM parameters and manifest entries removed (see `secrets.md` rotation register) | `/gogo/<env>/backend/observability/grafana-*` |
+| Sentry | GitHub OAuth | DSN per project (console → project → Settings → Client Keys). Config, not a credential — it ships in clients anyway; no API token exists yet (the cost collector's org token is #389, a separate credential). Rotate: one client key serves every environment, so create a new key on the project, then `put.sh <env> observability/sentry-dsn`, redeploy and confirm an event arrives for **every** environment that holds the old DSN — only then disable the old key, or any environment still on it goes silent | `/gogo/<env>/backend/observability/sentry-dsn` |
 | Self-hosted observability | none — LAN host | Prometheus basic auth, one credential for read and write | `/gogo/<env>/backend/observability/prometheus-*` |
 | AWS | IAM / SSO | GitHub OIDC, no static keys | n/a — roles are assumed, nothing is stored |
 
@@ -137,6 +138,7 @@ Fill in as accounts are created. "Owner" is a person; "backup" must not be the s
 | Tenjin | | GitHub OAuth | | **none** | | |
 | Google Cloud | project number `186055730568` — every DEV server key | Google | | **none** | | |
 | Grafana Cloud | Free stack `prometheus-prod-37-prod-ap-southeast-1`, instance id `3553140` — dev and prod share it via an `env` label. Superseded for DEV by ADR-0007 on 04/09/2026; tokens revoked 05/09/2026 after cutover | GitHub OAuth | | **none** | | 01/09/2026 |
+| Sentry | org `gogo-fe` (region US), team `gogo`, project `gogo-be` (`node-nestjs`, id `4512201628254209`) — one project for api and worker, every environment; the event `environment` tag is meant to separate DEV from prod, but does not yet: GoGo-BE derives it from `NODE_ENV`, which `render-env.sh` sets to `production` in every environment — until that is fixed in GoGo-BE, DEV events arrive labelled `production`. ADR-0006 budgets the Free plan (5k errors/month); plan not yet confirmed in the console | GitHub OAuth | `namnh92` (owner stated 2026-10-05) | **none** | | 2026-10-05 |
 | AWS | account `477020169756` | IAM / SSO | | **none** | | |
 
 The account identifiers are filled from `config/global.tfvars` and `config/dev.tfvars`. The
