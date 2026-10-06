@@ -46,11 +46,13 @@ openssl rand -base64 48 | tr -d '\n=' | cut -c1-48
 terraform -chdir=terraform/environments/dev apply
 ```
 
-**Step 3 before step 4, always.** `inherit` on a script with no such binding is
-an error, so applying first fails. And between 3 and 4 there is a window where
-an unrelated `terraform apply` would *remove* the binding, because Terraform
-emits it only when the flag says it exists. Keep the two adjacent, and never
-leave the flag false once the secret exists.
+**Since GoGo-Infra#172, step 3 is what matters; step 4 is bookkeeping.** The
+script ignores bindings once it exists, and `keep_bindings = ["secret_text",
+"secret_key"]` keeps a secret Terraform never saw across every later code
+upload — so no apply removes the binding, whatever the flag says. Still set the
+flag true so the tfvars say what the Worker holds, and because the flag does
+shape the upload that *creates* a script: never true for an environment whose
+script does not exist yet (`inherit` with nothing to inherit is an error).
 
 The API side needs no separate step: `SHARE_LINK_EDGE_AUTH_TOKEN` is rendered
 from the same SSM row by `render-env.sh` on the next deploy.
@@ -75,8 +77,9 @@ the limit is coarse. In the other order the window is identical in effect, so
 either is survivable; Worker-first is the convention because the Worker is the
 faster of the two to change back.
 
-No Terraform run is involved in a rotation. The flag is already true, the
-binding name has not changed, and `inherit` keeps whatever the Worker holds.
+No Terraform run is involved in a rotation. Terraform ignores the Worker's
+bindings (GoGo-Infra#172), and `keep_bindings` keeps the secret across code
+uploads.
 
 ## Rollback
 
@@ -88,13 +91,14 @@ Three failures, three answers:
 2. **Wrong value in SSM.** `./scripts/secrets/get.sh <env> share-link/worker-auth-token`
    shows version and modified time without printing the value; SSM keeps prior
    versions, so an operator can restore one and re-run step 3.
-3. **The feature needs to be switched off entirely.** Set
-   `share_edge_auth_token_provisioned = false`, apply — the binding is dropped,
-   the Worker stops sending edge headers, and the API returns to keying the
-   share-link limit on the connecting address. This is the pre-SEC-004 behaviour
-   and it is safe: no error, no dropped clicks, just a coarser limit. Optionally
-   `wrangler secret delete EDGE_AUTH_TOKEN --name <worker>` afterwards to remove
-   the value.
+3. **The feature needs to be switched off entirely.**
+   `wrangler secret delete EDGE_AUTH_TOKEN --name <worker>` — the binding is
+   gone, the Worker stops sending edge headers, and the API returns to keying
+   the share-link limit on the connecting address. This is the pre-SEC-004
+   behaviour and it is safe: no error, no dropped clicks, just a coarser limit.
+   Then set `share_edge_auth_token_provisioned = false` so the tfvars match.
+   Flipping the flag and applying no longer removes anything: Terraform ignores
+   bindings on an existing script (GoGo-Infra#172).
 
 Nothing here rolls back by reverting a commit alone: the Worker binding is live
 state, not configuration.
@@ -150,8 +154,8 @@ manifest row is still optional everywhere.
 
 What changed (GoGo-Infra#153): this used to say the Worker never calls the API,
 because `api_origin` was empty. DEV's edge does call it now —
-`API_ORIGIN` is set in Cloudflare and Terraform carries the binding with
-`inherit` rather than holding a copy. The resolve endpoint is `@Public()`, so
+`API_ORIGIN` is set in Cloudflare and Terraform does not hold a copy (since
+GoGo-Infra#172 it ignores every binding on the existing script). The resolve endpoint is `@Public()`, so
 the edge works without a token; what the token buys is client-IP forwarding, and
 without it every visitor shares one rate-limit bucket at the API. That makes
 putting the token the next thing to do on DEV, not a thing blocked on something

@@ -219,6 +219,12 @@ jobs:
       - name: the share-link route guard catches what it claims to
         run: ./scripts/ci/share-link-routes.guard.test.sh
 
+      # GoGo-Infra#172 (option B). Cloudflare owns the Worker's binding values:
+      # without ignore_changes every plan carries a phantom API_ORIGIN diff, and
+      # without keep_bindings a code upload drops a secret Terraform never saw.
+      - name: share-link Worker bindings stay Cloudflare-owned
+        run: ./scripts/ci/share-link-bindings.test.sh
+
       # The provider probe's whole value is the reason code it reports. Routes
       # errors arrive as a JSON array, and reading them as an object turned a
       # live BILLING_DISABLED into "no machine-readable reason" — a confident

@@ -49,6 +49,10 @@ variable "api_origin_provisioned" {
     the variable in Cloudflare first and flips this to true afterwards. While it
     is false the Worker still serves the association files; only `/l/{slug}` is
     dark, and that failure is visible on the first click rather than silent.
+
+    GoGo-Infra#172: like every binding, this only shapes the upload that
+    creates the script; afterwards bindings are ignored and Cloudflare holds
+    the value.
   DESC
   type        = bool
   default     = false
@@ -61,6 +65,9 @@ variable "tenjin_tracking_template" {
     LNK-BE-003). Empty disables that fallback; sharing keeps working without
     attribution (FR-LINK-006). The API-side value is SSM
     tenjin/tracking-url-template.
+
+    GoGo-Infra#172: initial value only. It is sent when the script is created;
+    afterwards Cloudflare owns the running value (ignore_changes on bindings).
   DESC
 
   type    = string
@@ -74,6 +81,9 @@ variable "fallback_url" {
     ?link=<canonical>. Empty means a plain uncached text answer — never a
     redirect back to the canonical URL, which would loop. No value exists yet:
     GoGo-WebApp is pending and there is no App Store Connect app.
+
+    GoGo-Infra#172: initial value only. It is sent when the script is created;
+    afterwards Cloudflare owns the running value (ignore_changes on bindings).
   DESC
 
   type    = string
@@ -116,6 +126,10 @@ variable "edge_auth_token_provisioned" {
     this true and apply. `inherit` on a script that has no such binding yet is
     an error, and an apply while this is false removes a binding that exists.
     docs/share-link-edge-auth.md is the runbook.
+
+    GoGo-Infra#172: bindings are ignored after the script is created, and
+    keep_bindings carries secrets across code uploads, so on an existing
+    script this flag changes nothing either way.
   DESC
 
   type    = bool

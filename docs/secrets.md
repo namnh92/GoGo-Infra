@@ -302,6 +302,16 @@ resource "aws_ssm_parameter" "database" {
 
 Terraform creates the IAM and the infrastructure. A bootstrap script writes the value.
 
+The share-link Worker's variables follow the same line from the other side (GoGo-Infra#172,
+owner decision 2026-10-06): **Cloudflare manages every Worker binding value.** Terraform sends
+`TENJIN_TRACKING_TEMPLATE`, `FALLBACK_URL`, `AASA` and `ASSETLINKS` once, when it creates the
+script, and ignores bindings afterwards — the tfvars and `config/well-known/` entries are initial
+values only. Change a running value on the dashboard (Workers & Pages → the script → Settings →
+Variables). `API_ORIGIN` and `EDGE_AUTH_TOKEN` were already Cloudflare-held. One trap remains: an
+apply that uploads new Worker code re-sends the variables as Terraform state last saw them, so a
+dashboard edit since then is reverted unless state is re-synced first —
+`terraform/modules/cloudflare-worker/README.md` has the steps.
+
 ## Local development
 
 ```bash

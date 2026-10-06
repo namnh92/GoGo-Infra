@@ -64,12 +64,13 @@ aws ssm get-parameter --name "$full_path" --with-decryption \
 
 cat <<MSG
 
-Done. Two things follow, in this order:
+Done. The secret is live on the Worker now. Two things follow, in this order:
 
   1. set the matching *_provisioned flag true in config/${ENVIRONMENT}.tfvars,
-  2. terraform apply.
+  2. terraform apply (through the PR, as usual).
 
-Until step 2 lands, an apply would drop this binding: Terraform emits it only
-when the flag says it exists. Nothing was printed above, and nothing was
-written to disk.
+Neither step changes the Worker: Terraform ignores the bindings of an existing
+script and keep_bindings carries this secret across code uploads
+(GoGo-Infra#172). They keep the tfvars truthful. Nothing was printed above,
+and nothing was written to disk.
 MSG
