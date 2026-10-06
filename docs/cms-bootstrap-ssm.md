@@ -2,6 +2,14 @@
 
 INF-069 · GoGo-BE DB-012
 
+> **Superseded 2026-10-06** (GoGo-Infra#194, GoGo-BE#687, [ADR-0010](adr/0010-terraform-reads-tagged-string-parameters.md)).
+> The manifest no longer declares `cms/seed-admin-email` or `cms/seed-admin-password`.
+> The super admin is one row that follows `cms/super-admin-email` at every deploy
+> (GoGo-BE `cms:sync-super-admin`) and signs in through Cloudflare Access only; the
+> seed command is deleted by GoGo-BE#687 BE-b. The owner deletes both parameters at
+> rollout step R1b (`docs/secrets.md`, "super_admin through Access only").
+> `validate.sh` reports them UNDECLARED until then. Kept for history.
+
 The first CMS `super_admin` used to be created by GoGo-BE's demo seed from
 credentials written into `libs/database/src/seed.ts`. One email and one password,
 applied to every environment, committed. This is where they live now.

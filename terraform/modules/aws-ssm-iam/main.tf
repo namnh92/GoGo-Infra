@@ -71,6 +71,37 @@ data "aws_iam_policy_document" "read" {
       values   = ["ssm.${data.aws_region.current.name}.amazonaws.com"]
     }
   }
+
+  # Tag lock (GoGo-Infra#194, ADR-0010). The tag gogo:infra-readable=true
+  # exempts a parameter from the Terraform roles' read Deny, so whoever can set
+  # it decides what Terraform reads. Every GoGo role attaches a policy from this
+  # module, so this one statement takes that power from all of them; only the
+  # bootstrap identity (the owner's SSO session, which attaches none of these)
+  # may tag. PutParameter is included because it accepts tags at creation.
+  # ForAnyValue: the request is denied if any tag key it names is locked, even
+  # alongside harmless ones.
+  dynamic "statement" {
+    for_each = length(var.locked_tag_keys) == 0 ? [] : [1]
+
+    content {
+      sid    = "DenyLockedTagChanges"
+      effect = "Deny"
+
+      actions = [
+        "ssm:AddTagsToResource",
+        "ssm:RemoveTagsFromResource",
+        "ssm:PutParameter",
+      ]
+
+      resources = ["${local.arn_prefix}/*"]
+
+      condition {
+        test     = "ForAnyValue:StringEquals"
+        variable = "aws:TagKeys"
+        values   = var.locked_tag_keys
+      }
+    }
+  }
 }
 
 resource "aws_iam_policy" "read" {

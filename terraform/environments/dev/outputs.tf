@@ -6,9 +6,11 @@ output "github_role_arns" {
 output "ssm_paths" {
   description = "Which parameter paths each policy covers, for review."
   value = {
-    plan       = module.policy_plan.parameter_paths
-    apply      = module.policy_apply.parameter_paths
-    cms_deploy = module.policy_cms_deploy.parameter_paths
+    plan  = module.policy_plan.parameter_paths
+    apply = module.policy_apply.parameter_paths
+    # GoGo-Infra#194: plan and apply also read these two, by exact ARN.
+    infra_readable = local.infra_readable_parameter_arns
+    cms_deploy     = module.policy_cms_deploy.parameter_paths
   }
 }
 

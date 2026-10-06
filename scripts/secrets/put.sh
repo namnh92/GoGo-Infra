@@ -5,6 +5,16 @@
 #   ./scripts/secrets/put.sh dev database/url
 #   ./scripts/secrets/put.sh ci  terraform/apply/cloudflare-api-token
 #   ./scripts/secrets/put.sh ci  deploy/known-hosts String
+#   ./scripts/secrets/put.sh dev cms/access-staff-emails --infra-readable
+#
+# --infra-readable (GoGo-Infra#194, ADR-0010) is for the rows the manifest marks
+# `infra_readable: true` — Strings Terraform reads through a data source. After
+# the write it tags the parameter gogo:infra-readable=true, which is what the
+# IAM exemption for the plan/apply roles keys on. The flag and the manifest must
+# agree: the manifest decides eligibility, the flag is the operator saying they
+# know this value becomes readable by Terraform. It refuses a SecureString.
+# Only the bootstrap identity (the owner's SSO session) may tag; every GoGo role
+# is denied ssm:AddTagsToResource for that key.
 #
 # The value is read from stdin, never from the command line: an argument would
 # land in shell history, in `ps` output, and in CI logs.
@@ -14,14 +24,42 @@
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-ENVIRONMENT="${1:-}"
-PARAM_PATH="${2:-}"
+INFRA_READABLE=no
+positional=()
+for arg in "$@"; do
+  case "$arg" in
+    --infra-readable) INFRA_READABLE=yes ;;
+    --*) die "unknown option: ${arg}" ;;
+    *) positional+=("$arg") ;;
+  esac
+done
+
+ENVIRONMENT="${positional[0]:-}"
+PARAM_PATH="${positional[1]:-}"
 
 require_env_arg "$ENVIRONMENT" allow-ci
-[[ -n "$PARAM_PATH" ]] || die "usage: put.sh <env|ci> <path> [type]   e.g. put.sh dev database/url"
+[[ -n "$PARAM_PATH" ]] || die "usage: put.sh <env|ci> <path> [type] [--infra-readable]   e.g. put.sh dev database/url"
+[[ "${#positional[@]}" -le 3 ]] || die "too many arguments: the value is read from stdin, never from the command line"
 # Path is validated before authenticating: a typo should not wait on an SSO
 # round trip to be reported.
-PARAM_TYPE="${3:-}"
+PARAM_TYPE="${positional[2]:-}"
+
+# Eligibility comes from the manifest only. GOGO_ALLOW_UNDECLARED below never
+# grants it: an undeclared path has no `infra_readable: true` to read.
+if [[ "$ENVIRONMENT" == "ci" ]]; then
+  [[ "$INFRA_READABLE" == "no" ]] || die "--infra-readable applies to <env>/backend rows, not the ci namespace"
+else
+  declared_infra_readable="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace all --consumer all --field infra_readable \
+    | awk -F'\t' -v p="$PARAM_PATH" '$1 == p { print $7; exit }')"
+  if [[ "$INFRA_READABLE" == "yes" && "$declared_infra_readable" != "true" ]]; then
+    die "'${PARAM_PATH}' is not declared infra_readable in config/secrets.manifest.yml.
+       Only the rows Terraform reads may carry the gogo:infra-readable tag."
+  fi
+  if [[ "$INFRA_READABLE" == "no" && "$declared_infra_readable" == "true" ]]; then
+    die "'${PARAM_PATH}' is declared infra_readable: pass --infra-readable.
+       Without the tag the Terraform roles cannot read it, and the next plan fails."
+  fi
+fi
 if [[ -z "$PARAM_TYPE" && "$ENVIRONMENT" != "ci" ]]; then
   PARAM_TYPE="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace all --consumer all | awk -F'\t' -v p="$PARAM_PATH" '$1 == p { print $3 }')"
   if [[ -z "$PARAM_TYPE" ]]; then
@@ -54,6 +92,12 @@ case "$PARAM_TYPE" in
   String | SecureString) ;;
   *) die "type must be String or SecureString (got '${PARAM_TYPE}')" ;;
 esac
+
+# The tag exempts a parameter from the Terraform roles' read Deny. A secret must
+# never carry it, whatever the caller passed as the type.
+if [[ "$INFRA_READABLE" == "yes" && "$PARAM_TYPE" != "String" ]]; then
+  die "--infra-readable refuses ${PARAM_TYPE}: only a String may be readable by Terraform"
+fi
 
 confirm_prod "$ENVIRONMENT" "write ${PARAM_PATH}"
 
@@ -109,4 +153,12 @@ unset value
 
 aws ssm put-parameter --cli-input-json "file://${request_file}" --no-cli-pager >/dev/null
 
-echo "wrote ${full_path} (${PARAM_TYPE})"
+if [[ "$INFRA_READABLE" == "yes" ]]; then
+  # A separate call: PutParameter cannot tag a parameter it overwrites
+  # ("To add tags to an existing parameter, use AddTagsToResource"). Idempotent.
+  aws ssm add-tags-to-resource --resource-type Parameter --resource-id "$full_path" \
+    --tags Key=gogo:infra-readable,Value=true --no-cli-pager >/dev/null
+  echo "wrote ${full_path} (${PARAM_TYPE}, tagged gogo:infra-readable=true)"
+else
+  echo "wrote ${full_path} (${PARAM_TYPE})"
+fi

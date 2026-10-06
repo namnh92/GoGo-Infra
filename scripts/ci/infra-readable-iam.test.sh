@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+#
+# GoGo-Infra#194 / ADR-0010 — what lets Terraform read two parameters under
+# /gogo/<env>/backend, and nothing more.
+#
+#   ./scripts/ci/infra-readable-iam.test.sh                 # all envs + module, plus self-test
+#   ./scripts/ci/infra-readable-iam.test.sh env <main.tf>   # one environment file
+#   ./scripts/ci/infra-readable-iam.test.sh module <main.tf> # the aws-ssm-iam module
+#
+# The controls, each of which reads like a harmless cleanup when deleted:
+#
+#   env  DenyReadingApplicationSecrets keeps its condition on
+#        aws:ResourceTag/gogo:infra-readable — without it the apply role cannot
+#        read the allow list; with a wider one it reads secrets.
+#   env  ReadInfraReadableParameters allows ssm:GetParameter on
+#        local.infra_readable_parameter_arns, which names exactly the two paths
+#        and no wildcard.
+#   env  DenyDecryptingInfraReadableNames denies kms:Decrypt keyed on
+#        kms:EncryptionContext:PARAMETER_ARN — both roles hold kms:Decrypt on
+#        the SSM key, so this is what keeps a SecureString recreated under one
+#        of those names from being read.
+#   env  the infra_readable policy is attached to plan and apply, and to no
+#        other role.
+#   mod  DenyLockedTagChanges denies tagging gogo:infra-readable to every role
+#        built from modules/aws-ssm-iam.
+#
+# Text checks after HCL comments are stripped, scoped to the block they belong
+# to. Terraform cannot render these documents offline (they need the account id
+# and region), so the plan diff on the PR is the other half of the evidence.
+# With no argument the script also proves itself: each mutation must fail it.
+
+set -uo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+MODULE="${REPO_ROOT}/terraform/modules/aws-ssm-iam/main.tf"
+MODULE_VARS="${REPO_ROOT}/terraform/modules/aws-ssm-iam/variables.tf"
+
+# block <file> <header-regex> [<sid>]
+# Strips every HCL comment form, then prints the balanced block whose opening
+# line matches <header-regex>. With <sid>, prints instead the `statement { }`
+# inside that block whose sid is <sid>.
+block() {
+  HEADER="$2" SID="${3:-}" perl -0777 -ne '
+    s{/\*(.*?)\*/|(?://|#)[^\n]*}{defined $1 ? $1 =~ tr/\n//cdr : ""}gse;
+    sub balanced {
+      my ($text, $start) = @_;
+      my $depth = 0;
+      pos($text) = $start;
+      while ($text =~ /([{}])/g) {
+        $depth += $1 eq "{" ? 1 : -1;
+        return substr($text, $start, pos($text) - $start) if $depth == 0;
+      }
+      return "";
+    }
+    my $h = $ENV{HEADER};
+    /$h/m or exit;
+    my $outer = balanced($_, $-[0]);
+    if ($ENV{SID} eq "") { print $outer, "\n"; exit }
+    while ($outer =~ /\bstatement\s*\{/g) {
+      my $st = balanced($outer, $-[0]);
+      if ($st =~ /\bsid\s*=\s*"\Q$ENV{SID}\E"/) { print $st, "\n"; exit }
+    }
+  ' "$1"
+}
+
+need() { # need <label> <text> <regex>
+  if ! grep -Eq "$3" <<<"$2"; then
+    echo "  missing: $1"
+    return 1
+  fi
+}
+
+check_env() {
+  local f="$1" status=0 body
+  local doc_apply='^data\s+"aws_iam_policy_document"\s+"infra_apply"\s*\{'
+  local doc_read='^data\s+"aws_iam_policy_document"\s+"infra_readable"\s*\{'
+
+  body="$(block "$f" "$doc_apply" DenyReadingApplicationSecrets)"
+  need "DenyReadingApplicationSecrets statement" "$body" 'effect[[:space:]]*=[[:space:]]*"Deny"' || status=1
+  need "DenyReadingApplicationSecrets keeps backend/*" "$body" 'parameter/gogo/\$\{var\.environment\}/backend/\*' || status=1
+  need "DenyReadingApplicationSecrets condition StringNotEquals" "$body" 'test[[:space:]]*=[[:space:]]*"StringNotEquals"' || status=1
+  need "DenyReadingApplicationSecrets keyed on aws:ResourceTag/gogo:infra-readable" "$body" 'variable[[:space:]]*=[[:space:]]*"aws:ResourceTag/gogo:infra-readable"' || status=1
+  need "DenyReadingApplicationSecrets exempts only the value true" "$body" 'values[[:space:]]*=[[:space:]]*\["true"\]' || status=1
+
+  body="$(block "$f" "$doc_read" ReadInfraReadableParameters)"
+  need "ReadInfraReadableParameters Allow" "$body" 'effect[[:space:]]*=[[:space:]]*"Allow"' || status=1
+  need "ReadInfraReadableParameters actions = [ssm:GetParameter] only" "$body" 'actions[[:space:]]*=[[:space:]]*\["ssm:GetParameter"\]' || status=1
+  need "ReadInfraReadableParameters resources = local.infra_readable_parameter_arns" "$body" 'resources[[:space:]]*=[[:space:]]*local\.infra_readable_parameter_arns' || status=1
+
+  body="$(block "$f" "$doc_read" DenyDecryptingInfraReadableNames)"
+  need "DenyDecryptingInfraReadableNames Deny" "$body" 'effect[[:space:]]*=[[:space:]]*"Deny"' || status=1
+  need "DenyDecryptingInfraReadableNames kms:Decrypt" "$body" '"kms:Decrypt"' || status=1
+  need "DenyDecryptingInfraReadableNames keyed on PARAMETER_ARN" "$body" 'variable[[:space:]]*=[[:space:]]*"kms:EncryptionContext:PARAMETER_ARN"' || status=1
+  need "DenyDecryptingInfraReadableNames values = the two ARNs" "$body" 'values[[:space:]]*=[[:space:]]*local\.infra_readable_parameter_arns' || status=1
+
+  # The ARN list: exactly the two declared paths, under backend/, no wildcard.
+  body="$(perl -0777 -ne 's{(?://|#)[^\n]*}{}g; print $1 if /(infra_readable_parameter_arns\s*=\s*\[.*?\n\s*\])/s' "$f")"
+  need "infra_readable_parameter_arns names cms/super-admin-email" "$body" '"cms/super-admin-email"' || status=1
+  need "infra_readable_parameter_arns names cms/access-staff-emails" "$body" '"cms/access-staff-emails"' || status=1
+  need "infra_readable_parameter_arns is under backend/" "$body" 'parameter/gogo/\$\{var\.environment\}/backend/\$\{path\}' || status=1
+  if grep -q '\*' <<<"$body"; then
+    echo "  wildcard in infra_readable_parameter_arns"
+    status=1
+  fi
+  local paths
+  paths="$(perl -ne 'print "$1\n" if /for\s+path\s+in\s+\[(.*?)\]/' <<<"$body" | grep -oE '"[^"]+"' | sort -u | wc -l | tr -d ' ')"
+  if [[ "$paths" != "2" ]]; then
+    echo "  infra_readable_parameter_arns names ${paths} paths, expected exactly 2"
+    status=1
+  fi
+
+  # Attachments: plan and apply, nobody else.
+  local oidc plan apply count
+  oidc="$(block "$f" '^module\s+"github_oidc"\s*\{')"
+  plan="$(perl -0777 -ne 'print $1 if /\n\s*plan\s*=\s*(\{.*?\n\s{4}\})/s' <<<"$oidc")"
+  apply="$(perl -0777 -ne 'print $1 if /\n\s*apply\s*=\s*(\{.*?\n\s{4}\})/s' <<<"$oidc")"
+  need "plan role attaches aws_iam_policy.infra_readable" "$plan" 'infra_readable[[:space:]]*=[[:space:]]*aws_iam_policy\.infra_readable\.arn' || status=1
+  need "apply role attaches aws_iam_policy.infra_readable" "$apply" 'infra_readable[[:space:]]*=[[:space:]]*aws_iam_policy\.infra_readable\.arn' || status=1
+  count="$(grep -cE 'aws_iam_policy\.infra_readable\.arn' <<<"$oidc")"
+  if [[ "$count" != "2" ]]; then
+    echo "  aws_iam_policy.infra_readable is attached ${count} time(s) in github_oidc, expected exactly 2 (plan, apply)"
+    status=1
+  fi
+  if grep -Eq 'aws_iam_policy\.infra_readable\.arn' <<<"$(perl -0777 -ne 's{(?://|#)[^\n]*}{}g; s/module\s+"github_oidc"\s*\{.*?\n\}\n//s; print' "$f")"; then
+    echo "  aws_iam_policy.infra_readable is attached outside github_oidc"
+    status=1
+  fi
+  return "$status"
+}
+
+check_module() {
+  local f="$1" vars="${2:-$MODULE_VARS}" status=0 body
+  body="$(block "$f" '^data\s+"aws_iam_policy_document"\s+"read"\s*\{')"
+  # The statement sits in a dynamic block; take the content around the sid.
+  body="$(perl -0777 -ne 'print $1 if /(sid\s*=\s*"DenyLockedTagChanges".*?condition\s*\{.*?\})/s' <<<"$body")"
+  need "DenyLockedTagChanges statement" "$body" 'DenyLockedTagChanges' || status=1
+  need "DenyLockedTagChanges Deny" "$body" 'effect[[:space:]]*=[[:space:]]*"Deny"' || status=1
+  local a
+  for a in ssm:AddTagsToResource ssm:RemoveTagsFromResource ssm:PutParameter; do
+    need "DenyLockedTagChanges action ${a}" "$body" "\"${a}\"" || status=1
+  done
+  need "DenyLockedTagChanges ForAnyValue:StringEquals" "$body" 'test[[:space:]]*=[[:space:]]*"ForAnyValue:StringEquals"' || status=1
+  need "DenyLockedTagChanges on aws:TagKeys" "$body" 'variable[[:space:]]*=[[:space:]]*"aws:TagKeys"' || status=1
+  need "DenyLockedTagChanges covers every /gogo/* parameter" "$body" 'resources[[:space:]]*=[[:space:]]*\["\$\{local\.arn_prefix\}/\*"\]' || status=1
+  body="$(block "$vars" '^variable\s+"locked_tag_keys"\s*\{')"
+  need "locked_tag_keys defaults to gogo:infra-readable" "$body" 'default[[:space:]]*=[[:space:]]*\["gogo:infra-readable"\]' || status=1
+  return "$status"
+}
+
+case "${1:-}" in
+  env) check_env "$2"; exit $? ;;
+  module) check_module "$2" "${3:-$MODULE_VARS}"; exit $? ;;
+esac
+
+failures=0
+for env in dev staging prod; do
+  f="${REPO_ROOT}/terraform/environments/${env}/main.tf"
+  if out="$(check_env "$f")"; then
+    echo "  ok    ${env}: two-ARN read, tag-conditioned Deny, PARAMETER_ARN decrypt Deny, plan+apply only"
+  else
+    printf '  FAIL  %s\n%s\n' "$f" "$out"
+    failures=$((failures + 1))
+  fi
+done
+if out="$(check_module "$MODULE")"; then
+  echo "  ok    aws-ssm-iam: every role is denied tagging gogo:infra-readable"
+else
+  printf '  FAIL  %s\n%s\n' "$MODULE" "$out"
+  failures=$((failures + 1))
+fi
+
+SCRATCH="$(mktemp -d)"
+trap 'rm -rf "$SCRATCH"' EXIT
+DEV="${REPO_ROOT}/terraform/environments/dev/main.tf"
+cases=0
+mutate() { # mutate <env|module> <name> <perl expression>
+  cases=$((cases + 1))
+  local src="$DEV" kind="$1"
+  [[ "$kind" == "module" ]] && src="$MODULE"
+  local f="${SCRATCH}/case-${cases}.tf"
+  if ! perl -0pe "$3" "$src" >"$f" || cmp -s "$f" "$src"; then
+    echo "  FAIL  mutation '$2' did not change the file"
+    failures=$((failures + 1))
+    return
+  fi
+  if "$0" "$kind" "$f" >/dev/null 2>&1; then
+    echo "  FAIL  guard passed ${kind} with $2"
+    failures=$((failures + 1))
+  else
+    echo "  ok    guard refuses ${kind} with $2"
+  fi
+}
+
+mutate env "the Deny's tag condition removed" 's/\n\s*condition\s*\{\s*test\s*=\s*"StringNotEquals"\s*variable\s*=\s*"aws:ResourceTag\/gogo:infra-readable"\s*values\s*=\s*\["true"\]\s*\}//'
+mutate env "the Deny's tag condition only in a comment" 's/(\n\s*)(condition\s*\{\s*test\s*=\s*"StringNotEquals"\s*variable\s*=\s*"aws:ResourceTag\/gogo:infra-readable"\s*values\s*=\s*\["true"\]\s*\})/$1\/* $2 *\//'
+mutate env "the tag condition moved to another statement" 's/(\n\s*condition\s*\{\s*test\s*=\s*"StringNotEquals"\s*variable\s*=\s*"aws:ResourceTag\/gogo:infra-readable"\s*values\s*=\s*\["true"\]\s*\})//; s/(sid\s*=\s*"ManageGoGoPolicies")/$1\n    condition {\n      test     = "StringNotEquals"\n      variable = "aws:ResourceTag\/gogo:infra-readable"\n      values   = ["true"]\n    }/'
+mutate env "the read Allow widened to a wildcard" 's/resources\s*=\s*local\.infra_readable_parameter_arns\n/resources = ["arn:aws:ssm:*:*:parameter\/gogo\/\${var.environment}\/backend\/*"]\n/'
+mutate env "GetParameters added to the read Allow" 's/actions\s*=\s*\["ssm:GetParameter"\]/actions   = ["ssm:GetParameter", "ssm:GetParametersByPath"]/'
+mutate env "the decrypt Deny removed" 's/\n\s*statement\s*\{\s*sid\s*=\s*"DenyDecryptingInfraReadableNames".*?\n  \}\n/\n/s'
+mutate env "the decrypt Deny keyed on ViaService" 's/kms:EncryptionContext:PARAMETER_ARN/kms:ViaService/'
+mutate env "a third path in the ARN list" 's/"cms\/access-staff-emails"\]/"cms\/access-staff-emails", "database\/url"]/'
+mutate env "a wildcard in the ARN list" 's/"cms\/access-staff-emails"\]/"cms\/*"]/'
+mutate env "no plan attachment" 's/(plan\s*=\s*\{.*?)\n\s*infra_readable\s*=\s*aws_iam_policy\.infra_readable\.arn/$1/s'
+mutate env "attached to the deploy role too" 's/(deploy\s*=\s*\{.*?policy_arns\s*=\s*\{)/$1\n        infra_readable = aws_iam_policy.infra_readable.arn/s'
+mutate module "no tag lock" 's/\n\s*dynamic\s*"statement"\s*\{.*?DenyLockedTagChanges.*?\n  \}\n/\n/s'
+mutate module "tag lock without PutParameter" 's/\n\s*"ssm:PutParameter",//'
+mutate module "tag lock keyed on RequestTag" 's/"aws:TagKeys"/"aws:RequestTag\/gogo:infra-readable"/'
+mutate module "tag lock with ForAllValues" 's/ForAnyValue:StringEquals/ForAllValues:StringEquals/'
+
+if [[ "$failures" -gt 0 ]]; then
+  echo "${failures} infra-readable IAM check(s) failed."
+  exit 1
+fi
+echo "All infra-readable IAM checks passed."

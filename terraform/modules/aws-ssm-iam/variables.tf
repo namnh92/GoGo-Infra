@@ -38,3 +38,15 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "locked_tag_keys" {
+  description = <<-DESC
+    Tag keys no holder of this policy may add, remove, or set at creation on any
+    /gogo/* parameter. gogo:infra-readable is what lets the Terraform roles read
+    a parameter under backend/ (GoGo-Infra#194, ADR-0010), so only the bootstrap
+    identity may set it. Empty disables the statement; nothing here should.
+  DESC
+
+  type    = list(string)
+  default = ["gogo:infra-readable"]
+}

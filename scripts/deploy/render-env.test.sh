@@ -134,6 +134,62 @@ else
   fail "cms/super-admin-sso-only unreadable aborts the deploy (exit ${status})"
 fi
 
+# GoGo-Infra#194 / GoGo-BE#687. The super admin's address is a runtime row; the
+# staff list is Terraform's alone and must never reach the API's environment.
+run value cms/super-admin-email
+status=$?
+if [[ $status -eq 0 ]] && grep -qx 'CMS_SUPER_ADMIN_EMAIL=false' "$tmp/out.env"; then
+  ok "cms/super-admin-email is rendered as CMS_SUPER_ADMIN_EMAIL"
+else
+  fail "cms/super-admin-email is rendered as CMS_SUPER_ADMIN_EMAIL (exit ${status}): $(cat "$tmp/stderr")"
+fi
+run absent cms/super-admin-email
+status=$?
+if [[ $status -ne 0 ]] && grep -q '/gogo/dev/backend/cms/super-admin-email' "$tmp/stderr"; then
+  ok "cms/super-admin-email absent aborts the deploy (required in dev)"
+else
+  fail "cms/super-admin-email absent aborts the deploy (exit ${status})"
+fi
+run value cms/access-staff-emails
+status=$?
+if [[ $status -eq 0 ]] && ! grep -q '^-=' "$tmp/out.env" \
+  && ! grep -qi 'staff' "$tmp/out.env"; then
+  ok "the Terraform-only staff list is not rendered"
+else
+  fail "the Terraform-only staff list is not rendered (exit ${status})"
+fi
+
+# The placeholder skip itself, against a fixture manifest: a runtime row with no
+# env_var. The reader prints "-" for it; render-env must skip it, not write
+# `-=<value>`. Run in a copy of the tree so the fixture cannot touch the real
+# manifest.
+fixture="$tmp/tree"
+mkdir -p "$fixture/scripts/deploy" "$fixture/scripts/lib" "$fixture/config"
+cp "$script" "$fixture/scripts/deploy/"
+cp "${here}/../lib/"*.sh "${here}/../lib/manifest.py" "$fixture/scripts/lib/"
+cat >"$fixture/config/secrets.manifest.yml" <<'YAML'
+version: 1
+
+parameters:
+  - path: database/url
+    env_var: DATABASE_URL
+    type: SecureString
+    required: [dev]
+
+  - path: cms/no-env-var
+    type: String
+    required: []
+YAML
+rm -f "$tmp/out.env"
+PATH="$tmp/bin:$PATH" AWS_STUB_PATH=none AWS_STUB_MODE=value \
+  "$fixture/scripts/deploy/render-env.sh" dev "$tmp/out.env" >"$tmp/stdout" 2>"$tmp/stderr"
+status=$?
+if [[ $status -eq 0 ]] && grep -qx 'DATABASE_URL=stub-value' "$tmp/out.env" && ! grep -q '^-=' "$tmp/out.env"; then
+  ok "a row without env_var is skipped, not rendered as '-=<value>'"
+else
+  fail "a row without env_var is skipped (exit ${status}): $(grep -c '^-=' "$tmp/out.env" 2>/dev/null) '-=' line(s)"
+fi
+
 if [[ $fails -gt 0 ]]; then
   echo "${fails} render-env test(s) failed" >&2
   exit 1

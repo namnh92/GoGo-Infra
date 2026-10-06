@@ -1,6 +1,6 @@
 # ADR 0008 — CMS bootstrap credentials in SSM, delivered to the seed only
 
-**Status:** accepted
+**Status:** superseded by [ADR-0010](0010-terraform-reads-tagged-string-parameters.md) — 2026-10-06 (GoGo-Infra#194, GoGo-BE#687). The `cms/seed-admin-*` rows are retired; the super admin follows `cms/super-admin-email` at deploy.
 **Date:** 2026-09-06
 **Issue:** INF-069 (GoGo-BE DB-012)
 

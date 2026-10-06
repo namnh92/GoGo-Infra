@@ -274,6 +274,19 @@ jobs:
             echo "${env}: $(python3 scripts/lib/manifest.py "$env" --required | wc -l) required parameters"
           done
 
+      # GoGo-Infra#194 / ADR-0010. The tag gogo:infra-readable=true is what lets
+      # the Terraform roles read a parameter under backend/. Who can set it, on
+      # what, and whether validate.sh reports it in the wrong place are each
+      # pinned here; none of these tests reaches AWS.
+      - name: put.sh tags only declared Strings, after the write
+        run: ./scripts/secrets/put.test.sh
+      - name: validate.sh readiness and infra-readable tag findings
+        run: ./scripts/secrets/validate.test.sh
+      - name: pull.sh --seed renders runtime + seed rows only
+        run: ./scripts/secrets/pull.test.sh
+      - name: Terraform reads two named parameters and nothing else
+        run: ./scripts/ci/infra-readable-iam.test.sh
+
       # INF-070. The value this script moves must never reach Terraform, a file,
       # an environment variable or a log, and the only way to keep that true is
       # to assert it. The test also fails if a `secret_text` binding or a

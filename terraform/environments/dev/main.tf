@@ -42,11 +42,23 @@ data "aws_kms_key" "ssm" {
   key_id = "alias/aws/ssm"
 }
 
+data "aws_region" "current" {}
+
 locals {
   account         = data.aws_caller_identity.current.account_id
   gogo_role_arns  = "arn:aws:iam::${local.account}:role/${var.project_name}-*"
   gogo_policy_arn = "arn:aws:iam::${local.account}:policy/${var.project_name}-*"
   oidc_provider   = "arn:aws:iam::${local.account}:oidc-provider/token.actions.githubusercontent.com"
+
+  # GoGo-Infra#194 / ADR-0010. The only application parameters Terraform may
+  # read: Strings, tagged gogo:infra-readable=true, declared `infra_readable:
+  # true` in config/secrets.manifest.yml. Named exactly — a wildcard here would
+  # hand the plan role whatever is added under backend/ next.
+  # scripts/lib/manifest.test.sh pins the manifest side of this list.
+  infra_readable_parameter_arns = [
+    for path in ["cms/super-admin-email", "cms/access-staff-emails"] :
+    "arn:aws:ssm:${data.aws_region.current.name}:${local.account}:parameter/gogo/${var.environment}/backend/${path}"
+  ]
 }
 
 
@@ -364,12 +376,72 @@ data "aws_iam_policy_document" "infra_apply" {
   # /gogo/* would also block ci/<env>/terraform/write/*, which this role must
   # read to run terraform init. The failure would surface at init with an error
   # that says nothing about this statement.
+  #
+  # One exception, by tag (GoGo-Infra#194, ADR-0010): the Strings the manifest
+  # marks infra_readable carry gogo:infra-readable=true, and the Access allow
+  # list is built from them. An untagged parameter has no such key; a negated
+  # operator then evaluates true, so the Deny holds for everything else. The
+  # tag alone grants nothing — the Allow in `infra_readable` names two ARNs, and
+  # no GoGo role may set or remove the tag (modules/aws-ssm-iam, tag lock).
   statement {
     sid       = "DenyReadingApplicationSecrets"
     effect    = "Deny"
     actions   = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"]
     resources = ["arn:aws:ssm:*:*:parameter/gogo/${var.environment}/backend/*"]
+
+    condition {
+      test     = "StringNotEquals"
+      variable = "aws:ResourceTag/gogo:infra-readable"
+      values   = ["true"]
+    }
   }
+}
+
+# --- What Terraform may read from the application tree -----------------------
+#
+# GoGo-Infra#194 / ADR-0010 (GoGo-BE#687 D-5, O-5): the cms-<env> Access allow
+# list comes from SSM, so plan and apply must read two parameters under
+# backend/. Attached to both roles. Three controls, preventive first:
+#
+#   1. Allow ssm:GetParameter on exactly those two ARNs. The plan role holds
+#      ReadOnlyAccess, which grants no Parameter Store read at all, and the apply
+#      role is denied backend/* unless the tag is present (above).
+#   2. Deny kms:Decrypt for those two names. Both roles hold kms:Decrypt on the
+#      SSM key (modules/aws-ssm-iam, for their own ci/ credentials), so without
+#      this a SecureString recreated under one of these names would come back
+#      decrypted. Parameter Store passes PARAMETER_ARN as the encryption context
+#      on every decrypt, which is what this keys on. A String involves no KMS
+#      call, so reading the intended values is unaffected.
+#   3. The tag lock in modules/aws-ssm-iam: no GoGo role may add or remove
+#      gogo:infra-readable, so only the bootstrap identity can make a parameter
+#      eligible for the Deny exception.
+data "aws_iam_policy_document" "infra_readable" {
+  statement {
+    sid       = "ReadInfraReadableParameters"
+    effect    = "Allow"
+    actions   = ["ssm:GetParameter"]
+    resources = local.infra_readable_parameter_arns
+  }
+
+  statement {
+    sid       = "DenyDecryptingInfraReadableNames"
+    effect    = "Deny"
+    actions   = ["kms:Decrypt"]
+    resources = [data.aws_kms_key.ssm.arn]
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:EncryptionContext:PARAMETER_ARN"
+      values   = local.infra_readable_parameter_arns
+    }
+  }
+}
+
+resource "aws_iam_policy" "infra_readable" {
+  name        = "${module.tags.name_prefix}-infra-readable"
+  description = "Terraform reads the two infra_readable Strings in ${var.environment} (GoGo-Infra#194)"
+  policy      = data.aws_iam_policy_document.infra_readable.json
+  tags        = module.tags.tags
 }
 
 resource "aws_iam_policy" "infra_apply" {
@@ -410,8 +482,9 @@ module "github_oidc" {
       subjects    = [for f in values(local.oidc_subject.infra) : "${f}:pull_request"]
 
       policy_arns = {
-        aws_readonly = "arn:aws:iam::aws:policy/ReadOnlyAccess"
-        ssm_read     = module.policy_plan.policy_arn
+        aws_readonly   = "arn:aws:iam::aws:policy/ReadOnlyAccess"
+        ssm_read       = module.policy_plan.policy_arn
+        infra_readable = aws_iam_policy.infra_readable.arn
       }
     }
 
@@ -422,8 +495,9 @@ module "github_oidc" {
       subjects    = [for f in values(local.oidc_subject.infra) : "${f}:environment:dev"]
 
       policy_arns = {
-        infra     = aws_iam_policy.infra_apply.arn
-        ssm_write = module.policy_apply.policy_arn
+        infra          = aws_iam_policy.infra_apply.arn
+        ssm_write      = module.policy_apply.policy_arn
+        infra_readable = aws_iam_policy.infra_readable.arn
       }
     }
 

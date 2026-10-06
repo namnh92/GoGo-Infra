@@ -15,6 +15,10 @@ Usage:
                                          Only rows the observability host loads
     manifest.py <env> --consumer pipeline
                                          Only rows a CI job loads
+    manifest.py <env> --consumer terraform
+                                         Only rows Terraform reads through a
+                                         data source (GoGo-Infra#194). Rendered
+                                         by nothing; no env_var, emitted as "-"
     manifest.py <env> --consumer all     Every consumer
     manifest.py <env> --capabilities     Capabilities enabled in that env:
                                          "name<TAB>kind<TAB>state"
@@ -25,8 +29,8 @@ Usage:
                                          `enabled` to `enabled + planned`, i.e.
                                          what the environment is intended to run
     manifest.py <env> --field <name>     Append one extra field to each row, so a
-                                         caller can read `scope` or `provider`
-                                         without a YAML parser
+                                         caller can read `scope`, `provider` or
+                                         `infra_readable` without a YAML parser
 
 Namespace defaults to `backend` and consumer defaults to `runtime`. Both
 defaults are load-bearing rather than convenient: render-env.sh renders every
@@ -197,7 +201,7 @@ def main():
         index = args.index("--consumer")
         if index + 1 >= len(args):
             sys.stderr.write(
-                "--consumer needs a value: runtime, seed, observability, pipeline, or all\n"
+                "--consumer needs a value: runtime, seed, observability, pipeline, terraform, or all\n"
             )
             return 2
         consumer = args[index + 1]
