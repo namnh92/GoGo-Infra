@@ -10,8 +10,9 @@
 # a Terraform variable, which would have put the token in the state file. Making
 # the variable `sensitive` hides it from the CLI, not from the file, and state
 # lives in a bucket several roles can read. So Terraform is told only *whether*
-# a binding exists (`edge_auth_token_provisioned`, carried across updates with
-# the Workers API's `inherit` type) and never what is in it.
+# a binding exists (`edge_auth_token_provisioned`) and never what is in it. Since
+# GoGo-Infra#172 that flag only shapes the upload creating the script; on an
+# existing script keep_bindings carries this secret across every upload.
 #
 # The value goes SSM -> stdin -> wrangler. It is not printed, not written to
 # disk, and not exported, so it cannot be picked up by `ps`, a shell history, a

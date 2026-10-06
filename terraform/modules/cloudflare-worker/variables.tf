@@ -114,22 +114,21 @@ variable "edge_auth_token_provisioned" {
 
     **This module never receives the token.** The value is a Cloudflare Worker
     secret written at deploy time straight from SSM; Terraform only says whether
-    a binding by that name should be carried across script updates, using the
-    Workers API's `inherit` type. So the token is absent from the configuration,
+    a binding by that name should be emitted (as the Workers API's `inherit`
+    type) in the upload that creates the script. So the token is absent from the configuration,
     from the plan, from the state file and from every log line either produces.
 
     false — the state of every environment today — emits no binding at all,
     which is also what the worker expects: with no token bound it forwards no
     edge headers, and the API trusts nothing.
 
-    Ordering matters and only one order works. Put the secret first, then set
-    this true and apply. `inherit` on a script that has no such binding yet is
-    an error, and an apply while this is false removes a binding that exists.
+    GoGo-Infra#172: this only shapes the upload that *creates* the script —
+    bindings are ignored afterwards, and keep_bindings carries a secret put
+    with put-worker-secret.sh across every later upload. On an existing script
+    the flag changes nothing either way; set it true after putting the secret
+    so the tfvars say what the Worker holds. Never true for a script that does
+    not exist yet: `inherit` with nothing to inherit is an error.
     docs/share-link-edge-auth.md is the runbook.
-
-    GoGo-Infra#172: bindings are ignored after the script is created, and
-    keep_bindings carries secrets across code uploads, so on an existing
-    script this flag changes nothing either way.
   DESC
 
   type    = bool

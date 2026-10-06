@@ -13,10 +13,13 @@ address the share-link Worker forwards.
 | Terraform configuration, plan, or state | **no** |
 | `config/*.tfvars`, this repository, any log line | **no** |
 
-Terraform is told only *whether* a binding by that name exists
-(`share_edge_auth_token_provisioned`), and carries it across script updates with
-the Workers API's `inherit` type. It never receives the value, so the value
-cannot appear in a plan, in the state file, or in the output of either.
+Terraform never receives the value, so the value cannot appear in a plan, in
+the state file, or in the output of either. Since GoGo-Infra#172 the script
+ignores its bindings once it exists, and `keep_bindings = ["secret_text",
+"secret_key"]` is what carries the secret across every later script upload.
+`share_edge_auth_token_provisioned` only shapes the upload that *creates* a
+script (an `inherit` entry there needs a binding to inherit, so it stays false
+for a new environment); on an existing script it changes nothing.
 
 The alternative considered and rejected was a `secret_text` binding fed by a
 Terraform variable. `sensitive = true` hides such a value from CLI output and
@@ -92,7 +95,7 @@ Three failures, three answers:
    shows version and modified time without printing the value; SSM keeps prior
    versions, so an operator can restore one and re-run step 3.
 3. **The feature needs to be switched off entirely.**
-   `wrangler secret delete EDGE_AUTH_TOKEN --name <worker>` — the binding is
+   `pnpm exec wrangler secret delete EDGE_AUTH_TOKEN --name <worker>` — the binding is
    gone, the Worker stops sending edge headers, and the API returns to keying
    the share-link limit on the connecting address. This is the pre-SEC-004
    behaviour and it is safe: no error, no dropped clicks, just a coarser limit.

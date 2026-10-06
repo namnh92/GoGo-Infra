@@ -51,8 +51,9 @@ resource "cloudflare_workers_script" "share_link" {
       },
     ],
     # INF-070. `inherit` means "keep the binding the previous version of this
-    # script had", so the token stays bound across script updates without this
-    # configuration ever holding it. It is written by
+    # script had", so the configuration never holds the token. Since #172 it only
+    # matters at creation; keep_bindings below carries the secret across later
+    # uploads. The token is written by
     # scripts/secrets/put-worker-secret.sh, straight from SSM to Cloudflare;
     # Terraform never receives it, so it is in no plan, no state file and no log.
     #

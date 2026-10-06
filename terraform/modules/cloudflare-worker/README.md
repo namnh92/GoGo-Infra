@@ -130,7 +130,7 @@ therefore invisible to `terraform plan` by design; to compare, read
 Why: the Workers API never returns the `inherit` type. Each apply resolved `API_ORIGIN` to its
 stored value, the next refresh read `plain_text`, and every plan asked to change it again.
 
-### Before an apply that changes the Worker code
+### Before any apply that updates the script
 
 Provider 5.24 has a limit this does not remove. On refresh it keeps the **state's** text for a
 `plain_text` binding already in state, and it never records a secret Terraform did not create. An
@@ -139,10 +139,15 @@ update re-sends the bindings as state has them, so:
 - **Secrets survive**: `keep_bindings = ["secret_text", "secret_key"]` tells Cloudflare to keep
   them from the previous version.
 - **A variable edited on the dashboard since the last apply is put back** to the value state
-  holds, the moment an apply uploads new code (`workers/share-link/**`).
+  holds, the moment an apply updates `cloudflare_workers_script.share_link` for any reason — new
+  code (`workers/share-link/**`) or any other attribute of that resource. Bindings are ignored in
+  the diff, not in the upload.
 
-So, when a PR changes the Worker code and a variable was edited on the dashboard since the last
-apply, re-sync state from Cloudflare **before** the merge triggers `terraform-apply-dev`:
+So, whenever the PR's `plan (<env>)` shows `cloudflare_workers_script.share_link will be updated`,
+check whether a variable was edited on the dashboard since the last apply. The plan line
+`modified_on = "<time>" -> (known after apply)` is the script's last change in Cloudflare: later
+than the last `terraform-apply-<env>` run means someone edited it outside Terraform. If so — or
+if you cannot tell — re-sync state from Cloudflare **before** the merge triggers the apply:
 
 ```bash
 cd terraform/environments/<env>
@@ -152,8 +157,8 @@ terraform import -var-file=../../../config/global.tfvars -var-file=../../../conf
 terraform plan  -var-file=../../../config/global.tfvars -var-file=../../../config/<env>.tfvars
 ```
 
-The plan must show no binding removed. A PR that only changes routes, DNS or tfvars does not
-upload the script and needs none of this.
+The plan must show no binding removed. A PR whose plan does not update the script (routes, DNS,
+tfvars-only binding values) uploads nothing and needs none of this.
 
 ## Where a click goes
 

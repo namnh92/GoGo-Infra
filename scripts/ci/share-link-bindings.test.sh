@@ -26,13 +26,24 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MODULE="${REPO_ROOT}/terraform/modules/cloudflare-worker/main.tf"
 
-# block <file> — the share_link script resource, comments stripped.
+# block <file> — the share_link script resource, with every HCL comment form
+# (`#`, `//`, `/* ... */`) stripped, so a commented-out control does not count.
 block() {
   awk '
     /^resource "cloudflare_workers_script" "share_link"/ { on = 1 }
     on {
       line = $0
+      if (incomment) {
+        if (match(line, /\*\//)) { line = substr(line, RSTART + 2); incomment = 0 }
+        else line = ""
+      }
+      while (match(line, /\/\*/)) {
+        pre = substr(line, 1, RSTART - 1); rest = substr(line, RSTART + 2)
+        if (match(rest, /\*\//)) line = pre substr(rest, RSTART + 2)
+        else { line = pre; incomment = 1 }
+      }
       sub(/#.*/, "", line)
+      sub(/\/\/.*/, "", line)
       print line
       n = gsub(/\{/, "{", line); depth += n
       m = gsub(/\}/, "}", line); depth -= m
@@ -54,10 +65,13 @@ check() {
     echo "  missing: lifecycle { ignore_changes = [bindings] } on the share_link script"
     status=1
   fi
-  if ! grep -Eq 'keep_bindings[[:space:]]*=[[:space:]]*\[[^]]*"secret_text"' <<<"$body"; then
-    echo "  missing: keep_bindings including \"secret_text\" on the share_link script"
-    status=1
-  fi
+  local kind
+  for kind in secret_text secret_key; do
+    if ! grep -Eq "keep_bindings[[:space:]]*=[[:space:]]*\\[[^]]*\"${kind}\"" <<<"$body"; then
+      echo "  missing: keep_bindings including \"${kind}\" on the share_link script"
+      status=1
+    fi
+  done
   return "$status"
 }
 
@@ -79,10 +93,17 @@ fi
 SCRATCH="$(mktemp -d)"
 trap 'rm -rf "$SCRATCH"' EXIT
 
+cases=0
 mutate() { # mutate <name> <perl expression>
-  local f="${SCRATCH}/$1.tf"
-  perl -0pe "$2" "$MODULE" >"$f"
-  if check "$f" >/dev/null; then
+  cases=$((cases + 1))
+  local f="${SCRATCH}/case-${cases}.tf"
+  if ! perl -0pe "$2" "$MODULE" >"$f" || cmp -s "$f" "$MODULE"; then
+    # A mutation that did not apply would make the case pass vacuously.
+    echo "  FAIL  mutation '$1' did not change the module"
+    failures=$((failures + 1))
+    return
+  fi
+  if check "$f" >/dev/null 2>&1; then
     echo "  FAIL  guard passed a module with $1"
     failures=$((failures + 1))
   else
@@ -92,7 +113,11 @@ mutate() { # mutate <name> <perl expression>
 
 mutate "no ignore_changes" 's/ignore_changes\s*=\s*\[bindings\]/ignore_changes = []/'
 mutate "no keep_bindings" 's/\n\s*keep_bindings\s*=[^\n]*//'
-mutate "keep_bindings only in a comment" 's/\n(\s*)keep_bindings(\s*=[^\n]*)/\n$1# keep_bindings$2/'
+mutate "keep_bindings only in a # comment" 's/\n(\s*)keep_bindings(\s*=[^\n]*)/\n$1# keep_bindings$2/'
+mutate "keep_bindings only in a // comment" 's/\n(\s*)keep_bindings(\s*=[^\n]*)/\n$1\/\/ keep_bindings$2/'
+mutate "lifecycle only in a /* */ comment" 's/(\n\s*)(lifecycle\s*\{\s*ignore_changes\s*=\s*\[bindings\]\s*\})/$1\/* $2 *\//'
+mutate "keep_bindings without secret_text" 's/"secret_text",\s*//'
+mutate "keep_bindings without secret_key" 's/,\s*"secret_key"//'
 mutate "ignore_changes on another resource" 's/(lifecycle\s*\{\s*ignore_changes\s*=\s*\[bindings\]\s*\})//; s/\z/\nresource "x" "y" {\n  lifecycle {\n    ignore_changes = [bindings]\n  }\n}\n/'
 
 if [[ "$failures" -gt 0 ]]; then
