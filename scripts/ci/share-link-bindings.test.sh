@@ -18,37 +18,33 @@
 #     create (EDGE_AUTH_TOKEN). Without keep_bindings that upload drops it.
 #
 # The check reads the `cloudflare_workers_script "share_link"` block only, so a
-# matching line on another resource does not satisfy it. With no argument it
-# also proves itself: each line removed from a copy must make the check fail.
+# matching line on another resource does not satisfy it. Comments come off the
+# whole file before that block is located, so neither a commented-out control
+# nor a commented-out copy of the resource counts. With no argument it also
+# proves itself: each mutation of a copy must make the check fail.
 
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MODULE="${REPO_ROOT}/terraform/modules/cloudflare-worker/main.tf"
 
-# block <file> — the share_link script resource, with every HCL comment form
-# (`#`, `//`, `/* ... */`) stripped, so a commented-out control does not count.
+# block <file> — the share_link script resource, located only after every HCL
+# comment form (`#`, `//`, `/* ... */` across lines) is stripped from the whole
+# file. Stripping first is the point: a `/* */` block opened above the resource
+# must not leave a commented copy of it looking live.
 block() {
-  awk '
-    /^resource "cloudflare_workers_script" "share_link"/ { on = 1 }
-    on {
-      line = $0
-      if (incomment) {
-        if (match(line, /\*\//)) { line = substr(line, RSTART + 2); incomment = 0 }
-        else line = ""
-      }
-      while (match(line, /\/\*/)) {
-        pre = substr(line, 1, RSTART - 1); rest = substr(line, RSTART + 2)
-        if (match(rest, /\*\//)) line = pre substr(rest, RSTART + 2)
-        else { line = pre; incomment = 1 }
-      }
-      sub(/#.*/, "", line)
-      sub(/\/\/.*/, "", line)
-      print line
-      n = gsub(/\{/, "{", line); depth += n
-      m = gsub(/\}/, "}", line); depth -= m
-      if (seen && depth == 0) exit
-      if (n > 0) seen = 1
+  perl -0777 -ne '
+    # Leftmost opener wins, as in HCL: a `/*` inside a `#` line is text, a `#`
+    # inside a `/* */` block is comment. A block comment leaves its newlines
+    # behind so the body keeps its line structure.
+    s{/\*(.*?)\*/|(?://|#)[^\n]*}{defined $1 ? $1 =~ tr/\n//cdr : ""}gse;
+    /^resource\s+"cloudflare_workers_script"\s+"share_link"\s*\{/m or exit;
+    my $start = $-[0];
+    my $depth = 0;
+    pos($_) = $start;
+    while (/([{}])/g) {
+      $depth += $1 eq "{" ? 1 : -1;
+      if ($depth == 0) { print substr($_, $start, pos($_) - $start), "\n"; last }
     }
   ' "$1"
 }
@@ -119,6 +115,13 @@ mutate "lifecycle only in a /* */ comment" 's/(\n\s*)(lifecycle\s*\{\s*ignore_ch
 mutate "keep_bindings without secret_text" 's/"secret_text",\s*//'
 mutate "keep_bindings without secret_key" 's/,\s*"secret_key"//'
 mutate "ignore_changes on another resource" 's/(lifecycle\s*\{\s*ignore_changes\s*=\s*\[bindings\]\s*\})//; s/\z/\nresource "x" "y" {\n  lifecycle {\n    ignore_changes = [bindings]\n  }\n}\n/'
+# A /* */ copy of the whole resource, both controls intact, placed above the
+# live one with its controls removed: the decoy an old guard read as the block.
+mutate "both controls only in a /* */ copy of the resource" '
+  my ($copy) = /(resource "cloudflare_workers_script" "share_link" \{.*?\n\}\n)/s;
+  s/\n\s*keep_bindings\s*=[^\n]*//;
+  s/\n\s*lifecycle\s*\{\s*ignore_changes\s*=\s*\[bindings\]\s*\}//;
+  s/^(?=resource "cloudflare_workers_script" "share_link" \{)/\/*\n${copy}*\/\n/m'
 
 if [[ "$failures" -gt 0 ]]; then
   echo "${failures} share-link binding check(s) failed."
