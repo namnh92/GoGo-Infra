@@ -407,6 +407,56 @@ start with SSO quietly off.
 **What Access does not do.** It answers "who is this", not "may they do this". A GitHub identity
 that passes Access but has no row in `admin_users` gets a 403 from GoGo-BE, not a session.
 
+## Access-only CMS on an environment
+
+GoGo-BE ADR-0032 (GoGo-BE#679). DEV runs like this. The password door
+(`cms/password-login-enabled`) is a separate switch from SSO (`access/*`). Each step below leaves a
+working door. Do not move to the next step until the gate on this one has been observed.
+
+DEV is shared between sessions. Before and after every deploy, record the running GoGo-BE revision
+and the CMS build. Evidence taken on one revision does not carry over to another; if a different
+session deploys in between, redo the observation.
+
+| Step | Action | Doors after | Gate |
+| --- | --- | --- | --- |
+| R0 | Record the baseline: `GET /v1/health`, `/v1/health/ready`, `/v1/taxonomies`, `/v1/places/search` (fixed query), and `POST /v1/auth/refresh` with no token. The owner confirms on the Cloudflare dashboard that the super admin's SSO address is on the `cms-<env>` allow list, and reads out the team domain | password | — |
+| R1 | Deploy a GoGo-BE that contains ADR-0032 (`deploy-dev`) | password | `GET /v1/cms/auth/methods` → `{password:true, accessSso:false}`; password login 201 |
+| R2 | Deploy a GoGo-CMS that reads `methods` (`deploy-cms-dev`); record that revision as the minimum SSO-capable CMS | password | form sign-in unchanged |
+| R3a | `put.sh <env> access/team-domain`, `put.sh <env> access/aud` (Turning on CMS SSO, step 3) → `deploy-dev` | password + SSO | `methods` → `{true,true}`; `access-exchange` with no header → 401 `ACCESS_ASSERTION_MISSING`, with a garbage token → 401 `ACCESS_ASSERTION_INVALID` |
+| R3b | Deploy a GoGo-BE that contains the audited email change (GoGo-BE#681) → as the super admin, `PATCH /v1/cms/auth/admins/{id}` with the SSO address and a reason → `put.sh <env> cms/seed-admin-email` | password + SSO | audit row `admin.email_changed`; password login with the **new** address 201 |
+| R4 | (a) In a **fresh** browser session, sign in through Access and open a super-admin page. (b) The integration harness with `CMS_AUTH=sso` and a fresh `CF_ACCESS_TOKEN` reaches its first `/cms/*` call. (c) The same harness with `CMS_AUTH=password` still signs in | password + SSO | **all of:** `GET /v1/cms/auth/admins` 200 inside the SSO session; a matching `admin.login.sso` row for the super admin in the same minute; (b) and (c) pass; the BE revision and CMS build recorded at R3b are still the ones running. If any of these is missing, do not go to R5 |
+| R5 | `put.sh <env> cms/password-login-enabled false` → `deploy-dev` | SSO | `methods` → `{false,true}`; `POST /v1/cms/auth/login` with the correct and with a wrong password → both 403 `PASSWORD_LOGIN_DISABLED`; in a fresh browser session the sign-in screen renders **no password field** and SSO opens the super-admin page, with a matching `admin.login.sso` row written **after** the flip; the harness with `CMS_AUTH=sso` and a token minted after the flip (`cloudflared access token`) reaches its first `/cms/*` call; a password session captured before the flip fails to refresh (401 `SESSION_REVOKED`); the R0 list returns the same statuses |
+
+Three steps change state outside the repositories and each needs its own order from the owner, every
+time: the SSM writes in R3a and R5, and the whole of R3b (the identity re-binding through the API
+**and** the matching `cms/seed-admin-email` write). An order given for one environment or one run
+does not carry to the next.
+
+**Rollback.** `put.sh <env> cms/password-login-enabled true`, then run `deploy-dev`. Then confirm from
+outside that `POST /v1/cms/auth/login` with the super admin's password answers 201. A deploy that
+succeeds is not proof that the door works. This is one action. It needs neither a console session nor
+a CMS deploy, because the console reads `methods` at runtime. Families that were already revoked stay
+revoked. While the door is open again, DEV is single-factor: say so on the tracking issue when you use
+this rollback, and close the door again as soon as the cause is fixed.
+
+**Compatibility while the door is `false`:**
+
+- GoGo-BE must not go below the first revision with ADR-0032. An older API ignores the flag and
+  silently re-opens the password door.
+- GoGo-CMS must not go below the revision recorded at R2. To roll it back further, re-open the
+  password door first, check that it works, and only then roll back.
+- Clearing `access/*` is refused at boot while the door is `false`. The deploy's `config:check` runs
+  before anything is replaced, so the previous revision keeps serving. Fix SSM, then redeploy.
+
+**Why a read error aborts the deploy.** `render-env.sh` treats only `ParameterNotFound` as absent.
+For this parameter, absent means the API default, which is `true`. If a throttled or denied read of
+an existing `false` were rendered as absent, the password door would re-open without any message.
+Any other error aborts the deploy, and the previous revision keeps running (GoGo-Infra#187).
+
+**What it does not protect against.** An outage at Access or its identity provider makes
+`cms-<env>` unreachable whatever this switch says. Re-opening the password door restores API and
+script access, not the browser console.
+
 ## Grafana Cloud (INF-054)
 
 The time-series destination. Decided 01/09/2026: **Grafana Cloud Free** on dev —

@@ -250,6 +250,13 @@ jobs:
       - name: the seed forwards its production confirmation
         run: ./scripts/deploy/seed-vps.test.sh
 
+      # GoGo-Infra#187 / GoGo-BE#679. An optional value that exists but cannot
+      # be read must stop the deploy, not render as absent: absent
+      # cms/password-login-enabled means `true`, so one throttled read of an
+      # existing `false` would re-open the CMS password door.
+      - name: render-env aborts on an unreadable optional parameter
+        run: ./scripts/deploy/render-env.test.sh
+
       # The namespace default decides what render-env.sh writes into the
       # production process environment. A client key drifting into that default
       # would hand the API a credential it cannot read and must not hold.

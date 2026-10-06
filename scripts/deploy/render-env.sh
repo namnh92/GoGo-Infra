@@ -36,15 +36,34 @@ chmod 600 "$OUT_FILE"
 } >>"$OUT_FILE"
 
 missing=()
+aws_err="$(mktemp)"
+trap 'rm -f "$aws_err"' EXIT
 
 while IFS=$'\t' read -r path env_var _type required _namespace; do
   [[ -n "$env_var" ]] || continue
 
-  if value="$(aws ssm get-parameter --name "${prefix}/${path}" --with-decryption --query 'Parameter.Value' --output text 2>/dev/null)"; then
+  # GoGo-Infra#187 (GoGo-BE#679, F-07). Only ParameterNotFound means absent. An
+  # optional value that exists but could not be read — throttled, denied, the
+  # network — used to render as absent too, and absent means the API default.
+  # For CMS_PASSWORD_LOGIN_ENABLED that default is `true`: one failed read of an
+  # existing `false` would have re-opened the password door without a word. So
+  # any other failure aborts the deploy; the previous revision keeps running.
+  # The error text is kept out of the log: it names the parameter's ARN and can
+  # carry request detail, and the path below is enough to act on.
+  if value="$(aws ssm get-parameter --name "${prefix}/${path}" --with-decryption --query 'Parameter.Value' --output text 2>"$aws_err")"; then
     printf '%s=%s\n' "$env_var" "$value" >>"$OUT_FILE"
     unset value
-  elif [[ ",${required}," == *",${ENVIRONMENT},"* ]]; then
-    missing+=("${prefix}/${path}")
+  # Matched on the error-code field the AWS CLI prints, anchored to the
+  # GetParameter operation — never a bare substring, which an ARN or a message
+  # in a different error could contain (review F-01).
+  elif grep -qE '^An error occurred \(ParameterNotFound\) when calling the GetParameter operation' "$aws_err"; then
+    if [[ ",${required}," == *",${ENVIRONMENT},"* ]]; then
+      missing+=("${prefix}/${path}")
+    fi
+  else
+    rm -f "$OUT_FILE" "$aws_err"
+    echo "deploy aborted: cannot read ${prefix}/${path} (not a missing parameter — access, throttling or network)" >&2
+    exit 1
   fi
 # Explicitly the backend namespace and the runtime consumer. This renders the
 # production process environment, and the deploy role's IAM grants
