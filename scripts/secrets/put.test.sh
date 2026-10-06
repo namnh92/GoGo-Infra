@@ -32,6 +32,10 @@ cat >"${SANDBOX}/aws" <<'STUB'
 #!/usr/bin/env bash
 [[ -n "${CALLS:-}" && -n "${REQUESTS:-}" ]] || { echo "stub: CALLS/REQUESTS unset" >&2; exit 97; }
 echo "aws $*" >>"$CALLS"
+if [[ "$2" == "add-tags-to-resource" && -n "${STUB_TAG_FAIL:-}" ]]; then
+  echo "An error occurred (AccessDeniedException) when calling the AddTagsToResource operation: arn:aws:ssm:x:1:parameter/secret-detail" >&2
+  exit 254
+fi
 for arg in "$@"; do
   if [[ "$arg" == file://* ]]; then cat "${arg#file://}" >>"$REQUESTS"; echo >>"$REQUESTS"; fi
 done
@@ -91,13 +95,14 @@ else
   bad "cms/super-admin-email is eligible" "$(cat "${SANDBOX}/out")"
 fi
 
-# 3. Refusals — each before any AWS write.
+# 3. Refusals — each local, before any AWS call at all (not even STS): a
+# malformed request must say what is wrong with it, not that a session expired.
 refuses() {
   local label="$1" pattern="$2"
   shift 2
   run "$@"
   local status=$?
-  if [[ $status -ne 0 ]] && ! grep -qE 'put-parameter|add-tags-to-resource' "$CALLS" \
+  if [[ $status -ne 0 ]] && [[ ! -s "$CALLS" ]] \
      && grep -qiE "$pattern" "${SANDBOX}/out"; then
     ok "$label"
   else
@@ -122,10 +127,28 @@ refuses "an unknown option is refused" "unknown option" \
 printf '%s' "$VALUE" | PATH="${SANDBOX}:${PATH}" AWS_PROFILE=stub GOGO_ALLOW_UNDECLARED=1 \
   "$SCRIPT" dev cms/not-declared --infra-readable >"${SANDBOX}/out" 2>&1
 status=$?
-if [[ $status -ne 0 ]] && ! grep -q 'add-tags-to-resource' "$CALLS"; then
+if [[ $status -ne 0 ]] && [[ ! -s "$CALLS" ]]; then
   ok "GOGO_ALLOW_UNDECLARED never grants the tag"
 else
   bad "GOGO_ALLOW_UNDECLARED never grants the tag" "exit ${status}; calls: $(tr '\n' ';' <"$CALLS")"
+fi
+
+# 5. The value is stored, the tag fails: say so, give a tag-only recovery, exit
+# non-zero, and leak neither the value nor the AWS error text.
+: >"$CALLS"
+printf '%s' "$VALUE" | PATH="${SANDBOX}:${PATH}" AWS_PROFILE=stub STUB_TAG_FAIL=1 \
+  "$SCRIPT" dev cms/access-staff-emails --infra-readable >"${SANDBOX}/out" 2>&1
+status=$?
+if [[ $status -ne 0 ]] && grep -q 'WAS WRITTEN' "${SANDBOX}/out" \
+   && grep -q 'add-tags-to-resource --resource-type Parameter --resource-id /gogo/dev/backend/cms/access-staff-emails' "${SANDBOX}/out"; then
+  ok "a failed tag after a successful write is reported as a partial write with a tag-only recovery"
+else
+  bad "a failed tag after a successful write is reported as a partial write" "exit ${status}: $(cat "${SANDBOX}/out")"
+fi
+if grep -qE 'staff-one@example.com|secret-detail|AccessDenied' "${SANDBOX}/out"; then
+  bad "the partial-write report leaks neither the value nor the AWS error" "$(cat "${SANDBOX}/out")"
+else
+  ok "the partial-write report leaks neither the value nor the AWS error"
 fi
 
 # 4. Without the flag nothing changes for an ordinary row: no tag call.

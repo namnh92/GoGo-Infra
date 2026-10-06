@@ -34,6 +34,22 @@ specific things that convert infrastructure management into account takeover:
 - reading SSM parameters or Secrets Manager secrets outside `/gogo/*`
 - stopping CloudTrail or deleting the OIDC provider
 
+## SSM read ceilings and the tag lock (GoGo-Infra#194, ADR-0010)
+
+Optional inputs, set by every environment:
+
+- `ssm_read_ceilings` — per principal (`aws:PrincipalArn`), deny every parameter read outside a
+  list. Used for the Terraform plan and apply roles: the plan role's `ReadOnlyAccess` grants
+  `ssm:Get*` on everything, and the apply role can rewrite its own policies, so only a boundary
+  statement holds. A list containing `backend/*` or `/gogo/*` is refused.
+- `infra_readable_arns` — those principals may read these only while tagged
+  `gogo:infra-readable=true`, and may never decrypt them (`PARAMETER_ARN` encryption context).
+- `locked_tag_keys` — no role under the boundary may add, remove or create with these keys
+  (case-insensitive). Default `["gogo:infra-readable"]`.
+
+`tests/boundary.tftest.hcl` renders the real document offline (`terraform test`, no AWS call) and
+asserts on it; CI runs it.
+
 ## Consequence worth knowing
 
 Because the boundary denies edits to itself, `terraform apply` running as the apply role

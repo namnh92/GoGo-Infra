@@ -86,6 +86,8 @@ check_env() {
   need "ReadInfraReadableParameters Allow" "$body" 'effect[[:space:]]*=[[:space:]]*"Allow"' || status=1
   need "ReadInfraReadableParameters actions = [ssm:GetParameter] only" "$body" 'actions[[:space:]]*=[[:space:]]*\["ssm:GetParameter"\]' || status=1
   need "ReadInfraReadableParameters resources = local.infra_readable_parameter_arns" "$body" 'resources[[:space:]]*=[[:space:]]*local\.infra_readable_parameter_arns' || status=1
+  need "ReadInfraReadableParameters requires the tag (StringEquals)" "$body" 'test[[:space:]]*=[[:space:]]*"StringEquals"' || status=1
+  need "ReadInfraReadableParameters keyed on aws:ResourceTag/gogo:infra-readable" "$body" 'variable[[:space:]]*=[[:space:]]*"aws:ResourceTag/gogo:infra-readable"' || status=1
 
   body="$(block "$f" "$doc_read" DenyDecryptingInfraReadableNames)"
   need "DenyDecryptingInfraReadableNames Deny" "$body" 'effect[[:space:]]*=[[:space:]]*"Deny"' || status=1
@@ -97,7 +99,7 @@ check_env() {
   body="$(perl -0777 -ne 's{(?://|#)[^\n]*}{}g; print $1 if /(infra_readable_parameter_arns\s*=\s*\[.*?\n\s*\])/s' "$f")"
   need "infra_readable_parameter_arns names cms/super-admin-email" "$body" '"cms/super-admin-email"' || status=1
   need "infra_readable_parameter_arns names cms/access-staff-emails" "$body" '"cms/access-staff-emails"' || status=1
-  need "infra_readable_parameter_arns is under backend/" "$body" 'parameter/gogo/\$\{var\.environment\}/backend/\$\{path\}' || status=1
+  need "infra_readable_parameter_arns is under backend/" "$body" '\$\{local\.ssm_arn_prefix\}/\$\{var\.environment\}/backend/\$\{path\}' || status=1
   if grep -q '\*' <<<"$body"; then
     echo "  wildcard in infra_readable_parameter_arns"
     status=1
@@ -107,6 +109,40 @@ check_env() {
   if [[ "$paths" != "2" ]]; then
     echo "  infra_readable_parameter_arns names ${paths} paths, expected exactly 2"
     status=1
+  fi
+
+  # The boundary carries the controls the roles cannot remove (review round 1,
+  # owner decision 2026-10-06): a read ceiling for plan and apply and the two
+  # names. terraform/modules/aws-permissions-boundary/tests renders what it
+  # emits; this checks every environment passes the right inputs.
+  local bnd plan_c apply_c
+  bnd="$(block "$f" '^module\s+"boundary"\s*\{')"
+  plan_c="$(perl -0777 -ne 'print $1 if /\n\s*Plan\s*=\s*(\{.*?\n\s{4}\})/s' <<<"$bnd")"
+  apply_c="$(perl -0777 -ne 'print $1 if /\n\s*Apply\s*=\s*(\{.*?\n\s{4}\})/s' <<<"$bnd")"
+  need "boundary ceiling Plan names the plan role" "$plan_c" 'principal_arn[[:space:]]*=[[:space:]]*"arn:aws:iam::\$\{local\.account\}:role/\$\{module\.tags\.name_prefix\}-plan"' || status=1
+  need "boundary ceiling Plan allows terraform/read/*" "$plan_c" '/ci/\$\{var\.environment\}/terraform/read/\*"' || status=1
+  need "boundary ceiling Plan allows the two names" "$plan_c" 'concat\(local\.infra_readable_parameter_arns' || status=1
+  if grep -q 'terraform/write' <<<"$plan_c"; then
+    echo "  boundary ceiling Plan lists the write tree"
+    status=1
+  fi
+  need "boundary ceiling Apply names the apply role" "$apply_c" 'principal_arn[[:space:]]*=[[:space:]]*"arn:aws:iam::\$\{local\.account\}:role/\$\{module\.tags\.name_prefix\}-apply"' || status=1
+  need "boundary ceiling Apply allows terraform/write/*" "$apply_c" '/ci/\$\{var\.environment\}/terraform/write/\*"' || status=1
+  need "boundary infra_readable_arns = local list" "$bnd" 'infra_readable_arns[[:space:]]*=[[:space:]]*local\.infra_readable_parameter_arns' || status=1
+  if grep -Eq 'locked_tag_keys' <<<"$bnd"; then
+    echo "  boundary call overrides locked_tag_keys"
+    status=1
+  fi
+  if grep -Eq 'locked_tag_keys' <<<"$(perl -0777 -ne 's{(?://|#)[^\n]*}{}g; print' "$f")"; then
+    echo "  an environment overrides locked_tag_keys"
+    status=1
+  fi
+
+  # Every role carries the boundary: the github_oidc module gets it, and the
+  # developer role sets it itself.
+  need "github_oidc passes the boundary to every role" "$(block "$f" '^module\s+"github_oidc"\s*\{')" 'permissions_boundary_arn[[:space:]]*=[[:space:]]*module\.boundary\.arn' || status=1
+  if grep -q 'resource "aws_iam_role" "developer"' "$f"; then
+    need "developer role carries the boundary" "$(block "$f" '^resource\s+"aws_iam_role"\s+"developer"\s*\{')" 'permissions_boundary[[:space:]]*=[[:space:]]*module\.boundary\.arn' || status=1
   fi
 
   # Attachments: plan and apply, nobody else.
@@ -139,9 +175,14 @@ check_module() {
   for a in ssm:AddTagsToResource ssm:RemoveTagsFromResource ssm:PutParameter; do
     need "DenyLockedTagChanges action ${a}" "$body" "\"${a}\"" || status=1
   done
-  need "DenyLockedTagChanges ForAnyValue:StringEquals" "$body" 'test[[:space:]]*=[[:space:]]*"ForAnyValue:StringEquals"' || status=1
+  need "DenyLockedTagChanges ForAnyValue:StringEqualsIgnoreCase" "$body" 'test[[:space:]]*=[[:space:]]*"ForAnyValue:StringEqualsIgnoreCase"' || status=1
+  need "DenyLockedTagChanges values = var.locked_tag_keys" "$body" 'values[[:space:]]*=[[:space:]]*var\.locked_tag_keys' || status=1
   need "DenyLockedTagChanges on aws:TagKeys" "$body" 'variable[[:space:]]*=[[:space:]]*"aws:TagKeys"' || status=1
   need "DenyLockedTagChanges covers every /gogo/* parameter" "$body" 'resources[[:space:]]*=[[:space:]]*\["\$\{local\.arn_prefix\}/\*"\]' || status=1
+  # The dynamic block must be switched on by the variable, not a literal.
+  local raw
+  raw="$(block "$f" '^data\s+"aws_iam_policy_document"\s+"read"\s*\{')"
+  need "DenyLockedTagChanges is enabled by var.locked_tag_keys" "$raw" 'for_each[[:space:]]*=[[:space:]]*length\(var\.locked_tag_keys\)[[:space:]]*==[[:space:]]*0[[:space:]]*\?[[:space:]]*\[\][[:space:]]*:[[:space:]]*\[1\]' || status=1
   body="$(block "$vars" '^variable\s+"locked_tag_keys"\s*\{')"
   need "locked_tag_keys defaults to gogo:infra-readable" "$body" 'default[[:space:]]*=[[:space:]]*\["gogo:infra-readable"\]' || status=1
   return "$status"
@@ -205,7 +246,15 @@ mutate env "attached to the deploy role too" 's/(deploy\s*=\s*\{.*?policy_arns\s
 mutate module "no tag lock" 's/\n\s*dynamic\s*"statement"\s*\{.*?DenyLockedTagChanges.*?\n  \}\n/\n/s'
 mutate module "tag lock without PutParameter" 's/\n\s*"ssm:PutParameter",//'
 mutate module "tag lock keyed on RequestTag" 's/"aws:TagKeys"/"aws:RequestTag\/gogo:infra-readable"/'
-mutate module "tag lock with ForAllValues" 's/ForAnyValue:StringEquals/ForAllValues:StringEquals/'
+mutate module "tag lock with ForAllValues" 's/ForAnyValue:StringEqualsIgnoreCase/ForAllValues:StringEqualsIgnoreCase/'
+mutate module "tag lock case-sensitive" 's/ForAnyValue:StringEqualsIgnoreCase/ForAnyValue:StringEquals/'
+mutate module "tag lock disabled by an empty for_each" 's/for_each = length\(var\.locked_tag_keys\) == 0 \? \[\] : \[1\]/for_each = []/'
+mutate env "the read Allow without its tag condition" 's/(sid\s*=\s*"ReadInfraReadableParameters".*?)\n\s*condition\s*\{.*?\n    \}\n/$1\n/s'
+mutate env "the boundary without a read ceiling" 's/\n\s*ssm_read_ceilings\s*=\s*\{.*?\n  \}\n/\n/s'
+mutate env "the plan ceiling widened to the write tree" 's/terraform\/read\/\*"/terraform\/write\/*"/'
+mutate env "the boundary without the two names" 's/\n\s*infra_readable_arns\s*=\s*local\.infra_readable_parameter_arns//'
+mutate env "a caller disabling the tag lock" 's/(\n\s*infra_readable_arns\s*=\s*local\.infra_readable_parameter_arns)/$1\n  locked_tag_keys     = []/'
+mutate env "the developer role without the boundary" 's/(resource "aws_iam_role" "developer" \{.*?)\n\s*permissions_boundary\s*=\s*module\.boundary\.arn/$1/s'
 
 if [[ "$failures" -gt 0 ]]; then
   echo "${failures} infra-readable IAM check(s) failed."

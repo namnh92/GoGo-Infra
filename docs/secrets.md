@@ -346,16 +346,42 @@ The CMS Access allow list (GoGo-BE#687, owner decisions O-2 and O-5) needs two:
 Both are allow-list entries, not credentials, which is why they may be `String`. What lets the plan
 and apply roles read them and nothing else under `/gogo/<env>/backend/`:
 
-1. **Exact-ARN Allow** (`<prefix>-infra-readable`, attached to plan and apply). `ReadOnlyAccess`,
-   which the plan role holds, grants no Parameter Store read at all, so without this the plan fails.
-2. **Tag-conditioned Deny.** The apply role's `DenyReadingApplicationSecrets` still covers
-   `backend/*`, except a parameter tagged `gogo:infra-readable=true`. The tag alone grants nothing:
-   a tagged third parameter is still outside the Allow.
-3. **No decrypt for those two names.** Both roles can decrypt with the SSM key for their own `ci/`
-   credentials. A Deny on `kms:Decrypt` keyed on the `PARAMETER_ARN` encryption context means a
-   `SecureString` recreated under one of these names returns ciphertext only.
-4. **Tag lock.** Every GoGo role is denied adding, removing or creating with the tag. Only the
-   bootstrap identity (the owner's SSO session) can make a parameter eligible.
+**In the permissions boundary** (`gogo-<env>-boundary`), which no role it caps can edit — the apply
+role can rewrite any `gogo-*` policy, so a Deny there would not hold:
+
+1. **Read ceiling for the plan and apply roles.** Every parameter read outside a short list is
+   denied, by `aws:PrincipalArn`: plan reads `ci/<env>/terraform/read/*` and the two names; apply
+   reads `ci/<env>/terraform/write/*` and the two names. This closes a hole older than this change:
+   the plan role holds `ReadOnlyAccess`, whose `ssm:Get*` covers every parameter, and every SSM policy
+   here grants `kms:Decrypt` through SSM — so a pull-request session could read `backend/*` and the
+   write-capable Cloudflare token.
+2. **Tag required.** Those two principals may read the two names only while they carry
+   `gogo:infra-readable=true`.
+3. **Never decrypted.** A Deny on `kms:Decrypt` keyed on the `PARAMETER_ARN` encryption context: a
+   `SecureString` recreated under one of the names returns ciphertext only.
+4. **Tag lock.** No role under the boundary may add, remove or create with the tag, compared
+   case-insensitively. Only the bootstrap identity (the owner's SSO session) can make a parameter
+   eligible.
+
+**In the roles' own policies**, as the grant and as defence in depth: an `ssm:GetParameter` Allow on
+exactly the two ARNs, conditioned on the tag (`<prefix>-infra-readable`, plan and apply); the
+apply role's `DenyReadingApplicationSecrets` exempting the tag; the same decrypt Deny; the same tag
+lock in every module policy.
+
+**Changing the boundary needs the bootstrap session.** CI apply is denied editing it. Apply it first,
+from a checkout of the change, then let CI apply the rest:
+
+```bash
+export AWS_PROFILE=gogo-bootstrap
+source scripts/lib/r2-profile.sh && write_r2_profile /gogo/ci/dev/terraform/write
+export CLOUDFLARE_API_TOKEN="$(aws ssm get-parameter --name /gogo/ci/dev/terraform/write/cloudflare-token \
+  --with-decryption --query Parameter.Value --output text)"
+terraform -chdir=terraform/environments/dev apply -target=module.boundary \
+  -var-file=../../../config/global.tfvars -var-file=../../../config/dev.tfvars
+```
+
+The next `plan (dev)` must show no change to `module.boundary` before the merge that triggers
+`terraform-apply-dev`; otherwise that apply fails partway on the boundary.
 
 `validate.sh` is the detective half. It reports a declared row stored without the tag, and any
 tagged parameter in `/gogo/<env>/` or `/gogo/ci/<env>/` that is a `SecureString` or not declared
@@ -540,6 +566,7 @@ and the CMS build.
 
 | Step | Action | Who | Gate |
 | --- | --- | --- | --- |
+| R1a-0 | Apply `module.boundary` from the GoGo-Infra#194 branch in the bootstrap session (previous section) | **owner** | `plan (dev)` on the PR shows no `module.boundary` change |
 | R1a | Merge GoGo-Infra#194 (manifest rows, `put.sh --infra-readable`, IAM) → `terraform-apply-dev` | standing | `validate.sh dev` (bootstrap session) reports both rows MISSING and the retired `cms/seed-admin-*` UNDECLARED. **`deploy-dev` fails from here until R1b** |
 | R1b | `put.sh dev cms/super-admin-email --infra-readable` = the address on today's allow list; `put.sh dev cms/access-staff-emails --infra-readable` = `["<staff…>"]` or `[]`; `delete.sh dev cms/seed-admin-email`; `delete.sh dev cms/seed-admin-password` | **owner** | `validate.sh dev --strict` → `METADATA READY`, no tag finding; `deploy-dev` green |
 | R2 | Infra-2 (Access policy from SSM) merged → apply | standing | plan shows no allow-list change; Access still 302 |
@@ -575,12 +602,13 @@ needs a console session:
 | yes | yes | no | same: SSM back → `deploy-dev`; investigate before retrying |
 | yes | yes | yes | remove the old address from the staff list → apply |
 
-**There is no password break-glass for the super admin (O-1).** Setting
-`cms/super-admin-sso-only` back to `false` is not a recovery once the hash is erased: the account has
-no password to log in with. The way back is a fresh SSO sign-in, then a password set through the
-console, or leaving SSO as the only door. An Access or identity-provider outage therefore blocks the
-super admin's console and API access until it ends; staff password sign-in also needs the Access
-assertion once BE-c is on the environment.
+**There is no password break-glass for the super admin (O-1, owner decision 2026-10-06).** Once the
+hash is erased it stays NULL: the API refuses `reset-password`, `change-password` and
+`set-temporary-password` for the super admin while `cms/super-admin-sso-only` is `true`, and setting
+the switch back to `false` restores nothing, because there is no password to log in with. Every
+recovery is Access SSO plus SSM → `terraform-apply-<env>` → `deploy-dev` (the table above). An Access
+or identity-provider outage therefore blocks the super admin's console and API access until it ends;
+staff password sign-in also needs the Access assertion once BE-c is on the environment.
 
 **Lock a staff member.** Suspend the admin row through the CMS (immediate: every door closes,
 sessions are revoked). Then remove the address from `cms/access-staff-emails` and apply, which closes

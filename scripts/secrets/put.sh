@@ -84,8 +84,9 @@ if [[ -z "$PARAM_TYPE" && "$ENVIRONMENT" != "ci" ]]; then
     fi
   fi
 fi
-require_aws
 
+# Every local refusal comes before require_aws: a malformed request should say
+# what is wrong with it, not that the SSO session expired (review F-05).
 PARAM_TYPE="${PARAM_TYPE:-SecureString}"
 
 case "$PARAM_TYPE" in
@@ -98,6 +99,8 @@ esac
 if [[ "$INFRA_READABLE" == "yes" && "$PARAM_TYPE" != "String" ]]; then
   die "--infra-readable refuses ${PARAM_TYPE}: only a String may be readable by Terraform"
 fi
+
+require_aws
 
 confirm_prod "$ENVIRONMENT" "write ${PARAM_PATH}"
 
@@ -156,8 +159,19 @@ aws ssm put-parameter --cli-input-json "file://${request_file}" --no-cli-pager >
 if [[ "$INFRA_READABLE" == "yes" ]]; then
   # A separate call: PutParameter cannot tag a parameter it overwrites
   # ("To add tags to an existing parameter, use AddTagsToResource"). Idempotent.
-  aws ssm add-tags-to-resource --resource-type Parameter --resource-id "$full_path" \
-    --tags Key=gogo:infra-readable,Value=true --no-cli-pager >/dev/null
+  #
+  # If the tag fails, the value is already stored and that must be said: during
+  # an address change the operator would otherwise assume nothing changed and
+  # skip the apply (review F-06). The AWS error is not echoed — it can carry
+  # request detail — and the recovery is a tag-only call, no value involved.
+  if ! aws ssm add-tags-to-resource --resource-type Parameter --resource-id "$full_path" \
+    --tags Key=gogo:infra-readable,Value=true --no-cli-pager >/dev/null 2>&1; then
+    echo "error: ${full_path} WAS WRITTEN (new version stored), but tagging it failed." >&2
+    echo "       Terraform's read of it stays denied until the tag is set. Re-run the tag only:" >&2
+    echo "         aws ssm add-tags-to-resource --resource-type Parameter --resource-id ${full_path} --tags Key=gogo:infra-readable,Value=true" >&2
+    echo "       then ./scripts/secrets/validate.sh ${ENVIRONMENT}. The value change is live for the next deploy." >&2
+    exit 1
+  fi
   echo "wrote ${full_path} (${PARAM_TYPE}, tagged gogo:infra-readable=true)"
 else
   echo "wrote ${full_path} (${PARAM_TYPE})"

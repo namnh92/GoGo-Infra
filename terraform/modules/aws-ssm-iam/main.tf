@@ -79,7 +79,9 @@ data "aws_iam_policy_document" "read" {
   # bootstrap identity (the owner's SSO session, which attaches none of these)
   # may tag. PutParameter is included because it accepts tags at creation.
   # ForAnyValue: the request is denied if any tag key it names is locked, even
-  # alongside harmless ones.
+  # alongside harmless ones. IgnoreCase: tag keys in aws:ResourceTag conditions
+  # match case-insensitively, so GOGO:INFRA-READABLE would satisfy the read
+  # exemption while slipping past a case-sensitive lock (review F-02/F-03).
   dynamic "statement" {
     for_each = length(var.locked_tag_keys) == 0 ? [] : [1]
 
@@ -96,7 +98,7 @@ data "aws_iam_policy_document" "read" {
       resources = ["${local.arn_prefix}/*"]
 
       condition {
-        test     = "ForAnyValue:StringEquals"
+        test     = "ForAnyValue:StringEqualsIgnoreCase"
         variable = "aws:TagKeys"
         values   = var.locked_tag_keys
       }

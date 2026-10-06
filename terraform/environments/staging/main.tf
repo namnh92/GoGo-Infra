@@ -55,9 +55,10 @@ locals {
   # true` in config/secrets.manifest.yml. Named exactly — a wildcard here would
   # hand the plan role whatever is added under backend/ next.
   # scripts/lib/manifest.test.sh pins the manifest side of this list.
+  ssm_arn_prefix = "arn:aws:ssm:${data.aws_region.current.name}:${local.account}:parameter/gogo"
   infra_readable_parameter_arns = [
     for path in ["cms/super-admin-email", "cms/access-staff-emails"] :
-    "arn:aws:ssm:${data.aws_region.current.name}:${local.account}:parameter/gogo/${var.environment}/backend/${path}"
+    "${local.ssm_arn_prefix}/${var.environment}/backend/${path}"
   ]
 }
 
@@ -76,6 +77,29 @@ module "boundary" {
   name            = "${module.tags.name_prefix}-boundary"
   resource_prefix = var.project_name
   tags            = module.tags.tags
+
+  # GoGo-Infra#194 / ADR-0010. The plan and apply roles read their own CI
+  # credentials and the two Terraform-readable Strings, and nothing else. Here
+  # rather than in their policies: ReadOnlyAccess gives the plan role ssm:Get*
+  # on everything, and the apply role can rewrite its own gogo-* policies.
+  # Changing this policy needs the bootstrap session — CI apply is denied it.
+  ssm_read_ceilings = {
+    Plan = {
+      principal_arn = "arn:aws:iam::${local.account}:role/${module.tags.name_prefix}-plan"
+      readable_arns = concat(local.infra_readable_parameter_arns, [
+        "${local.ssm_arn_prefix}/ci/${var.environment}/terraform/read",
+        "${local.ssm_arn_prefix}/ci/${var.environment}/terraform/read/*",
+      ])
+    }
+    Apply = {
+      principal_arn = "arn:aws:iam::${local.account}:role/${module.tags.name_prefix}-apply"
+      readable_arns = concat(local.infra_readable_parameter_arns, [
+        "${local.ssm_arn_prefix}/ci/${var.environment}/terraform/write",
+        "${local.ssm_arn_prefix}/ci/${var.environment}/terraform/write/*",
+      ])
+    }
+  }
+  infra_readable_arns = local.infra_readable_parameter_arns
 }
 
 # --- Scoped SSM policies -----------------------------------------------------
@@ -305,6 +329,14 @@ data "aws_iam_policy_document" "infra_readable" {
     effect    = "Allow"
     actions   = ["ssm:GetParameter"]
     resources = local.infra_readable_parameter_arns
+
+    # Both conditions, not either: a listed name stored without the tag stays
+    # unreadable, so validate.sh's "tag missing" finding is true (review F-01).
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/gogo:infra-readable"
+      values   = ["true"]
+    }
   }
 
   statement {
