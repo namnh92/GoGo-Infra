@@ -29,8 +29,14 @@ while [[ $# -gt 0 ]]; do
   [[ "$1" == "--name" ]] && name="$2"
   shift
 done
+# AWS CLI 2.36+ writes the prefixed form (GoGo-Infra#189); older CLIs the bare
+# one. Both mean absent.
 not_found() {
-  echo "An error occurred (ParameterNotFound) when calling the GetParameter operation: Parameter ${name} not found." >&2
+  if [[ "${AWS_STUB_FORMAT:-new}" == "old" ]]; then
+    echo "An error occurred (ParameterNotFound) when calling the GetParameter operation: Parameter ${name} not found." >&2
+  else
+    echo "aws: [ERROR]: An error occurred (ParameterNotFound) when calling the GetParameter operation: Parameter ${name} not found." >&2
+  fi
   exit 254
 }
 if [[ "$name" == *"/${AWS_STUB_PATH}" ]]; then
@@ -38,7 +44,7 @@ if [[ "$name" == *"/${AWS_STUB_PATH}" ]]; then
     value) echo "false" ;;
     absent) not_found ;;
     denied)
-      echo "An error occurred (AccessDeniedException) when calling the GetParameter operation: not authorized" >&2
+      echo "aws: [ERROR]: An error occurred (AccessDeniedException) when calling the GetParameter operation: not authorized" >&2
       exit 254
       ;;
     throttled)
@@ -64,6 +70,7 @@ run() {
   local mode="$1"
   rm -f "$tmp/out.env"
   PATH="$tmp/bin:$PATH" AWS_STUB_PATH=cms/password-login-enabled AWS_STUB_MODE="$mode" \
+    AWS_STUB_FORMAT="${AWS_STUB_FORMAT:-new}" \
     "$script" dev "$tmp/out.env" >"$tmp/stdout" 2>"$tmp/stderr"
 }
 
@@ -75,13 +82,15 @@ else
   fail "a readable value is rendered (exit ${status}): $(cat "$tmp/stderr")"
 fi
 
-run absent
-status=$?
-if [[ $status -eq 0 ]] && ! grep -q '^CMS_PASSWORD_LOGIN_ENABLED=' "$tmp/out.env"; then
-  ok "an absent optional parameter renders nothing, so the API default applies"
-else
-  fail "an absent optional parameter renders nothing (exit ${status}): $(cat "$tmp/stderr")"
-fi
+for format in new old; do
+  AWS_STUB_FORMAT=$format run absent
+  status=$?
+  if [[ $status -eq 0 ]] && ! grep -q '^CMS_PASSWORD_LOGIN_ENABLED=' "$tmp/out.env"; then
+    ok "an absent optional parameter renders nothing, so the API default applies (${format} CLI error format)"
+  else
+    fail "an absent optional parameter renders nothing (${format} CLI error format, exit ${status}): $(cat "$tmp/stderr")"
+  fi
+done
 
 for mode in denied throttled collision; do
   run "$mode"

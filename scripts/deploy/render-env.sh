@@ -55,8 +55,10 @@ while IFS=$'\t' read -r path env_var _type required _namespace; do
     unset value
   # Matched on the error-code field the AWS CLI prints, anchored to the
   # GetParameter operation — never a bare substring, which an ARN or a message
-  # in a different error could contain (review F-01).
-  elif grep -qE '^An error occurred \(ParameterNotFound\) when calling the GetParameter operation' "$aws_err"; then
+  # in a different error could contain (review F-01). AWS CLI 2.36+ prefixes
+  # the line with `aws: [ERROR]: ` (GoGo-Infra#189: without allowing it, every
+  # absent optional parameter read as unreadable and the deploy aborted).
+  elif grep -qE '^(aws: \[ERROR\]: )?An error occurred \(ParameterNotFound\) when calling the GetParameter operation' "$aws_err"; then
     if [[ ",${required}," == *",${ENVIRONMENT},"* ]]; then
       missing+=("${prefix}/${path}")
     fi
