@@ -49,6 +49,10 @@ variable "api_origin_provisioned" {
     the variable in Cloudflare first and flips this to true afterwards. While it
     is false the Worker still serves the association files; only `/l/{slug}` is
     dark, and that failure is visible on the first click rather than silent.
+
+    GoGo-Infra#172: like every binding, this only shapes the upload that
+    creates the script; afterwards bindings are ignored and Cloudflare holds
+    the value.
   DESC
   type        = bool
   default     = false
@@ -61,6 +65,9 @@ variable "tenjin_tracking_template" {
     LNK-BE-003). Empty disables that fallback; sharing keeps working without
     attribution (FR-LINK-006). The API-side value is SSM
     tenjin/tracking-url-template.
+
+    GoGo-Infra#172: initial value only. It is sent when the script is created;
+    afterwards Cloudflare owns the running value (ignore_changes on bindings).
   DESC
 
   type    = string
@@ -74,6 +81,9 @@ variable "fallback_url" {
     ?link=<canonical>. Empty means a plain uncached text answer — never a
     redirect back to the canonical URL, which would loop. No value exists yet:
     GoGo-WebApp is pending and there is no App Store Connect app.
+
+    GoGo-Infra#172: initial value only. It is sent when the script is created;
+    afterwards Cloudflare owns the running value (ignore_changes on bindings).
   DESC
 
   type    = string
@@ -104,17 +114,20 @@ variable "edge_auth_token_provisioned" {
 
     **This module never receives the token.** The value is a Cloudflare Worker
     secret written at deploy time straight from SSM; Terraform only says whether
-    a binding by that name should be carried across script updates, using the
-    Workers API's `inherit` type. So the token is absent from the configuration,
+    a binding by that name should be emitted (as the Workers API's `inherit`
+    type) in the upload that creates the script. So the token is absent from the configuration,
     from the plan, from the state file and from every log line either produces.
 
     false — the state of every environment today — emits no binding at all,
     which is also what the worker expects: with no token bound it forwards no
     edge headers, and the API trusts nothing.
 
-    Ordering matters and only one order works. Put the secret first, then set
-    this true and apply. `inherit` on a script that has no such binding yet is
-    an error, and an apply while this is false removes a binding that exists.
+    GoGo-Infra#172: this only shapes the upload that *creates* the script —
+    bindings are ignored afterwards, and keep_bindings carries a secret put
+    with put-worker-secret.sh across every later upload. On an existing script
+    the flag changes nothing either way; set it true after putting the secret
+    so the tfvars say what the Worker holds. Never true for a script that does
+    not exist yet: `inherit` with nothing to inherit is an error.
     docs/share-link-edge-auth.md is the runbook.
   DESC
 

@@ -109,14 +109,56 @@ Reaching the worker means no installed app took the link. The page is static on 
 - A code outside GoGo-BE's join bounds (base64url, 10–128 characters) is a `404`.
 - It calls nothing upstream, so an API outage cannot turn it into an error.
 
-## The association files are baked in
+## Binding values belong to Cloudflare (GoGo-Infra#172)
 
-`config/well-known/<env>/` is read at plan time and embedded as worker bindings. They change only
-when the app identity does, and an edge that has to reach an origin to answer Apple and Google is
-an edge that fails verification during an origin outage.
+Owner decision 2026-10-06, option B: **Cloudflare manages every Worker variable; Terraform owns
+the code, the routes and the DNS.** The script carries `lifecycle { ignore_changes = [bindings] }`.
 
-Regenerate with `scripts/deploy/render-well-known.sh <env>` and re-apply. `terraform plan` shows
-the change, because the file contents are part of the resource.
+| Binding | Where it comes from | How to change the running value |
+| --- | --- | --- |
+| `TENJIN_TRACKING_TEMPLATE`, `FALLBACK_URL` | `config/<env>.tfvars` — **initial value only** | Workers & Pages → the script → Settings → Variables |
+| `AASA`, `ASSETLINKS` | `config/well-known/<env>/` — **initial value only** | same; paste the file `render-well-known.sh <env>` produced |
+| `API_ORIGIN` | Cloudflare (`inherit`, `api_origin_provisioned`) | same |
+| `EDGE_AUTH_TOKEN` | SSM → `scripts/secrets/put-worker-secret.sh` | [`docs/share-link-edge-auth.md`](../../../docs/share-link-edge-auth.md) |
+
+Terraform sends the list in `main.tf` once, when it **creates** the script. After that a plan
+never shows a binding difference and an apply never writes a binding on its own account — editing
+a tfvars value or a well-known file changes nothing on a running Worker. Binding drift is
+therefore invisible to `terraform plan` by design; to compare, read
+`GET /accounts/<account>/workers/scripts/<name>/settings` (or the dashboard).
+
+Why: the Workers API never returns the `inherit` type. Each apply resolved `API_ORIGIN` to its
+stored value, the next refresh read `plain_text`, and every plan asked to change it again.
+
+### Before any apply that updates the script
+
+Provider 5.24 has a limit this does not remove. On refresh it keeps the **state's** text for a
+`plain_text` binding already in state, and it never records a secret Terraform did not create. An
+update re-sends the bindings as state has them, so:
+
+- **Secrets survive**: `keep_bindings = ["secret_text", "secret_key"]` tells Cloudflare to keep
+  them from the previous version.
+- **A variable edited on the dashboard since the last apply is put back** to the value state
+  holds, the moment an apply updates `cloudflare_workers_script.share_link` for any reason — new
+  code (`workers/share-link/**`) or any other attribute of that resource. Bindings are ignored in
+  the diff, not in the upload.
+
+So, whenever the PR's `plan (<env>)` shows `cloudflare_workers_script.share_link will be updated`,
+check whether a variable was edited on the dashboard since the last apply. The plan line
+`modified_on = "<time>" -> (known after apply)` is the script's last change in Cloudflare: later
+than the last `terraform-apply-<env>` run means someone edited it outside Terraform. If so — or
+if you cannot tell — re-sync state from Cloudflare **before** the merge triggers the apply:
+
+```bash
+cd terraform/environments/<env>
+terraform state rm 'module.share_link_worker[0].cloudflare_workers_script.share_link'
+terraform import -var-file=../../../config/global.tfvars -var-file=../../../config/<env>.tfvars \
+  'module.share_link_worker[0].cloudflare_workers_script.share_link' '<account_id>/<script_name>'
+terraform plan  -var-file=../../../config/global.tfvars -var-file=../../../config/<env>.tfvars
+```
+
+The plan must show no binding removed. A PR whose plan does not update the script (routes, DNS,
+tfvars-only binding values) uploads nothing and needs none of this.
 
 ## Where a click goes
 
@@ -161,7 +203,7 @@ place and no repository, which is exactly the drift tracked as INF-037 for the C
 ## Still needed for a link to work end to end
 
 1. A DNS record so the hostname resolves — routes attach to a zone, but the name must exist.
-2. `api_origin` pointing at a reachable GoGo-BE.
+2. `API_ORIGIN` set on the Worker in Cloudflare, pointing at a reachable GoGo-BE (then `api_origin_provisioned = true`).
 3. `LNK-BE-002` (`GET /v1/share-links/{slug}`) deployed to that origin — implemented on GoGo-BE
    branch `feature/GOGO-205-share-links-api`, not yet merged.
 4. `share_fallback_url` once a landing page or store listing exists (empty until then).

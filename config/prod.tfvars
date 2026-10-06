@@ -23,6 +23,9 @@ cors_allowed_origins = [
 # installed and there is no attribution URL: the web landing page (LNK-WEB-001,
 # WebApp pending) or a store page once the apps are listed. Empty until one of
 # those exists — never a URL under /l/ (the worker's own route), never invented.
+# GoGo-Infra#172: initial value only — the running Worker's value lives in
+# Cloudflare (dashboard → Variables); editing it here changes nothing after the
+# script exists. See modules/cloudflare-worker/README.md.
 share_fallback_url = ""
 # INF-070: has the share-link Worker's EDGE_AUTH_TOKEN secret been put yet?
 # The token itself never appears here or anywhere else in Terraform — it goes

@@ -51,8 +51,9 @@ resource "cloudflare_workers_script" "share_link" {
       },
     ],
     # INF-070. `inherit` means "keep the binding the previous version of this
-    # script had", so the token stays bound across script updates without this
-    # configuration ever holding it. It is written by
+    # script had", so the configuration never holds the token. Since #172 it only
+    # matters at creation; keep_bindings below carries the secret across later
+    # uploads. The token is written by
     # scripts/secrets/put-worker-secret.sh, straight from SSM to Cloudflare;
     # Terraform never receives it, so it is in no plan, no state file and no log.
     #
@@ -67,17 +68,11 @@ resource "cloudflare_workers_script" "share_link" {
       },
     ] : [],
 
-    # GoGo-Infra#153. API_ORIGIN is set in Cloudflare, not here — the same
-    # `inherit` arrangement as the token above, for a different reason. It is not
-    # a secret; it is a value whose authority is the edge. Terraform holding a
-    # copy meant the two could disagree, and they did: the dashboard had the
-    # right origin and `config/dev.tfvars` still had the empty string it was
-    # given while the dev API was unreachable, so the next apply would have put
-    # the edge back to answering 502 on every share link.
-    #
-    # `inherit` errors when there is no binding to carry, so a fresh environment
-    # sets the variable in Cloudflare first, then flips this flag. Until it does,
-    # the Worker still serves /.well-known/ — only /l/{slug} is dark.
+    # GoGo-Infra#153. API_ORIGIN is set in Cloudflare, not here. It is not a
+    # secret; it is a value whose authority is the edge. `inherit` errors when
+    # there is no binding to carry, so a fresh environment sets the variable in
+    # Cloudflare first, then flips this flag. Until it does, the Worker still
+    # serves /.well-known/ — only /l/{slug} is dark.
     var.api_origin_provisioned ? [
       {
         name = "API_ORIGIN"
@@ -85,6 +80,31 @@ resource "cloudflare_workers_script" "share_link" {
       },
     ] : [],
   )
+
+  # Secrets put with scripts/secrets/put-worker-secret.sh never reach state, so
+  # the bindings an update re-sends do not name them; without this the upload
+  # would replace the binding set and the secret would be gone.
+  keep_bindings = ["secret_text", "secret_key"]
+
+  # GoGo-Infra#172 (owner decision 2026-10-06, option B). Cloudflare owns every
+  # binding value; Terraform owns the code, the routes and the DNS. The list
+  # above is what a *new* script is created with — after that Terraform never
+  # diffs it and never writes it on its own account.
+  #
+  # Why: the Workers API has no `inherit` on the way back. Every apply resolved
+  # API_ORIGIN to its stored value, the next refresh read `plain_text`, and the
+  # plan asked to change it again — a phantom diff riding along with every
+  # unrelated apply. Nobody but Terraform was writing the variable.
+  #
+  # What this does not do (provider 5.24, workers_script Read): a refresh keeps
+  # the *state's* text for a plain_text binding already in state, and drops any
+  # secret Terraform did not create. So an apply that changes the Worker code
+  # re-sends the bindings as Terraform last saw them — a value edited on the
+  # dashboard since then is put back. The module README says how to re-sync
+  # state before such an apply. Secrets are covered by keep_bindings above.
+  lifecycle {
+    ignore_changes = [bindings]
+  }
 }
 
 # Named routes, not one wildcard on the host.

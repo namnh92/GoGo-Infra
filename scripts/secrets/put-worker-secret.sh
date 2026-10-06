@@ -10,8 +10,9 @@
 # a Terraform variable, which would have put the token in the state file. Making
 # the variable `sensitive` hides it from the CLI, not from the file, and state
 # lives in a bucket several roles can read. So Terraform is told only *whether*
-# a binding exists (`edge_auth_token_provisioned`, carried across updates with
-# the Workers API's `inherit` type) and never what is in it.
+# a binding exists (`edge_auth_token_provisioned`) and never what is in it. Since
+# GoGo-Infra#172 that flag only shapes the upload creating the script; on an
+# existing script keep_bindings carries this secret across every upload.
 #
 # The value goes SSM -> stdin -> wrangler. It is not printed, not written to
 # disk, and not exported, so it cannot be picked up by `ps`, a shell history, a
@@ -64,12 +65,13 @@ aws ssm get-parameter --name "$full_path" --with-decryption \
 
 cat <<MSG
 
-Done. Two things follow, in this order:
+Done. The secret is live on the Worker now. Two things follow, in this order:
 
   1. set the matching *_provisioned flag true in config/${ENVIRONMENT}.tfvars,
-  2. terraform apply.
+  2. terraform apply (through the PR, as usual).
 
-Until step 2 lands, an apply would drop this binding: Terraform emits it only
-when the flag says it exists. Nothing was printed above, and nothing was
-written to disk.
+Neither step changes the Worker: Terraform ignores the bindings of an existing
+script and keep_bindings carries this secret across code uploads
+(GoGo-Infra#172). They keep the tfvars truthful. Nothing was printed above,
+and nothing was written to disk.
 MSG
