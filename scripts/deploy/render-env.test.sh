@@ -67,9 +67,9 @@ STUB
 chmod +x "$tmp/bin/aws"
 
 run() {
-  local mode="$1"
+  local mode="$1" path="${2:-cms/password-login-enabled}"
   rm -f "$tmp/out.env"
-  PATH="$tmp/bin:$PATH" AWS_STUB_PATH="${STUB_PATH:-cms/password-login-enabled}" AWS_STUB_MODE="$mode" \
+  PATH="$tmp/bin:$PATH" AWS_STUB_PATH="$path" AWS_STUB_MODE="$mode" \
     AWS_STUB_FORMAT="${AWS_STUB_FORMAT:-new}" \
     "$script" dev "$tmp/out.env" >"$tmp/stdout" 2>"$tmp/stderr"
 }
@@ -111,21 +111,21 @@ done
 # GoGo-BE#687 / ADR-0034 — the super admin's switch defaults to `false`, so here
 # the silent failure would be the opposite one: a stored `true` read as absent
 # re-opens the super admin's password door. Same rule, its own row.
-STUB_PATH=cms/super-admin-sso-only run value
+run value cms/super-admin-sso-only
 status=$?
 if [[ $status -eq 0 ]] && grep -qx 'CMS_SUPER_ADMIN_SSO_ONLY=false' "$tmp/out.env"; then
   ok "cms/super-admin-sso-only is declared and rendered"
 else
   fail "cms/super-admin-sso-only is declared and rendered (exit ${status}): $(cat "$tmp/stderr")"
 fi
-STUB_PATH=cms/super-admin-sso-only run absent
+run absent cms/super-admin-sso-only
 status=$?
 if [[ $status -eq 0 ]] && ! grep -q '^CMS_SUPER_ADMIN_SSO_ONLY=' "$tmp/out.env"; then
   ok "cms/super-admin-sso-only absent renders nothing (API default false)"
 else
   fail "cms/super-admin-sso-only absent renders nothing (exit ${status}): $(cat "$tmp/stderr")"
 fi
-STUB_PATH=cms/super-admin-sso-only run denied
+run denied cms/super-admin-sso-only
 status=$?
 if [[ $status -ne 0 ]] && [[ ! -e "$tmp/out.env" ]] \
   && grep -q 'deploy aborted: cannot read /gogo/dev/backend/cms/super-admin-sso-only' "$tmp/stderr"; then
