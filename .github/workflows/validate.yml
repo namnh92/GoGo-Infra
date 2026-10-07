@@ -312,6 +312,8 @@ jobs:
         run: ./scripts/secrets/pull.test.sh
       - name: setup-env.sh hands Terraform-readable rows to put.sh
         run: ./scripts/secrets/setup-env.test.sh
+      - name: CMS Access allow list comes from SSM only
+        run: ./scripts/ci/cms-access-from-ssm.test.sh
       - name: Terraform reads two named parameters and nothing else
         run: ./scripts/ci/infra-readable-iam.test.sh
 

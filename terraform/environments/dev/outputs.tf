@@ -70,3 +70,10 @@ output "access_ssh_client_secret" {
   value       = try(module.access_ssh[0].service_token_client_secret, "")
   sensitive   = true
 }
+
+# GoGo-BE#687 R6: the owner reads this before a deploy that changes the super
+# admin's address, to see the new address admitted by Access first.
+output "cms_access_emails" {
+  description = "Addresses the CMS Access policy admits (super admin + staff, from SSM)."
+  value       = try(sort(distinct(concat([for e in tolist(jsondecode(local.cms_staff_emails_raw)) : tostring(e)], [local.cms_super_admin_email]))), [])
+}

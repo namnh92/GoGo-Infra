@@ -701,26 +701,45 @@ module "share_link_worker" {
 # CMS front end — hostname and access control only. GoGo-CMS deploys the Worker
 # itself (modules/cloudflare-cms-hosting/README.md).
 #
-# Off unless all three inputs are set. The access list is part of that check on
-# purpose: publishing an admin hostname and adding the guard in a follow-up
-# leaves a window, and windows like that stay open.
+# The allow list comes from SSM (GoGo-BE#687 O-5, GoGo-Infra#199): the super
+# admin's address and the staff list, both Strings tagged gogo:infra-readable
+# that the plan and apply roles may read (GoGo-Infra#194, ADR-0010). Nothing
+# here falls back: a missing parameter fails the data source, an empty or
+# malformed address — or a staff value that is not a JSON array of addresses —
+# fails the module's validation, so the plan refuses rather
+# than publishing an admin hostname with a list nobody chose.
+data "aws_ssm_parameter" "cms_super_admin_email" {
+  count = var.cms_host == "" ? 0 : 1
+  name  = "/gogo/${var.environment}/backend/cms/super-admin-email"
+}
+
+data "aws_ssm_parameter" "cms_access_staff_emails" {
+  count = var.cms_host == "" ? 0 : 1
+  name  = "/gogo/${var.environment}/backend/cms/access-staff-emails"
+}
+
+# The provider marks every parameter value sensitive. These two are allow-list
+# addresses in Strings, not credentials (ADR-0010), and the owner reads them back
+# through `terraform output cms_access_emails` before an address change (R6), so
+# they are unmarked here. A SecureString under either name would not reach this
+# point decrypted: the boundary denies kms:Decrypt for both (GoGo-Infra#194).
+locals {
+  cms_super_admin_email = var.cms_host == "" ? "" : trimspace(nonsensitive(data.aws_ssm_parameter.cms_super_admin_email[0].value))
+  cms_staff_emails_raw  = var.cms_host == "" ? "[]" : nonsensitive(data.aws_ssm_parameter.cms_access_staff_emails[0].value)
+}
+
 module "cms_hosting" {
   source = "../../modules/cloudflare-cms-hosting"
-  count = (
-    var.cms_host == "" ||
-    var.cms_script_name == "" ||
-    var.cloudflare_zone_id == "" ||
-    length(var.cms_access_emails) == 0
-  ) ? 0 : 1
+  count  = var.cms_host == "" || var.cms_script_name == "" || var.cloudflare_zone_id == "" ? 0 : 1
 
   account_id        = var.cloudflare_account_id
   zone_id           = var.cloudflare_zone_id
   environment       = var.environment
   hostname          = var.cms_host
   script_name       = var.cms_script_name
-  access_emails     = var.cms_access_emails
-  access_idp_id     = var.cms_access_idp_id
-  access_github_org = var.cms_access_github_org
+  super_admin_email = local.cms_super_admin_email
+  staff_emails_json = local.cms_staff_emails_raw
+  require_mfa       = var.cms_require_mfa
 }
 
 # The dev API reaches the internet through a tunnel, not an open port.

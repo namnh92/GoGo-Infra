@@ -28,37 +28,47 @@ variable "script_name" {
   type        = string
 }
 
-variable "access_emails" {
-  description = "Email addresses allowed through Cloudflare Access by one-time PIN. Used when no identity provider is configured, and as the break-glass path when one is."
-  type        = list(string)
+# One address rule for both inputs (review of PR #200): a mailbox, then one or
+# more non-empty domain labels and a TLD. `a@b..com` and `a@.com` are refused.
+variable "super_admin_email" {
+  description = "The one CMS super_admin's address (SSM cms/super-admin-email, GoGo-BE#687 O-1/O-2). Always admitted."
+  type        = string
 
   validation {
-    condition     = length(var.access_emails) > 0
-    error_message = "At least one email is required. An Access application with no allow rule is not a locked door — it is an application that denies everyone, including the person who needs to fix it."
+    condition     = can(regex("^[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\\.)+[A-Za-z]{2,}$", var.super_admin_email))
+    error_message = "super_admin_email must be an email address. An empty or malformed value would leave the Access application with nobody who can fix it."
   }
 }
 
-# The identity provider is created by hand in the Cloudflare dashboard, and only
-# its id is referenced here.
-#
-# Same rule as every other provider credential in this repository: a GitHub
-# OAuth app has a client secret, and declaring it in Terraform writes that secret
-# into state (docs/secrets.md, and the same reason R2 and Neon keys are created
-# by hand). An id is not a secret.
-variable "access_idp_id" {
-  description = "Cloudflare Access identity provider id. Empty keeps one-time PIN as the only method."
+variable "staff_emails_json" {
+  description = "Staff admitted by Access, exactly as stored in SSM cms/access-staff-emails: a JSON array of address strings. \"[]\" is allowed."
   type        = string
-  default     = ""
+  default     = "[]"
+
+  # Decoded here so the rule sits at the boundary where the value arrives. It
+  # must be an array — a JSON object would otherwise iterate as its values — and
+  # every element a string that is an address. Anything else fails the plan.
+  validation {
+    condition = (
+      startswith(trimspace(var.staff_emails_json), "[")
+      && can(tolist(jsondecode(var.staff_emails_json)))
+      && alltrue([
+        for e in try(tolist(jsondecode(var.staff_emails_json)), ["<not a list>"]) :
+        can(regex("^[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\\.)+[A-Za-z]{2,}$", e)) && try(tostring(e) == e, false)
+      ])
+    )
+    error_message = "staff_emails_json must be a JSON array of email-address strings, e.g. [\"a@example.com\"] or []."
+  }
 }
 
-variable "access_github_org" {
-  description = "GitHub organisation whose members may reach the CMS. Required when access_idp_id is set."
-  type        = string
-  default     = ""
+variable "require_mfa" {
+  description = "Require Cloudflare MFA on the admission policy (GoGo-BE#687 D-8). Mandatory outside dev; needs an MFA-capable identity provider, which one-time PIN is not."
+  type        = bool
+  default     = false
 
   validation {
-    condition     = var.access_idp_id == "" || var.access_github_org != ""
-    error_message = "access_github_org is required when access_idp_id is set: an identity provider with no organisation rule authenticates anyone with a GitHub account."
+    condition     = var.require_mfa || var.environment == "dev"
+    error_message = "require_mfa must be true outside dev (GoGo-BE#687 D-8: staging and production enforce MFA at Access)."
   }
 }
 

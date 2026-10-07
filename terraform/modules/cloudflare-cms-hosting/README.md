@@ -51,9 +51,18 @@ GoGo-BE remains the only authority on permissions; a request that gets past
 Access carries no privilege by itself.
 
 What it buys is that an admin login page is not on the open internet being
-credential-stuffed. One-time PIN needs no identity provider, which is why it is
-here now; the workspace rule is SSO/MFA for production CMS, arriving with
-GoGo-BE#62.
+credential-stuffed.
+
+## Who is admitted (GoGo-Infra#199, GoGo-BE#687)
+
+One admission policy: `super_admin_email` plus `staff_emails_json` (the raw
+SSM value, a JSON array of address strings, validated here), which the
+environment reads from SSM (`cms/super-admin-email`, `cms/access-staff-emails`).
+No organisation-membership policy — a parallel `include` would admit people the
+list does not name. `require_mfa` adds Cloudflare MFA as a requirement and is
+mandatory outside dev; one-time PIN does not satisfy it, so staging and
+production need an MFA-capable identity provider first. `tests/` pins all of
+this offline (`terraform test`).
 
 ## The bit that will bite
 

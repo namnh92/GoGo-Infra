@@ -508,33 +508,20 @@ value.
 
 ## Turning on CMS SSO
 
-Cloudflare Access can tell GoGo-BE who is knocking, but only once an identity provider exists and
-the backend knows which audience to trust. Three steps, in this order, because each one is useless
-before the one above it.
+Cloudflare Access tells GoGo-BE who is knocking once the backend knows which audience to trust.
+The allow list itself comes from SSM (GoGo-Infra#199, GoGo-BE#687): `cms/super-admin-email` and
+`cms/access-staff-emails`, applied by Terraform to **one** admission policy — one-time PIN in dev;
+staging and production must set `cms_require_mfa = true` (the module refuses otherwise), which needs
+an MFA-capable identity provider first, because a PIN does not satisfy Cloudflare's `mfa`. There is
+no organisation-membership policy any more: a second `include` that ignores the list is a way in
+the list does not control (GoGo-BE#687 D-8; the GitHub identity provider was declined in
+GoGo-Infra#67). When an identity provider is added, it becomes a `require` rule on that policy.
 
-**1. Create the identity provider by hand.** Cloudflare Zero Trust → Settings → Authentication →
-Login methods → GitHub. It needs a GitHub OAuth app's client id and secret.
+**1. Write the list** (bootstrap session): `put.sh <env> cms/super-admin-email --infra-readable`,
+`put.sh <env> cms/access-staff-emails --infra-readable` (a JSON array, `[]` allowed), then
+`terraform-apply-<env>`.
 
-By hand, not in Terraform, for the same reason R2 and Neon keys are: declaring a client secret in
-configuration writes it into Terraform state. An identity provider *id* is not a secret, so that is
-the only part that reaches this repository.
-
-**2. Point the environment at it.**
-
-```hcl
-# config/dev.tfvars
-cms_access_idp_id     = "<identity provider id from the dashboard>"
-cms_access_github_org = "<github organisation>"
-```
-
-The organisation is not optional when the id is set, and Terraform refuses the pair without it: an
-identity provider with no organisation rule authenticates anyone who has a GitHub account.
-
-Applying this adds an organisation-membership policy *ahead of* the one-time PIN list. The PIN list
-stays — it is the break-glass path. An account problem at the identity provider must not also lock
-out the person who would fix it.
-
-**3. Give GoGo-BE the two values it verifies.**
+**2. Give GoGo-BE the two values it verifies.**
 
 ```bash
 ./scripts/secrets/put.sh dev access/team-domain "<team>.cloudflareaccess.com"
