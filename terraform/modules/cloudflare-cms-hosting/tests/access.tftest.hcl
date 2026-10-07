@@ -11,7 +11,7 @@ variables {
   hostname          = "cms-dev.gogo.id.vn"
   script_name       = "gogo-cms-dev"
   super_admin_email = "boss@example.com"
-  staff_emails      = ["staff@example.com", "boss@example.com"]
+  staff_emails_json = "[\"staff@example.com\", \"boss@example.com\"]"
 }
 
 run "one_policy_admits_super_admin_and_staff_once_each" {
@@ -30,7 +30,7 @@ run "one_policy_admits_super_admin_and_staff_once_each" {
 run "an_empty_staff_list_still_admits_the_super_admin" {
   command = plan
   variables {
-    staff_emails = []
+    staff_emails_json = "[]"
   }
   assert {
     condition     = [for i in cloudflare_zero_trust_access_policy.cms.include : i.email.email] == ["boss@example.com"]
@@ -78,10 +78,82 @@ run "an_empty_super_admin_is_refused" {
   expect_failures = [var.super_admin_email]
 }
 
-run "a_malformed_staff_entry_is_refused" {
+run "a_json_object_is_refused" {
   command = plan
   variables {
-    staff_emails = ["<cms/access-staff-emails is not a JSON array of strings>"]
+    staff_emails_json = "{}"
   }
-  expect_failures = [var.staff_emails]
+  expect_failures = [var.staff_emails_json]
+}
+
+run "a_json_object_with_an_address_is_refused" {
+  command = plan
+  variables {
+    staff_emails_json = "{\"member\": \"staff@example.com\"}"
+  }
+  expect_failures = [var.staff_emails_json]
+}
+
+run "a_bare_string_is_refused" {
+  command = plan
+  variables {
+    staff_emails_json = "\"staff@example.com\""
+  }
+  expect_failures = [var.staff_emails_json]
+}
+
+run "a_number_element_is_refused" {
+  command = plan
+  variables {
+    staff_emails_json = "[1]"
+  }
+  expect_failures = [var.staff_emails_json]
+}
+
+run "a_nested_list_is_refused" {
+  command = plan
+  variables {
+    staff_emails_json = "[[\"staff@example.com\"]]"
+  }
+  expect_failures = [var.staff_emails_json]
+}
+
+run "a_null_element_is_refused" {
+  command = plan
+  variables {
+    staff_emails_json = "[null]"
+  }
+  expect_failures = [var.staff_emails_json]
+}
+
+run "an_empty_domain_label_is_refused" {
+  command = plan
+  variables {
+    staff_emails_json = "[\"staff@example..com\"]"
+  }
+  expect_failures = [var.staff_emails_json]
+}
+
+run "a_leading_dot_domain_is_refused" {
+  command = plan
+  variables {
+    staff_emails_json = "[\"staff@.example.com\"]"
+  }
+  expect_failures = [var.staff_emails_json]
+}
+
+run "not_json_is_refused" {
+  command = plan
+  variables {
+    staff_emails_json = "staff@example.com"
+  }
+  expect_failures = [var.staff_emails_json]
+}
+
+run "a_super_admin_with_an_empty_domain_label_is_refused" {
+  command = plan
+  variables {
+    super_admin_email = "boss@example..com"
+  }
+  expect_failures = [var.super_admin_email]
 }

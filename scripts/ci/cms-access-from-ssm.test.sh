@@ -18,7 +18,7 @@ check() {
   grep -Eq '/backend/cms/super-admin-email"' <<<"$main" || { echo "  wrong path for the super admin parameter"; status=1; }
   grep -Eq '/backend/cms/access-staff-emails"' <<<"$main" || { echo "  wrong path for the staff parameter"; status=1; }
   grep -Eq 'super_admin_email[[:space:]]*=[[:space:]]*local\.cms_super_admin_email' <<<"$main" || { echo "  module does not receive the SSM super admin"; status=1; }
-  grep -Eq 'jsondecode\(local\.cms_staff_emails_raw\)' <<<"$main" || { echo "  staff list is not decoded from SSM"; status=1; }
+  grep -Eq 'staff_emails_json[[:space:]]*=[[:space:]]*local\.cms_staff_emails_raw' <<<"$main" || { echo "  staff list from SSM is not handed to the module"; status=1; }
   if grep -Eq '^[[:space:]]*cms_access_emails[[:space:]]*=' "$r"/config/*.tfvars; then echo "  a tfvars file still sets cms_access_emails"; status=1; fi
   if grep -Eq 'cms_access_idp_id|cms_access_github_org|cms_org' <<<"$main"; then echo "  organisation policy inputs are back"; status=1; fi
   return "$status"

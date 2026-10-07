@@ -705,8 +705,8 @@ module "share_link_worker" {
 # admin's address and the staff list, both Strings tagged gogo:infra-readable
 # that the plan and apply roles may read (GoGo-Infra#194, ADR-0010). Nothing
 # here falls back: a missing parameter fails the data source, an empty or
-# malformed address fails the module's validation, and a staff value that is not
-# a JSON array of addresses fails the check below — so the plan refuses rather
+# malformed address — or a staff value that is not a JSON array of addresses —
+# fails the module's validation, so the plan refuses rather
 # than publishing an admin hostname with a list nobody chose.
 data "aws_ssm_parameter" "cms_super_admin_email" {
   count = var.cms_host == "" ? 0 : 1
@@ -726,7 +726,6 @@ data "aws_ssm_parameter" "cms_access_staff_emails" {
 locals {
   cms_super_admin_email = var.cms_host == "" ? "" : trimspace(nonsensitive(data.aws_ssm_parameter.cms_super_admin_email[0].value))
   cms_staff_emails_raw  = var.cms_host == "" ? "[]" : nonsensitive(data.aws_ssm_parameter.cms_access_staff_emails[0].value)
-  cms_staff_emails      = try([for e in jsondecode(local.cms_staff_emails_raw) : tostring(e)], null)
 }
 
 module "cms_hosting" {
@@ -739,7 +738,7 @@ module "cms_hosting" {
   hostname          = var.cms_host
   script_name       = var.cms_script_name
   super_admin_email = local.cms_super_admin_email
-  staff_emails      = local.cms_staff_emails == null ? ["<cms/access-staff-emails is not a JSON array of strings>"] : local.cms_staff_emails
+  staff_emails_json = local.cms_staff_emails_raw
   require_mfa       = var.cms_require_mfa
 }
 

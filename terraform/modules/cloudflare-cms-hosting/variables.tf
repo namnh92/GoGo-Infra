@@ -28,24 +28,36 @@ variable "script_name" {
   type        = string
 }
 
+# One address rule for both inputs (review of PR #200): a mailbox, then one or
+# more non-empty domain labels and a TLD. `a@b..com` and `a@.com` are refused.
 variable "super_admin_email" {
   description = "The one CMS super_admin's address (SSM cms/super-admin-email, GoGo-BE#687 O-1/O-2). Always admitted."
   type        = string
 
   validation {
-    condition     = can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", var.super_admin_email))
+    condition     = can(regex("^[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\\.)+[A-Za-z]{2,}$", var.super_admin_email))
     error_message = "super_admin_email must be an email address. An empty or malformed value would leave the Access application with nobody who can fix it."
   }
 }
 
-variable "staff_emails" {
-  description = "Staff addresses admitted by Access (SSM cms/access-staff-emails, a JSON array). May be empty."
-  type        = list(string)
-  default     = []
+variable "staff_emails_json" {
+  description = "Staff admitted by Access, exactly as stored in SSM cms/access-staff-emails: a JSON array of address strings. \"[]\" is allowed."
+  type        = string
+  default     = "[]"
 
+  # Decoded here so the rule sits at the boundary where the value arrives. It
+  # must be an array — a JSON object would otherwise iterate as its values — and
+  # every element a string that is an address. Anything else fails the plan.
   validation {
-    condition     = alltrue([for e in var.staff_emails : can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", e))])
-    error_message = "every staff_emails entry must be an email address."
+    condition = (
+      startswith(trimspace(var.staff_emails_json), "[")
+      && can(tolist(jsondecode(var.staff_emails_json)))
+      && alltrue([
+        for e in try(tolist(jsondecode(var.staff_emails_json)), ["<not a list>"]) :
+        can(regex("^[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\\.)+[A-Za-z]{2,}$", e)) && try(tostring(e) == e, false)
+      ])
+    )
+    error_message = "staff_emails_json must be a JSON array of email-address strings, e.g. [\"a@example.com\"] or []."
   }
 }
 

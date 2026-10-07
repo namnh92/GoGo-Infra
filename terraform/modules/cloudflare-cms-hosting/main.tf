@@ -49,7 +49,8 @@ resource "cloudflare_workers_custom_domain" "cms" {
 # satisfy it, so an environment that sets it needs an MFA-capable identity
 # provider first (GoGo-Infra#67 scope, reopened at prod).
 locals {
-  allowed_emails = distinct(concat(var.staff_emails, [var.super_admin_email]))
+  staff_emails   = [for e in tolist(jsondecode(var.staff_emails_json)) : tostring(e)]
+  allowed_emails = distinct(concat(local.staff_emails, [var.super_admin_email]))
 }
 
 resource "cloudflare_zero_trust_access_policy" "cms" {
