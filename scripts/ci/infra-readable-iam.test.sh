@@ -120,8 +120,8 @@ check_env() {
   fi
 
   # The boundary carries the controls the roles cannot edit (review round 1,
-  # owner decision 2026-10-06; what the apply role can still do with its IAM
-  # rights is residual, GoGo-Infra#196): a read ceiling for plan and apply and
+  # owner decision 2026-10-06; GoGo-Infra#196 for the apply role's IAM
+  # rights): a read ceiling for plan and apply and
   # the two names. terraform/modules/aws-permissions-boundary/tests renders what
   # it emits; this checks every environment passes exactly the right inputs.
   local bnd plan_c apply_c
@@ -157,6 +157,21 @@ check_env() {
   fi
   if grep -Eq 'locked_tag_keys' <<<"$(perl -0777 -ne 's{(?://|#)[^\n]*}{}g; print' "$f")"; then
     echo "  an environment overrides locked_tag_keys"
+    status=1
+  fi
+
+  # GoGo-Infra#196. The boundary must know every role this environment
+  # declares (only those read SSM; their trust is frozen) and must scope IAM
+  # writes to this environment. A role missing from the list cannot read; a role
+  # in the list that is not declared would let a same-named role, created later,
+  # read and keep its trust. So the list must equal what is declared.
+  need "boundary scopes IAM writes to this environment" "$bnd" 'iam_scope_prefix[[:space:]]*=[[:space:]]*module\.tags\.name_prefix' || status=1
+  need "boundary known_role_names come from local.boundary_role_keys" "$bnd" 'known_role_names[[:space:]]*=[[:space:]]*\[for k in local\.boundary_role_keys[[:space:]]*:[[:space:]]*"\$\{module\.tags\.name_prefix\}-\$\{k\}"\]' || status=1
+  local listed declared
+  listed="$(perl -0777 -ne 's{(?://|#)[^\n]*}{}g; print "$1\n" if /boundary_role_keys\s*=\s*\[(.*?)\]/s' "$f" | grep -oE '"[^"]+"' | tr -d '"' | sort | tr '\n' ' ')"
+  declared="$( { block "$f" '^module\s+"github_oidc"\s*\{' | perl -0777 -ne 'while (/\n {4}([a-z][a-z-]*)\s*=\s*\{/g) { print "$1\n" }'; grep -q 'resource "aws_iam_role" "developer"' "$f" && echo developer; } | sort | tr '\n' ' ')"
+  if [[ -z "$listed" || "$listed" != "$declared" ]]; then
+    echo "  boundary_role_keys (${listed:-<none>}) != declared roles (${declared:-<none>})"
     status=1
   fi
 
@@ -280,6 +295,10 @@ mutate env "the env tree appended to the plan ceiling" 's/(terraform\/read\/\*",
 mutate env "the plan ceiling without the two names" 's/(Plan\s*=\s*\{.*?readable_arns\s*=\s*)concat\(local\.infra_readable_parameter_arns,\s*(\[.*?\])\)/$1$2/s'
 mutate env "the boundary without the two names" 's/\n\s*infra_readable_arns\s*=\s*local\.infra_readable_parameter_arns//'
 mutate env "a caller disabling the tag lock" 's/(\n\s*infra_readable_arns\s*=\s*local\.infra_readable_parameter_arns)/$1\n  locked_tag_keys     = []/'
+mutate env "a declared role missing from boundary_role_keys" 's/boundary_role_keys = \["plan", /boundary_role_keys = [/'
+mutate env "an undeclared role in boundary_role_keys" 's/boundary_role_keys = \["plan", /boundary_role_keys = ["plan", "ghost", /'
+mutate env "IAM writes scoped to the whole project" 's/\n\s*iam_scope_prefix\s*=\s*module\.tags\.name_prefix//'
+mutate env "the boundary without known roles" 's/\n\s*known_role_names\s*=\s*\[for k in local\.boundary_role_keys[^\n]*//'
 mutate env "the developer role without the boundary" 's/(resource "aws_iam_role" "developer" \{.*?)\n\s*permissions_boundary\s*=\s*module\.boundary\.arn/$1/s'
 
 if [[ "$failures" -gt 0 ]]; then

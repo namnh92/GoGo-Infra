@@ -355,7 +355,7 @@ the apply role can rewrite any `gogo-*` policy, so a Deny there would not hold:
    this closes a hole older than this change: it holds `ReadOnlyAccess`, whose `ssm:Get*` covers
    every parameter, and every SSM policy here grants `kms:Decrypt` through SSM — so a pull-request
    session could read `backend/*` and the write-capable Cloudflare token. For the apply role it is
-   a ceiling it cannot edit but can route around with its IAM rights (residual, below).
+   a ceiling it cannot edit, and *Declared roles are frozen from CI* below stops it routing around it.
 2. **Tag required.** Those two principals may read the two names only while they carry
    `gogo:infra-readable=true`.
 3. **Never decrypted.** A Deny on `kms:Decrypt` keyed on the `PARAMETER_ARN` encryption context: a
@@ -420,14 +420,14 @@ on; `--strict` from the bootstrap session fails on it instead.
 What this does not protect against: the bootstrap identity tagging a secret by hand. `validate.sh`
 reports it; remove the tag and rotate the value.
 
-Nor against the apply role's own IAM rights. It administers `gogo-*` IAM, and the boundary is a
-document it cannot edit, not a cage: by inline policy it can grant itself
-`iam:PutRolePermissionsBoundary` and swap its boundary, mint a new `gogo-*` role that no ceiling
-names and assume it, or re-trust the deploy role. Pre-existing, and accepted by the owner on
-2026-10-06 as residual (GoGo-Infra#196): the ceilings turn a quiet policy edit into a visible IAM
-change, and what stops that change is review plus CODEOWNER on `terraform/**` and the
-`environment: dev` subject on the apply role. The plan role cannot edit IAM at all
-(`ReadOnlyAccess`), so its ceiling holds as written.
+**Declared roles are frozen from CI** (GoGo-Infra#196). The apply role administers `gogo-*` IAM,
+so the boundary also: requires itself on every created or re-bounded role; denies every parameter
+read to any principal not in the environment's declared role list (`local.boundary_role_keys`); denies
+`UpdateAssumeRolePolicy` and `DeleteRole` on those roles; and scopes IAM writes to `gogo-<env>-*`.
+So changing a declared role's trust policy, deleting one, or adding a role is a bootstrap apply
+under the freeze below — CI apply fails on it, by design. What remains inside the boundary: the
+apply role's non-SSM AWS powers, and widening a declared role's permission policies; no GoGo secret
+lives outside SSM, and each declared role is assumable only by its own reviewed workflow.
 
 Adding a third parameter is a manifest row, an entry in `local.infra_readable_parameter_arns` in
 every environment, and the matching update to `scripts/ci/infra-readable-iam.test.sh` and
@@ -486,9 +486,9 @@ That is deliberate friction. A ceiling its occupant can rewrite is not a ceiling
 access-denied error in CI naming the boundary policy is the control working — apply that change
 from a bootstrap session rather than widening the policy to make CI green.
 
-It is a ceiling on the document, not on the apply role's IAM rights: within `gogo-*` the role can
-still attach a different boundary to a role, or create one no ceiling names — residual risk,
-accepted 2026-10-06, GoGo-Infra#196.
+The boundary also requires itself on every role the apply role creates or re-bounds, and freezes
+the trust of the roles this environment declares (GoGo-Infra#196), so the apply role cannot step
+outside it by minting, re-bounding or re-trusting a role.
 
 ## Log redaction
 

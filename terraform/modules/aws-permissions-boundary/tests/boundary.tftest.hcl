@@ -62,10 +62,79 @@ variables {
     "arn:aws:ssm:ap-southeast-1:111122223333:parameter/gogo/dev/backend/cms/super-admin-email",
     "arn:aws:ssm:ap-southeast-1:111122223333:parameter/gogo/dev/backend/cms/access-staff-emails",
   ]
+  iam_scope_prefix = "gogo-dev"
+  known_role_names = ["gogo-dev-plan", "gogo-dev-apply", "gogo-dev-deploy"]
 }
 
 run "boundary_document" {
   command = plan
+
+  # GoGo-Infra#196 — RequireThisBoundary: CreateRole and
+  # PutRolePermissionsBoundary denied unless the boundary is this exact policy.
+  assert {
+    condition = length([
+      for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
+      if s.Sid == "RequireThisBoundary"
+      && s.Effect == "Deny"
+      && toset(flatten([s.Action])) == toset(["iam:CreateRole", "iam:PutRolePermissionsBoundary"])
+      && toset(flatten([try(s.Resource, [])])) == toset(["*"])
+      && jsonencode(try(s.Condition, {})) == jsonencode({ StringNotEquals = { "iam:PermissionsBoundary" = "arn:aws:iam::111122223333:policy/gogo-dev-boundary" } })
+    ]) == 1
+    error_message = "RequireThisBoundary must be exactly one Deny of CreateRole and PutRolePermissionsBoundary unless iam:PermissionsBoundary is this policy"
+  }
+
+  # GoGo-Infra#196 — OnlyKnownRolesReadSsm: every principal not in the list is
+  # denied every parameter read.
+  assert {
+    condition = length([
+      for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
+      if s.Sid == "OnlyKnownRolesReadSsm"
+      && s.Effect == "Deny"
+      && toset(flatten([s.Action])) == toset(["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"])
+      && toset(flatten([try(s.Resource, [])])) == toset(["*"])
+      && keys(try(s.Condition, {})) == ["ArnNotEquals"]
+      && toset(flatten([try(s.Condition.ArnNotEquals["aws:PrincipalArn"], [])])) == toset([
+        "arn:aws:iam::111122223333:role/gogo-dev-plan",
+        "arn:aws:iam::111122223333:role/gogo-dev-apply",
+        "arn:aws:iam::111122223333:role/gogo-dev-deploy",
+      ])
+    ]) == 1
+    error_message = "OnlyKnownRolesReadSsm must be exactly one Deny of the four reads for every principal outside the known roles"
+  }
+
+  # GoGo-Infra#196 — ProtectKnownRoles: no trust rewrite, no delete, on exactly
+  # the known roles; unconditional.
+  assert {
+    condition = length([
+      for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
+      if s.Sid == "ProtectKnownRoles"
+      && s.Effect == "Deny"
+      && toset(flatten([s.Action])) == toset(["iam:UpdateAssumeRolePolicy", "iam:DeleteRole"])
+      && !contains(keys(s), "Condition")
+      && toset(flatten([try(s.Resource, [])])) == toset([
+        "arn:aws:iam::111122223333:role/gogo-dev-plan",
+        "arn:aws:iam::111122223333:role/gogo-dev-apply",
+        "arn:aws:iam::111122223333:role/gogo-dev-deploy",
+      ])
+    ]) == 1
+    error_message = "ProtectKnownRoles must be exactly one unconditional Deny of UpdateAssumeRolePolicy and DeleteRole on the known roles"
+  }
+
+  # GoGo-Infra#196 — IAM writes stay inside this environment's prefix.
+  assert {
+    condition = length([
+      for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
+      if s.Sid == "DenyIamMutationOutsideGoGo"
+      && s.Effect == "Deny"
+      && contains(flatten([s.Action]), "iam:UpdateAssumeRolePolicy")
+      && contains(flatten([s.Action]), "iam:CreatePolicyVersion")
+      && toset(flatten([try(s.NotResource, [])])) == toset([
+        "arn:aws:iam::111122223333:role/gogo-dev-*",
+        "arn:aws:iam::111122223333:policy/gogo-dev-*",
+      ])
+    ]) == 1
+    error_message = "DenyIamMutationOutsideGoGo must scope IAM writes to gogo-dev-*"
+  }
 
   # SsmReadCeilingPlan: Deny the four reads, for the plan role only, on
   # everything except the two names and ci/dev/terraform/read(/*). NotResource,
@@ -191,6 +260,45 @@ run "boundary_document" {
     ]) == 0
     error_message = "a read ceiling names a deploy, monitor or developer role"
   }
+}
+
+run "no_known_roles_means_no_196_statements_and_project_scope" {
+  command = plan
+  variables {
+    known_role_names = []
+    iam_scope_prefix = ""
+  }
+  assert {
+    condition = length([
+      for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
+      if contains(["RequireThisBoundary", "OnlyKnownRolesReadSsm", "ProtectKnownRoles"], s.Sid)
+    ]) == 0
+    error_message = "the #196 statements must be off without known roles"
+  }
+  assert {
+    condition = length([
+      for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
+      if s.Sid == "DenyIamMutationOutsideGoGo"
+      && toset(flatten([try(s.NotResource, [])])) == toset(["arn:aws:iam::111122223333:role/gogo-*", "arn:aws:iam::111122223333:policy/gogo-*"])
+    ]) == 1
+    error_message = "an empty iam_scope_prefix falls back to the project prefix"
+  }
+}
+
+run "a_known_role_given_as_an_arn_is_refused" {
+  command = plan
+  variables {
+    known_role_names = ["arn:aws:iam::111122223333:role/gogo-dev-plan"]
+  }
+  expect_failures = [var.known_role_names]
+}
+
+run "a_wildcard_known_role_is_refused" {
+  command = plan
+  variables {
+    known_role_names = ["gogo-dev-*"]
+  }
+  expect_failures = [var.known_role_names]
 }
 
 run "empty_ceiling_list_is_valid" {

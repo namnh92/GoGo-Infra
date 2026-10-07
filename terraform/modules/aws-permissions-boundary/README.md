@@ -21,22 +21,24 @@ Two controls narrow the gap, and both are needed:
 2. This boundary, attached to every role this repository creates (`aws-github-oidc` requires it),
    so a role that ends up with a broad policy through Terraform is still capped.
 
-Neither holds against the apply role's own IAM rights: it can rewrite its own `gogo-*` policies,
-drop the condition in (1), and create or re-bound a `gogo-*` role this boundary does not cap. That
-is the residual the owner accepted on 2026-10-06 (GoGo-Infra#196) — see *What it does not stop*.
-The plan role holds `ReadOnlyAccess` and cannot edit IAM; against it, the ceiling holds as written.
+(1) alone does not hold against the apply role, which can rewrite its own `gogo-*` policies. (2)
+does, because of the statements in *Keeping the apply role inside* (GoGo-Infra#196): every created
+or re-bounded role must carry this boundary, only declared roles read SSM, declared roles' trust
+cannot be changed from CI, and IAM writes stay inside this environment's prefix. The plan role
+holds `ReadOnlyAccess` and cannot edit IAM.
 
 ## Shape
 
 A boundary is intersected with the identity policy, so it allows `*` and then denies the
 specific things that convert infrastructure management into account takeover:
 
-- IAM mutation outside `role/gogo-*` and `policy/gogo-*`
+- IAM mutation outside `role/<iam_scope_prefix>-*` and `policy/<iam_scope_prefix>-*` (the
+  environment's own prefix, e.g. `gogo-dev`; the project prefix when unset)
 - creating IAM users, access keys, groups or SAML providers — none exist in this architecture,
   and creating one is the shortest path back to a long-lived credential
 - removing a permissions boundary, from itself or anything else
-- editing **this** policy's document, so what is capped cannot rewrite its own ceiling (the apply
-  role can still swap it for another — *What it does not stop*)
+- editing **this** policy's document, so what is capped cannot rewrite its own ceiling — nor swap
+  it for another (`RequireThisBoundary`)
 - reading SSM parameters or Secrets Manager secrets outside `/gogo/*`
 - stopping CloudTrail or deleting the OIDC provider
 
@@ -70,13 +72,21 @@ control the controlled thing can edit is not a control.
 If CI apply fails with an access-denied error naming this policy, that is the boundary working
 as designed — apply the change from a bootstrap session instead of widening the policy.
 
-## What it does not stop
+## Keeping the apply role inside (GoGo-Infra#196)
 
-The apply role administers `gogo-*` IAM. Inside that namespace it can grant itself
-`iam:PutRolePermissionsBoundary` by inline policy and swap the boundary a role carries, create a
-new `gogo-*` role that no `aws:PrincipalArn` ceiling names and assume it, or re-trust the deploy
-role. The boundary turns those from quiet policy edits into visible IAM changes; what stands in
-the way of such a change is review plus CODEOWNER on `terraform/**` and the OIDC subject on the
-apply role's trust policy. Pre-existing, accepted as residual by the owner on 2026-10-06 (review
-round 2 of GoGo-Infra#195), tracked in GoGo-Infra#196. The plan role claim is unaffected: it
-holds `ReadOnlyAccess` and cannot edit IAM.
+The apply role administers `<prefix>-*` IAM. With `known_role_names` set (every environment sets
+it from `local.boundary_role_keys`), three statements stop it from using that to step outside:
+
+| Statement | Stops |
+| --- | --- |
+| `RequireThisBoundary` — Deny `CreateRole`, `PutRolePermissionsBoundary` unless `iam:PermissionsBoundary` is this policy | swapping its own boundary through an inline grant; creating an unbounded role |
+| `OnlyKnownRolesReadSsm` — Deny every parameter read when `aws:PrincipalArn` is not a declared role | minting a role, granting it reads and assuming it |
+| `ProtectKnownRoles` — Deny `UpdateAssumeRolePolicy`, `DeleteRole` on declared roles | re-trusting the deploy role (or plan, or itself) to the apply role; delete-and-recreate under the same name |
+
+With `iam_scope_prefix` set, IAM writes are limited to the environment's own prefix, so the dev
+apply role cannot touch prod roles or the prod boundary.
+
+Consequence: a trust-policy change to a declared role, deleting one, and adding a role to
+`known_role_names` are bootstrap applies (CI is denied). What stays possible inside the boundary:
+non-SSM AWS actions, and widening a declared role's permission policies — no GoGo secret lives
+outside SSM, and each declared role is assumable only by its own reviewed workflow.

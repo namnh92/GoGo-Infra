@@ -68,3 +68,31 @@ variable "locked_tag_keys" {
   type        = list(string)
   default     = ["gogo:infra-readable"]
 }
+
+variable "iam_scope_prefix" {
+  description = <<-DESC
+    Prefix of the IAM roles and policies a capped role may mutate (GoGo-Infra#196),
+    e.g. gogo-dev. Empty means resource_prefix (the whole project). Set per
+    environment so one environment's apply role cannot touch another's roles or
+    boundary. Separate from resource_prefix because that one also names the
+    policy description, and changing it would replace this policy.
+  DESC
+  type        = string
+  default     = ""
+}
+
+variable "known_role_names" {
+  description = <<-DESC
+    Every role this environment declares (GoGo-Infra#196). Only these may read
+    SSM parameters, their trust policies cannot be changed and they cannot be
+    deleted by a capped role, and any role created or re-bounded must carry
+    this boundary. Empty disables the three statements.
+  DESC
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for n in var.known_role_names : can(regex("^[A-Za-z0-9+=,.@_-]+$", n))])
+    error_message = "known_role_names are plain role names, no ARNs and no wildcards."
+  }
+}

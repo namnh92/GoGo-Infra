@@ -14,9 +14,17 @@ data "aws_caller_identity" "current" {}
 locals {
   account = data.aws_caller_identity.current.account_id
 
+  self_arn        = "arn:aws:iam::${local.account}:policy/${var.name}"
+  known_role_arns = [for n in var.known_role_names : "arn:aws:iam::${local.account}:role/${n}"]
+
+  # GoGo-Infra#196: scoped to this environment's prefix when the caller says so
+  # (gogo-dev-*), so one environment's apply role cannot rewrite another
+  # environment's roles or boundary. Defaults to the project prefix.
+  iam_scope = var.iam_scope_prefix == "" ? var.resource_prefix : var.iam_scope_prefix
+
   gogo_iam_resources = [
-    "arn:aws:iam::${local.account}:role/${var.resource_prefix}-*",
-    "arn:aws:iam::${local.account}:policy/${var.resource_prefix}-*",
+    "arn:aws:iam::${local.account}:role/${local.iam_scope}-*",
+    "arn:aws:iam::${local.account}:policy/${local.iam_scope}-*",
   ]
 }
 
@@ -128,9 +136,9 @@ data "aws_iam_policy_document" "boundary" {
   # These live here, not in the roles' own policies, because the apply role can
   # rewrite any gogo-* policy and attach inline ones (ManageGoGoPolicies,
   # PutRolePolicy) — a Deny it can edit is not a control. This document it
-  # cannot edit; swapping which boundary a gogo-* role carries, or minting a
-  # gogo-* role no ceiling names, stays within its IAM rights — residual risk,
-  # accepted by the owner 2026-10-06, GoGo-Infra#196. Each statement names its
+  # cannot edit, and the GoGo-Infra#196 statements further down stop it
+  # swapping which boundary a role carries or minting a role no ceiling names.
+  # Each statement names its
   # principals with aws:PrincipalArn, because the boundary caps every GoGo role
   # and the deploy, monitor and developer roles read backend/* legitimately.
 
@@ -243,6 +251,77 @@ data "aws_iam_policy_document" "boundary" {
         variable = "aws:TagKeys"
         values   = var.locked_tag_keys
       }
+    }
+  }
+
+  # --- GoGo-Infra#196: the apply role administers IAM; these keep it inside ----
+  #
+  # The apply role may create gogo-* roles, write their policies and set their
+  # trust. The statements below are what stops it from using that to escape the
+  # SSM ceiling above (review A-F-02/S-F-03 of PR #195). All of them live here,
+  # in the one policy no capped role can edit.
+
+  # Every role created, or re-bounded, carries exactly this boundary. Without
+  # it, an inline grant of PutRolePermissionsBoundary lets a role swap this
+  # document for one it wrote. A request with no boundary has no
+  # iam:PermissionsBoundary key, so StringNotEquals matches and it is denied.
+  dynamic "statement" {
+    for_each = length(var.known_role_names) == 0 ? [] : [1]
+
+    content {
+      sid       = "RequireThisBoundary"
+      effect    = "Deny"
+      actions   = ["iam:CreateRole", "iam:PutRolePermissionsBoundary"]
+      resources = ["*"]
+
+      condition {
+        test     = "StringNotEquals"
+        variable = "iam:PermissionsBoundary"
+        values   = [local.self_arn]
+      }
+    }
+  }
+
+  # Only the roles this environment declares may read a parameter. A role the
+  # apply role mints and assumes has a PrincipalArn no ceiling names; here it
+  # reads nothing at all.
+  dynamic "statement" {
+    for_each = length(var.known_role_names) == 0 ? [] : [1]
+
+    content {
+      sid    = "OnlyKnownRolesReadSsm"
+      effect = "Deny"
+
+      actions = [
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+        "ssm:GetParametersByPath",
+        "ssm:GetParameterHistory",
+      ]
+
+      resources = ["*"]
+
+      condition {
+        test     = "ArnNotEquals"
+        variable = "aws:PrincipalArn"
+        values   = local.known_role_arns
+      }
+    }
+  }
+
+  # The declared roles keep the trust they were given. Re-trusting the deploy
+  # role (or plan, or apply itself) to the apply role, or deleting one to
+  # recreate it under the same name, is how the apply role would borrow a
+  # reader's identity. Trust changes to these roles go through the bootstrap
+  # session, like changes to this document.
+  dynamic "statement" {
+    for_each = length(var.known_role_names) == 0 ? [] : [1]
+
+    content {
+      sid       = "ProtectKnownRoles"
+      effect    = "Deny"
+      actions   = ["iam:UpdateAssumeRolePolicy", "iam:DeleteRole"]
+      resources = local.known_role_arns
     }
   }
 
