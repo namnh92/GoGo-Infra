@@ -162,14 +162,21 @@ if [[ "$INFRA_READABLE" == "yes" ]]; then
   #
   # If the tag fails, the value is already stored and that must be said: during
   # an address change the operator would otherwise assume nothing changed and
-  # skip the apply (review F-06). The AWS error is not echoed — it can carry
+  # skip the apply (review F-06). And the tag's state is unconfirmed, not
+  # "unset": a parameter tagged by an earlier write keeps its tag, so Terraform
+  # may read the new value already (review round 2, S-F-06/A-F-05). The message
+  # therefore never claims the read stays denied; it sends the operator down the
+  # same path as a completed write. The AWS error is not echoed — it can carry
   # request detail — and the recovery is a tag-only call, no value involved.
   if ! aws ssm add-tags-to-resource --resource-type Parameter --resource-id "$full_path" \
     --tags Key=gogo:infra-readable,Value=true --no-cli-pager >/dev/null 2>&1; then
-    echo "error: ${full_path} WAS WRITTEN (new version stored), but tagging it failed." >&2
-    echo "       Terraform's read of it stays denied until the tag is set. Re-run the tag only:" >&2
+    echo "error: ${full_path} WAS WRITTEN (new version live), but tagging it failed." >&2
+    echo "       Tag status unconfirmed: a tag from an earlier write stays, so Terraform may already" >&2
+    echo "       read the new value. Finish the write — tag only, no value:" >&2
     echo "         aws ssm add-tags-to-resource --resource-type Parameter --resource-id ${full_path} --tags Key=gogo:infra-readable,Value=true" >&2
-    echo "       then ./scripts/secrets/validate.sh ${ENVIRONMENT}. The value change is live for the next deploy." >&2
+    echo "       then ./scripts/secrets/validate.sh ${ENVIRONMENT}, then terraform-apply-${ENVIRONMENT} and the deploy" >&2
+    echo "       (deploy-dev on dev), as the runbook orders for a completed write (docs/secrets.md," >&2
+    echo "       'Values Terraform reads from SSM')." >&2
     exit 1
   fi
   echo "wrote ${full_path} (${PARAM_TYPE}, tagged gogo:infra-readable=true)"

@@ -44,9 +44,10 @@ Five facts constrain how (verified 2026-10-06):
    "the role cannot decrypt" is **not** a property either role has.
 4. The **apply** role may create versions of any `gogo-*` policy, detach them
    and put inline policies on `gogo-*` roles. A Deny in its own policies is
-   therefore advisory: it can remove it. Only the permissions boundary is out
-   of its reach (`DenyEditingTheBoundary`, and the boundary denies edits to
-   itself).
+   therefore advisory: it can remove it. The permissions boundary's document
+   is what it cannot edit (`DenyEditingTheBoundary`, and the boundary denies
+   edits to itself) — a ceiling on its policies, not on its IAM rights; see
+   *Residual risk* under Consequences.
 5. SSM authorises `GetParameter` against `aws:ResourceTag/${TagKey}`, and
    `AddTagsToResource`, `RemoveTagsFromResource` and `PutParameter` against
    `aws:TagKeys` (AWS service reference for `ssm`, saved under
@@ -119,10 +120,24 @@ role) gets `TAGS SKIPPED`: tolerated by default, a failure under `--strict`.
   change" and "plan and apply hold no `kms:Decrypt`" were both false and are not
   relied on.
 - **The boundary is applied by the owner from the bootstrap session**, before
-  the merge (`terraform apply -target=module.boundary`), for each environment.
-  CI apply is denied editing it; a merge that still carries a boundary diff
-  makes `terraform-apply-<env>` fail partway. The PR's next `plan (dev)` must
-  show no boundary change first.
+  the merge (`terraform apply -target=module.boundary`), for each environment,
+  under the freeze in `docs/secrets.md` ("Changing the boundary"). CI apply is
+  denied editing it; a merge that still carries a boundary diff makes
+  `terraform-apply-<env>` fail partway. The PR's next `plan (dev)` must show
+  no boundary change first.
+- **Residual risk, accepted** (owner decision 2026-10-06 after review round 2,
+  A-F-02 / S-F-03; tracked in GoGo-Infra#196). The apply role administers
+  `gogo-*` IAM, and the boundary is a document it cannot edit, not a cage it
+  cannot leave: with `iam:PutRolePolicy` it can grant itself
+  `iam:PutRolePermissionsBoundary` and swap its boundary for another; it can
+  create a new `gogo-*` role whose `aws:PrincipalArn` matches no ceiling, grant
+  it reads, and assume it; it can re-trust the deploy role. None of this is new
+  to this change — it is what "manages GoGo IAM" has meant since INF-026 — and
+  the ceilings turn a quiet policy edit into a visible IAM change. What stands
+  between a pull request and that change is review plus CODEOWNER on
+  `terraform/**` and the `environment: dev` subject on the apply role's trust
+  policy. Not redesigned here. The plan role's property is unchanged: it holds
+  `ReadOnlyAccess` and cannot edit IAM.
 - The plan and apply roles lose every SSM read they did not need. If a future
   Terraform change needs another parameter, the ceiling list, the manifest and
   both tests change together, through a bootstrap apply.
@@ -134,9 +149,14 @@ role) gets `TAGS SKIPPED`: tolerated by default, a failure under `--strict`.
 
 ## Migration and rollback
 
-Forward: merge → `terraform-apply-dev` (IAM only) → owner writes both
+Forward: freeze (no `terraform-apply-<env>` queued or running, no other
+`terraform/**` PR merging) → owner applies `module.boundary` from the bootstrap
+session → a fresh `plan (dev)` shows no boundary change → merge the reviewed
+head immediately → `terraform-apply-dev` (IAM only) → owner writes both
 parameters with `put.sh --infra-readable` and deletes `cms/seed-admin-email` /
-`cms/seed-admin-password` → `validate.sh dev --strict`.
+`cms/seed-admin-password` → `validate.sh dev --strict`. A branch cut before this
+change plans a boundary rollback until it is rebased onto `develop`
+(`docs/secrets.md`, "Changing the boundary").
 
 Rollback: revert this change; apply `module.boundary` from the bootstrap
 session first (CI cannot), then let CI apply the rest. The policies return to their previous

@@ -70,6 +70,14 @@ need() { # need <label> <text> <regex>
   fi
 }
 
+# ceiling_list <ceiling-block-text>
+# The `readable_arns = concat(...)` expression of one ceiling with whitespace
+# and trailing commas removed, so it can be compared for exact equality. Empty
+# when the ceiling has no concat() list at all.
+ceiling_list() {
+  perl -0777 -ne 'print $1 if /(readable_arns\s*=\s*concat\(.*?\]\s*\))/s' <<<"$1" | tr -d ' \t\n' | sed 's/,\]/]/g'
+}
+
 check_env() {
   local f="$1" status=0 body
   local doc_apply='^data\s+"aws_iam_policy_document"\s+"infra_apply"\s*\{'
@@ -111,23 +119,37 @@ check_env() {
     status=1
   fi
 
-  # The boundary carries the controls the roles cannot remove (review round 1,
-  # owner decision 2026-10-06): a read ceiling for plan and apply and the two
-  # names. terraform/modules/aws-permissions-boundary/tests renders what it
-  # emits; this checks every environment passes the right inputs.
+  # The boundary carries the controls the roles cannot edit (review round 1,
+  # owner decision 2026-10-06; what the apply role can still do with its IAM
+  # rights is residual, GoGo-Infra#196): a read ceiling for plan and apply and
+  # the two names. terraform/modules/aws-permissions-boundary/tests renders what
+  # it emits; this checks every environment passes exactly the right inputs.
   local bnd plan_c apply_c
   bnd="$(block "$f" '^module\s+"boundary"\s*\{')"
   plan_c="$(perl -0777 -ne 'print $1 if /\n\s*Plan\s*=\s*(\{.*?\n\s{4}\})/s' <<<"$bnd")"
   apply_c="$(perl -0777 -ne 'print $1 if /\n\s*Apply\s*=\s*(\{.*?\n\s{4}\})/s' <<<"$bnd")"
   need "boundary ceiling Plan names the plan role" "$plan_c" 'principal_arn[[:space:]]*=[[:space:]]*"arn:aws:iam::\$\{local\.account\}:role/\$\{module\.tags\.name_prefix\}-plan"' || status=1
-  need "boundary ceiling Plan allows terraform/read/*" "$plan_c" '/ci/\$\{var\.environment\}/terraform/read/\*"' || status=1
-  need "boundary ceiling Plan allows the two names" "$plan_c" 'concat\(local\.infra_readable_parameter_arns' || status=1
-  if grep -q 'terraform/write' <<<"$plan_c"; then
-    echo "  boundary ceiling Plan lists the write tree"
+  need "boundary ceiling Apply names the apply role" "$apply_c" 'principal_arn[[:space:]]*=[[:space:]]*"arn:aws:iam::\$\{local\.account\}:role/\$\{module\.tags\.name_prefix\}-apply"' || status=1
+  # Exact lists, not "contains": every entry is a NotResource of a Deny, so an
+  # entry appended beside the expected ones — ${local.ssm_arn_prefix}/ci/
+  # ${var.environment}/* next to terraform/read/* — passes a contains check and
+  # hands the plan role the write tree (review round 2, S-F-08/A-F-06). The
+  # list is the two names (local.infra_readable_parameter_arns) plus the role's
+  # own CI container and its subtree; whitespace and a trailing comma are the
+  # only freedom.
+  local plan_list apply_list want_plan want_apply
+  plan_list="$(ceiling_list "$plan_c")"
+  apply_list="$(ceiling_list "$apply_c")"
+  want_plan='readable_arns=concat(local.infra_readable_parameter_arns,["${local.ssm_arn_prefix}/ci/${var.environment}/terraform/read","${local.ssm_arn_prefix}/ci/${var.environment}/terraform/read/*"])'
+  want_apply='readable_arns=concat(local.infra_readable_parameter_arns,["${local.ssm_arn_prefix}/ci/${var.environment}/terraform/write","${local.ssm_arn_prefix}/ci/${var.environment}/terraform/write/*"])'
+  if [[ "$plan_list" != "$want_plan" ]]; then
+    echo "  boundary ceiling Plan is not exactly the two names + ci/<env>/terraform/read and read/*: ${plan_list:-<no readable_arns>}"
     status=1
   fi
-  need "boundary ceiling Apply names the apply role" "$apply_c" 'principal_arn[[:space:]]*=[[:space:]]*"arn:aws:iam::\$\{local\.account\}:role/\$\{module\.tags\.name_prefix\}-apply"' || status=1
-  need "boundary ceiling Apply allows terraform/write/*" "$apply_c" '/ci/\$\{var\.environment\}/terraform/write/\*"' || status=1
+  if [[ "$apply_list" != "$want_apply" ]]; then
+    echo "  boundary ceiling Apply is not exactly the two names + ci/<env>/terraform/write and write/*: ${apply_list:-<no readable_arns>}"
+    status=1
+  fi
   need "boundary infra_readable_arns = local list" "$bnd" 'infra_readable_arns[[:space:]]*=[[:space:]]*local\.infra_readable_parameter_arns' || status=1
   if grep -Eq 'locked_tag_keys' <<<"$bnd"; then
     echo "  boundary call overrides locked_tag_keys"
@@ -197,7 +219,7 @@ failures=0
 for env in dev staging prod; do
   f="${REPO_ROOT}/terraform/environments/${env}/main.tf"
   if out="$(check_env "$f")"; then
-    echo "  ok    ${env}: two-ARN read, tag-conditioned Deny, PARAMETER_ARN decrypt Deny, plan+apply only"
+    echo "  ok    ${env}: two-ARN read, tag-conditioned Deny, PARAMETER_ARN decrypt Deny, exact boundary ceilings, plan+apply only"
   else
     printf '  FAIL  %s\n%s\n' "$f" "$out"
     failures=$((failures + 1))
@@ -252,6 +274,10 @@ mutate module "tag lock disabled by an empty for_each" 's/for_each = length\(var
 mutate env "the read Allow without its tag condition" 's/(sid\s*=\s*"ReadInfraReadableParameters".*?)\n\s*condition\s*\{.*?\n    \}\n/$1\n/s'
 mutate env "the boundary without a read ceiling" 's/\n\s*ssm_read_ceilings\s*=\s*\{.*?\n  \}\n/\n/s'
 mutate env "the plan ceiling widened to the write tree" 's/terraform\/read\/\*"/terraform\/write\/*"/'
+mutate env "a broad ci wildcard appended to the plan ceiling" 's/(terraform\/read\/\*",)/$1\n        "\${local.ssm_arn_prefix}\/ci\/\${var.environment}\/*",/'
+mutate env "a broad ci wildcard appended to the apply ceiling" 's/(terraform\/write\/\*",)/$1\n        "\${local.ssm_arn_prefix}\/ci\/\${var.environment}\/*",/'
+mutate env "the env tree appended to the plan ceiling" 's/(terraform\/read\/\*",)/$1\n        "\${local.ssm_arn_prefix}\/\${var.environment}\/*",/'
+mutate env "the plan ceiling without the two names" 's/(Plan\s*=\s*\{.*?readable_arns\s*=\s*)concat\(local\.infra_readable_parameter_arns,\s*(\[.*?\])\)/$1$2/s'
 mutate env "the boundary without the two names" 's/\n\s*infra_readable_arns\s*=\s*local\.infra_readable_parameter_arns//'
 mutate env "a caller disabling the tag lock" 's/(\n\s*infra_readable_arns\s*=\s*local\.infra_readable_parameter_arns)/$1\n  locked_tag_keys     = []/'
 mutate env "the developer role without the boundary" 's/(resource "aws_iam_role" "developer" \{.*?)\n\s*permissions_boundary\s*=\s*module\.boundary\.arn/$1/s'

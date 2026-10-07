@@ -127,10 +127,12 @@ data "aws_iam_policy_document" "boundary" {
   #
   # These live here, not in the roles' own policies, because the apply role can
   # rewrite any gogo-* policy and attach inline ones (ManageGoGoPolicies,
-  # PutRolePolicy) — a Deny it can edit is not a control. It cannot edit this
-  # policy. Each statement names its principals with aws:PrincipalArn, because
-  # the boundary caps every GoGo role and the deploy, monitor and developer roles
-  # read backend/* legitimately.
+  # PutRolePolicy) — a Deny it can edit is not a control. This document it
+  # cannot edit; swapping which boundary a gogo-* role carries, or minting a
+  # gogo-* role no ceiling names, stays within its IAM rights — residual risk,
+  # accepted by the owner 2026-10-06, GoGo-Infra#196. Each statement names its
+  # principals with aws:PrincipalArn, because the boundary caps every GoGo role
+  # and the deploy, monitor and developer roles read backend/* legitimately.
 
   # Read ceiling. The plan role holds ReadOnlyAccess, whose ssm:Get* covers every
   # parameter, and every SSM policy here grants kms:Decrypt through SSM — so

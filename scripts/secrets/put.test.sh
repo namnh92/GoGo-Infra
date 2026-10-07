@@ -134,7 +134,11 @@ else
 fi
 
 # 5. The value is stored, the tag fails: say so, give a tag-only recovery, exit
-# non-zero, and leak neither the value nor the AWS error text.
+# non-zero, and leak neither the value nor the AWS error text. The tag's state
+# is unconfirmed, not "unset": a parameter tagged by an earlier write keeps its
+# tag, so the message must not claim Terraform's read stays denied, and must
+# send the operator through validate → terraform-apply → deploy as for any
+# completed write (review round 2, S-F-06/A-F-05).
 : >"$CALLS"
 printf '%s' "$VALUE" | PATH="${SANDBOX}:${PATH}" AWS_PROFILE=stub STUB_TAG_FAIL=1 \
   "$SCRIPT" dev cms/access-staff-emails --infra-readable >"${SANDBOX}/out" 2>&1
@@ -144,6 +148,17 @@ if [[ $status -ne 0 ]] && grep -q 'WAS WRITTEN' "${SANDBOX}/out" \
   ok "a failed tag after a successful write is reported as a partial write with a tag-only recovery"
 else
   bad "a failed tag after a successful write is reported as a partial write" "exit ${status}: $(cat "${SANDBOX}/out")"
+fi
+if grep -qiE 'stays denied|remains denied|still denied' "${SANDBOX}/out"; then
+  bad "the partial-write report does not claim Terraform's read stays denied" "$(cat "${SANDBOX}/out")"
+else
+  ok "the partial-write report does not claim Terraform's read stays denied"
+fi
+if grep -qi 'unconfirmed' "${SANDBOX}/out" && grep -q 'validate.sh dev' "${SANDBOX}/out" \
+   && grep -q 'terraform-apply-dev' "${SANDBOX}/out" && grep -q 'deploy-dev' "${SANDBOX}/out"; then
+  ok "the partial-write report says the tag is unconfirmed and orders validate.sh, terraform-apply-dev, deploy-dev"
+else
+  bad "the partial-write report says the tag is unconfirmed and orders validate.sh, terraform-apply-dev, deploy-dev" "$(cat "${SANDBOX}/out")"
 fi
 if grep -qE 'staff-one@example.com|secret-detail|AccessDenied' "${SANDBOX}/out"; then
   bad "the partial-write report leaks neither the value nor the AWS error" "$(cat "${SANDBOX}/out")"

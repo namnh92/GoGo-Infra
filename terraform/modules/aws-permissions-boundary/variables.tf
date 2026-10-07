@@ -36,11 +36,21 @@ variable "ssm_read_ceilings" {
     error_message = "ssm_read_ceilings keys become IAM sids: letters and digits only."
   }
 
+  # Every entry is a NotResource of a Deny, so each one is a read grant. A name
+  # is exact; the only wildcard a ceiling may carry is the role's own CI tree,
+  # .../parameter/gogo/ci/<env>/terraform/read/* or /write/*. Anything wider —
+  # a bare *, /gogo/*, /gogo/<env>/*, backend/*, /gogo/ci/<env>/*,
+  # ci/<env>/terraform/* — would hand the role what it was denied while every
+  # expected entry is still present (review round 2, S-F-08/A-F-06).
   validation {
     condition = alltrue(flatten([
-      for c in values(var.ssm_read_ceilings) : [for a in c.readable_arns : !can(regex("parameter/gogo/[^/]+/backend/\\*$", a)) && !endswith(a, "parameter/gogo/*")]
+      for c in values(var.ssm_read_ceilings) : [
+        for a in c.readable_arns :
+        (!strcontains(a, "*") && !strcontains(a, "?"))
+        || can(regex("^arn:aws:ssm:[^:]*:[^:]*:parameter/gogo/ci/[^/*?]+/terraform/(read|write)/\\*$", a))
+      ]
     ]))
-    error_message = "A read ceiling may not include backend/* or /gogo/* — that is no ceiling."
+    error_message = "A read ceiling names exact parameters; the only wildcard allowed is .../parameter/gogo/ci/<env>/terraform/read/* or .../write/*. A bare *, /gogo/*, /gogo/<env>/*, backend/*, /gogo/ci/<env>/* or ci/<env>/terraform/* is no ceiling."
   }
 }
 

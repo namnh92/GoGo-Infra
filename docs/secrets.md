@@ -346,8 +346,8 @@ The CMS Access allow list (GoGo-BE#687, owner decisions O-2 and O-5) needs two:
 Both are allow-list entries, not credentials, which is why they may be `String`. What lets the plan
 and apply roles read them and nothing else under `/gogo/<env>/backend/`:
 
-**In the permissions boundary** (`gogo-<env>-boundary`), which no role it caps can edit — the apply
-role can rewrite any `gogo-*` policy, so a Deny there would not hold:
+**In the permissions boundary** (`gogo-<env>-boundary`), whose document no role it caps can edit —
+the apply role can rewrite any `gogo-*` policy, so a Deny there would not hold:
 
 1. **Read ceiling for the plan and apply roles.** Every parameter read outside a short list is
    denied, by `aws:PrincipalArn`: plan reads `ci/<env>/terraform/read/*` and the two names; apply
@@ -368,8 +368,25 @@ exactly the two ARNs, conditioned on the tag (`<prefix>-infra-readable`, plan an
 apply role's `DenyReadingApplicationSecrets` exempting the tag; the same decrypt Deny; the same tag
 lock in every module policy.
 
-**Changing the boundary needs the bootstrap session.** CI apply is denied editing it. Apply it first,
-from a checkout of the change, then let CI apply the rest:
+**Changing the boundary needs the bootstrap session — under a freeze.** CI apply is denied editing
+it, so the boundary is applied first, from a checkout of the change, and CI applies the rest after
+the merge. Between those two moments `develop` still describes the old boundary: an apply from any
+older checkout — a queued `terraform-apply-<env>` run, another `terraform/**` PR merging first —
+would change its own resources and then fail trying to roll the boundary back (review F-09). So:
+
+1. **Freeze.** No `terraform-apply-<env>` run is queued or running —
+   `gh run list --workflow terraform-apply-dev.yml --limit 5` shows none `queued` or `in_progress`
+   (let a running one finish; never cancel an apply midway) — and no other PR touching
+   `terraform/**` will merge before this one (check the open PRs; tell the other sessions).
+2. **Apply the boundary** for dev (commands below). Staging and prod: the same step when those
+   environments are applied — `terraform-apply-prod` would otherwise fail on the boundary the first
+   time it runs with this change.
+3. **Confirm.** A fresh `plan (dev)` on this PR shows no change to `module.boundary`; otherwise the
+   apply after the merge fails partway on the boundary.
+4. **Merge** this PR's reviewed head immediately; `terraform-apply-dev` applies the rest.
+5. **Unfreeze.** Only now let other Terraform PRs merge. A branch cut before this change plans a
+   boundary *rollback* until it is rebased onto `develop`: rebase it before merge, and never apply
+   such a plan.
 
 ```bash
 export AWS_PROFILE=gogo-bootstrap
@@ -380,9 +397,6 @@ terraform -chdir=terraform/environments/dev apply -target=module.boundary \
   -var-file=../../../config/global.tfvars -var-file=../../../config/dev.tfvars
 ```
 
-The next `plan (dev)` must show no change to `module.boundary` before the merge that triggers
-`terraform-apply-dev`; otherwise that apply fails partway on the boundary.
-
 `validate.sh` is the detective half. It reports a declared row stored without the tag, and any
 tagged parameter in `/gogo/<env>/` or `/gogo/ci/<env>/` that is a `SecureString` or not declared
 `infra_readable`. The deploy role cannot read tags, so `deploy-dev` sees `TAGS SKIPPED` and carries
@@ -390,6 +404,15 @@ on; `--strict` from the bootstrap session fails on it instead.
 
 What this does not protect against: the bootstrap identity tagging a secret by hand. `validate.sh`
 reports it; remove the tag and rotate the value.
+
+Nor against the apply role's own IAM rights. It administers `gogo-*` IAM, and the boundary is a
+document it cannot edit, not a cage: by inline policy it can grant itself
+`iam:PutRolePermissionsBoundary` and swap its boundary, mint a new `gogo-*` role that no ceiling
+names and assume it, or re-trust the deploy role. Pre-existing, and accepted by the owner on
+2026-10-06 as residual (GoGo-Infra#196): the ceilings turn a quiet policy edit into a visible IAM
+change, and what stops that change is review plus CODEOWNER on `terraform/**` and the
+`environment: dev` subject on the apply role. The plan role cannot edit IAM at all
+(`ReadOnlyAccess`), so its ceiling holds as written.
 
 Adding a third parameter is a manifest row, an entry in `local.infra_readable_parameter_arns` in
 every environment, and the matching update to `scripts/ci/infra-readable-iam.test.sh` and
@@ -440,12 +463,17 @@ rotated at the provider — removing it from the latest revision changes nothing
 ## The permissions boundary is not editable from CI
 
 Every IAM role GoGo-Infra creates carries `gogo-<env>-boundary`, and that boundary denies edits
-to itself. So `terraform apply` running in CI as the apply role **cannot change it**. Boundary
-changes go through `scripts/bootstrap/aws.sh` in an operator session.
+to itself. So `terraform apply` running in CI as the apply role **cannot change that policy's
+document**. Boundary changes go through `scripts/bootstrap/aws.sh` in an operator session, under
+the freeze in "Values Terraform reads from SSM".
 
 That is deliberate friction. A ceiling its occupant can rewrite is not a ceiling. An
 access-denied error in CI naming the boundary policy is the control working — apply that change
 from a bootstrap session rather than widening the policy to make CI green.
+
+It is a ceiling on the document, not on the apply role's IAM rights: within `gogo-*` the role can
+still attach a different boundary to a role, or create one no ceiling names — residual risk,
+accepted 2026-10-06, GoGo-Infra#196.
 
 ## Log redaction
 
@@ -566,7 +594,7 @@ and the CMS build.
 
 | Step | Action | Who | Gate |
 | --- | --- | --- | --- |
-| R1a-0 | Apply `module.boundary` from the GoGo-Infra#194 branch in the bootstrap session (previous section) | **owner** | `plan (dev)` on the PR shows no `module.boundary` change |
+| R1a-0 | Freeze, then apply `module.boundary` from the GoGo-Infra#194 branch in the bootstrap session ("Changing the boundary", above): no `terraform-apply-dev` run queued or running, no other `terraform/**` PR merging until R1a lands | **owner** | `gh run list --workflow terraform-apply-dev.yml` shows nothing queued or running; `plan (dev)` on the PR shows no `module.boundary` change; R1a merges next, before any other Terraform PR |
 | R1a | Merge GoGo-Infra#194 (manifest rows, `put.sh --infra-readable`, IAM) → `terraform-apply-dev` | standing | `validate.sh dev` (bootstrap session) reports both rows MISSING and the retired `cms/seed-admin-*` UNDECLARED. **`deploy-dev` fails from here until R1b** |
 | R1b | `put.sh dev cms/super-admin-email --infra-readable` = the address on today's allow list; `put.sh dev cms/access-staff-emails --infra-readable` = `["<staff…>"]` or `[]`; `delete.sh dev cms/seed-admin-email`; `delete.sh dev cms/seed-admin-password` | **owner** | `validate.sh dev --strict` → `METADATA READY`, no tag finding; `deploy-dev` green |
 | R2 | Infra-2 (Access policy from SSM) merged → apply | standing | plan shows no allow-list change; Access still 302 |
