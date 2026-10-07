@@ -24,6 +24,14 @@ fail() {
 
 echo "deploy-vps.sh (INF-071)"
 
+# --- the deploy commit reaches the migrate container (GoGo-BE#687) -----------
+
+if grep -qF "GOGO_REVISION='\${target}' \${COMPOSE} run --rm migrate" "$DEPLOY"; then
+  pass "migrate runs with GOGO_REVISION set to the resolved commit"
+else
+  fail "migrate runs with GOGO_REVISION set to the resolved commit"
+fi
+
 # --- the access path is never recreated ---------------------------------------
 
 if grep -q 'up -d --no-recreate ${ACCESS_SERVICES}' "$DEPLOY"; then

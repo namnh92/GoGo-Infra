@@ -178,7 +178,12 @@ remote "cd '${DEPLOY_PATH}' && ${COMPOSE} run --rm --no-deps api pnpm config:che
 echo "==> Running migrations"
 # Before the new containers take traffic, and expand-only, so the previous
 # revision still runs against this schema if the health check fails.
-remote "cd '${DEPLOY_PATH}' && ${COMPOSE} run --rm migrate"
+#
+# GOGO_REVISION (GoGo-BE#687): the migrate container also runs the super admin
+# sync, whose audit rows carry the commit being deployed. The compose file
+# passes it through (`GOGO_REVISION: ${GOGO_REVISION:-}`); an older GoGo-BE
+# ignores it.
+remote "cd '${DEPLOY_PATH}' && GOGO_REVISION='${target}' ${COMPOSE} run --rm migrate"
 
 echo "==> Ensuring the access tunnel is up (never recreated)"
 # --no-recreate: present-and-running is left exactly alone. This is the command
