@@ -14,12 +14,17 @@ CreateRole gogo-anything
 ```
 
 `iam:AttachRolePolicy` restricts which **role** is modified, not which **policy** is attached.
-Two controls close the gap, and both are needed:
+Two controls narrow the gap, and both are needed:
 
 1. An `iam:PolicyARN` condition on attach/detach in the apply policy, so only GoGo policies and
    an explicit allowlist of AWS-managed ones can be attached.
-2. This boundary, attached to every created role, so even a role that somehow ends up with a
-   broad policy is capped.
+2. This boundary, attached to every role this repository creates (`aws-github-oidc` requires it),
+   so a role that ends up with a broad policy through Terraform is still capped.
+
+Neither holds against the apply role's own IAM rights: it can rewrite its own `gogo-*` policies,
+drop the condition in (1), and create or re-bound a `gogo-*` role this boundary does not cap. That
+is the residual the owner accepted on 2026-10-06 (GoGo-Infra#196) — see *What it does not stop*.
+The plan role holds `ReadOnlyAccess` and cannot edit IAM; against it, the ceiling holds as written.
 
 ## Shape
 
@@ -30,7 +35,8 @@ specific things that convert infrastructure management into account takeover:
 - creating IAM users, access keys, groups or SAML providers — none exist in this architecture,
   and creating one is the shortest path back to a long-lived credential
 - removing a permissions boundary, from itself or anything else
-- editing **this** policy's document, so what is capped cannot rewrite its own ceiling
+- editing **this** policy's document, so what is capped cannot rewrite its own ceiling (the apply
+  role can still swap it for another — *What it does not stop*)
 - reading SSM parameters or Secrets Manager secrets outside `/gogo/*`
 - stopping CloudTrail or deleting the OIDC provider
 
@@ -41,9 +47,11 @@ Optional inputs, set by every environment:
 - `ssm_read_ceilings` — per principal (`aws:PrincipalArn`), deny every parameter read outside a
   list. Used for the Terraform plan and apply roles: the plan role's `ReadOnlyAccess` grants
   `ssm:Get*` on everything, and the apply role can rewrite its own policies, so only a boundary
-  statement holds. Entries are exact names; the only wildcard accepted is the role's own CI tree
-  (`.../parameter/gogo/ci/<env>/terraform/read/*` or `/write/*`). A bare `*`, `/gogo/*`,
-  `/gogo/<env>/*`, `backend/*`, `/gogo/ci/<env>/*` or `ci/<env>/terraform/*` is refused.
+  statement holds. Entries are exact names; the only wildcard accepted is a single trailing `/*`
+  on the role's own CI tree, `arn:aws:ssm:<region>:<account>:parameter/gogo/ci/<env>/terraform/read/*`
+  or `/write/*`, with region, account and env literal (`[a-z0-9-]+`, twelve digits, `[a-z0-9-]+`)
+  — no `*` or `?` anywhere else. A bare `*`, `/gogo/*`, `/gogo/<env>/*`, `backend/*`,
+  `/gogo/ci/<env>/*`, `ci/<env>/terraform/*`, or a wildcard region, account or env is refused.
 - `infra_readable_arns` — those principals may read these only while tagged
   `gogo:infra-readable=true`, and may never decrypt them (`PARAMETER_ARN` encryption context).
 - `locked_tag_keys` — no role under the boundary may add, remove or create with these keys

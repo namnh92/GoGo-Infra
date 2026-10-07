@@ -312,6 +312,59 @@ run "a_ceiling_that_lists_everything_is_refused" {
   expect_failures = [var.ssm_read_ceilings]
 }
 
+# Round 3 (A-F-06): the trailing /* is the only wildcard; region, account and
+# env are literal. A wildcard region or account would exempt the CI tree in
+# every region or account from the ceiling while the expected read/* entry is
+# still present.
+
+run "a_ceiling_with_a_wildcard_region_is_refused" {
+  command = plan
+  variables {
+    ssm_read_ceilings = {
+      Plan = {
+        principal_arn = "arn:aws:iam::111122223333:role/gogo-dev-plan"
+        readable_arns = [
+          "arn:aws:ssm:ap-southeast-1:111122223333:parameter/gogo/ci/dev/terraform/read/*",
+          "arn:aws:ssm:*:111122223333:parameter/gogo/ci/dev/terraform/read/*",
+        ]
+      }
+    }
+  }
+  expect_failures = [var.ssm_read_ceilings]
+}
+
+run "a_ceiling_with_a_wildcard_account_is_refused" {
+  command = plan
+  variables {
+    ssm_read_ceilings = {
+      Plan = {
+        principal_arn = "arn:aws:iam::111122223333:role/gogo-dev-plan"
+        readable_arns = [
+          "arn:aws:ssm:ap-southeast-1:111122223333:parameter/gogo/ci/dev/terraform/read/*",
+          "arn:aws:ssm:ap-southeast-1:*:parameter/gogo/ci/dev/terraform/read/*",
+        ]
+      }
+    }
+  }
+  expect_failures = [var.ssm_read_ceilings]
+}
+
+run "a_ceiling_with_a_wildcard_env_segment_is_refused" {
+  command = plan
+  variables {
+    ssm_read_ceilings = {
+      Plan = {
+        principal_arn = "arn:aws:iam::111122223333:role/gogo-dev-plan"
+        readable_arns = [
+          "arn:aws:ssm:ap-southeast-1:111122223333:parameter/gogo/ci/dev/terraform/read/*",
+          "arn:aws:ssm:ap-southeast-1:111122223333:parameter/gogo/ci/de?/terraform/read/*",
+        ]
+      }
+    }
+  }
+  expect_failures = [var.ssm_read_ceilings]
+}
+
 run "a_ceiling_key_that_is_not_a_sid_is_refused" {
   command = plan
   variables {

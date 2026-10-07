@@ -162,11 +162,18 @@ module "policy_mobile_release" {
 # in the account. Scoping the actions to role/gogo-* is necessary but not
 # sufficient: iam:AttachRolePolicy restricts which ROLE is modified, not which
 # POLICY is attached, so a gogo-* role could otherwise be given
-# AdministratorAccess and then assumed. Three controls together close that:
+# AdministratorAccess and then assumed. Three controls together close that for
+# every role but this one:
 #
 #   1. an iam:PolicyARN condition on attach/detach (below)
 #   2. an iam:PermissionsBoundary condition on role creation (below)
 #   3. the boundary itself, capping whatever a created role ends up holding
+#
+# Against the apply role's own IAM rights they do not hold: it can rewrite its
+# own gogo-* policies, drop (1) and (2), and create or re-bound a gogo-* role
+# the boundary does not cap. Residual, accepted by the owner 2026-10-06
+# (GoGo-Infra#196); see modules/aws-permissions-boundary/README.md, "What it
+# does not stop".
 data "aws_iam_policy_document" "infra_apply" {
   # Read and enumerate. These actions do not support resource-level scoping.
   statement {

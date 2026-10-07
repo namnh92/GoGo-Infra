@@ -121,10 +121,15 @@ role) gets `TAGS SKIPPED`: tolerated by default, a failure under `--strict`.
   relied on.
 - **The boundary is applied by the owner from the bootstrap session**, before
   the merge (`terraform apply -target=module.boundary`), for each environment,
-  under the freeze in `docs/secrets.md` ("Changing the boundary"). CI apply is
-  denied editing it; a merge that still carries a boundary diff makes
-  `terraform-apply-<env>` fail partway. The PR's next `plan (dev)` must show
-  no boundary change first.
+  under the freeze in `docs/secrets.md` ("Changing the boundary"): from before
+  that apply until the reviewed head merges, no merge to `develop` that
+  triggers `terraform-apply-<env>` (`terraform/**`, `config/*.tfvars`,
+  `config/well-known/**`, `workers/share-link/**`), no manual dispatch of it,
+  and every earlier run drained — none in a state other than `completed`
+  (`queued`, `in_progress`, `waiting`, `requested`, `pending` all count as not
+  done). CI apply is denied editing it; a merge that still carries a boundary
+  diff makes `terraform-apply-<env>` fail partway. The PR's next `plan (dev)`
+  must show no boundary change first.
 - **Residual risk, accepted** (owner decision 2026-10-06 after review round 2,
   A-F-02 / S-F-03; tracked in GoGo-Infra#196). The apply role administers
   `gogo-*` IAM, and the boundary is a document it cannot edit, not a cage it
@@ -149,14 +154,19 @@ role) gets `TAGS SKIPPED`: tolerated by default, a failure under `--strict`.
 
 ## Migration and rollback
 
-Forward: freeze (no `terraform-apply-<env>` queued or running, no other
-`terraform/**` PR merging) → owner applies `module.boundary` from the bootstrap
-session → a fresh `plan (dev)` shows no boundary change → merge the reviewed
-head immediately → `terraform-apply-dev` (IAM only) → owner writes both
-parameters with `put.sh --infra-readable` and deletes `cms/seed-admin-email` /
-`cms/seed-admin-password` → `validate.sh dev --strict`. A branch cut before this
-change plans a boundary rollback until it is rebased onto `develop`
-(`docs/secrets.md`, "Changing the boundary").
+Forward: freeze — from before the boundary apply until the reviewed head merges,
+no merge to `develop` that triggers `terraform-apply-<env>` (`terraform/**`,
+`config/*.tfvars`, `config/well-known/**`, `workers/share-link/**`) and no
+manual dispatch of it; drain:
+`gh run list --repo namnh92/GoGo-Infra --workflow terraform-apply-dev.yml --limit 200 --json status,databaseId,headSha --jq '[.[] | select(.status != "completed")]'`
+prints `[]`, every state but `completed` (`queued`, `in_progress`, `waiting`,
+`requested`, `pending`) counting as not done → owner applies `module.boundary`
+from the bootstrap session → a fresh `plan (dev)` shows no boundary change →
+merge the reviewed head immediately → `terraform-apply-dev` (IAM only) → owner
+writes both parameters with `put.sh --infra-readable` and deletes
+`cms/seed-admin-email` / `cms/seed-admin-password` → `validate.sh dev --strict`.
+A branch cut before this change plans a boundary rollback until it is rebased
+onto `develop` (`docs/secrets.md`, "Changing the boundary").
 
 Rollback: revert this change; apply `module.boundary` from the bootstrap
 session first (CI cannot), then let CI apply the rest. The policies return to their previous

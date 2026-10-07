@@ -37,20 +37,23 @@ variable "ssm_read_ceilings" {
   }
 
   # Every entry is a NotResource of a Deny, so each one is a read grant. A name
-  # is exact; the only wildcard a ceiling may carry is the role's own CI tree,
-  # .../parameter/gogo/ci/<env>/terraform/read/* or /write/*. Anything wider —
-  # a bare *, /gogo/*, /gogo/<env>/*, backend/*, /gogo/ci/<env>/*,
-  # ci/<env>/terraform/* — would hand the role what it was denied while every
-  # expected entry is still present (review round 2, S-F-08/A-F-06).
+  # is exact; the only wildcard a ceiling may carry is a single trailing /* on
+  # the role's own CI tree, arn:aws:ssm:<region>:<account>:parameter/gogo/ci/
+  # <env>/terraform/read/* or /write/*, with region, account and env literal —
+  # no * or ? anywhere else. Anything wider — a bare *, /gogo/*, /gogo/<env>/*,
+  # backend/*, /gogo/ci/<env>/*, ci/<env>/terraform/*, or that tree in every
+  # region or account — would hand the role what it was denied while every
+  # expected entry is still present (review round 2, S-F-08/A-F-06; round 3,
+  # A-F-06: region and account used to be [^:]*).
   validation {
     condition = alltrue(flatten([
       for c in values(var.ssm_read_ceilings) : [
         for a in c.readable_arns :
         (!strcontains(a, "*") && !strcontains(a, "?"))
-        || can(regex("^arn:aws:ssm:[^:]*:[^:]*:parameter/gogo/ci/[^/*?]+/terraform/(read|write)/\\*$", a))
+        || can(regex("^arn:aws:ssm:[a-z0-9-]+:[0-9]{12}:parameter/gogo/ci/[a-z0-9-]+/terraform/(read|write)/\\*$", a))
       ]
     ]))
-    error_message = "A read ceiling names exact parameters; the only wildcard allowed is .../parameter/gogo/ci/<env>/terraform/read/* or .../write/*. A bare *, /gogo/*, /gogo/<env>/*, backend/*, /gogo/ci/<env>/* or ci/<env>/terraform/* is no ceiling."
+    error_message = "A read ceiling names exact parameters; the only wildcard allowed is a single trailing /* on arn:aws:ssm:<region>:<account>:parameter/gogo/ci/<env>/terraform/read or /write, with region, account and env literal. A bare *, /gogo/*, /gogo/<env>/*, backend/*, /gogo/ci/<env>/*, ci/<env>/terraform/*, or a wildcard region, account or env is no ceiling."
   }
 }
 

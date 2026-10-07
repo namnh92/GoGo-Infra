@@ -351,10 +351,11 @@ the apply role can rewrite any `gogo-*` policy, so a Deny there would not hold:
 
 1. **Read ceiling for the plan and apply roles.** Every parameter read outside a short list is
    denied, by `aws:PrincipalArn`: plan reads `ci/<env>/terraform/read/*` and the two names; apply
-   reads `ci/<env>/terraform/write/*` and the two names. This closes a hole older than this change:
-   the plan role holds `ReadOnlyAccess`, whose `ssm:Get*` covers every parameter, and every SSM policy
-   here grants `kms:Decrypt` through SSM — so a pull-request session could read `backend/*` and the
-   write-capable Cloudflare token.
+   reads `ci/<env>/terraform/write/*` and the two names. For the plan role, which cannot edit IAM,
+   this closes a hole older than this change: it holds `ReadOnlyAccess`, whose `ssm:Get*` covers
+   every parameter, and every SSM policy here grants `kms:Decrypt` through SSM — so a pull-request
+   session could read `backend/*` and the write-capable Cloudflare token. For the apply role it is
+   a ceiling it cannot edit but can route around with its IAM rights (residual, below).
 2. **Tag required.** Those two principals may read the two names only while they carry
    `gogo:infra-readable=true`.
 3. **Never decrypted.** A Deny on `kms:Decrypt` keyed on the `PARAMETER_ARN` encryption context: a
@@ -370,23 +371,37 @@ lock in every module policy.
 
 **Changing the boundary needs the bootstrap session — under a freeze.** CI apply is denied editing
 it, so the boundary is applied first, from a checkout of the change, and CI applies the rest after
-the merge. Between those two moments `develop` still describes the old boundary: an apply from any
-older checkout — a queued `terraform-apply-<env>` run, another `terraform/**` PR merging first —
-would change its own resources and then fail trying to roll the boundary back (review F-09). So:
+the merge. Between those two moments `develop` still describes the old boundary: any apply from an
+older checkout — a `terraform-apply-<env>` run not yet finished, a merge that triggers one, a manual
+dispatch — would change its own resources and then fail trying to roll the boundary back (review
+F-09). So:
 
-1. **Freeze.** No `terraform-apply-<env>` run is queued or running —
-   `gh run list --workflow terraform-apply-dev.yml --limit 5` shows none `queued` or `in_progress`
-   (let a running one finish; never cancel an apply midway) — and no other PR touching
-   `terraform/**` will merge before this one (check the open PRs; tell the other sessions).
+1. **Freeze.** From before the boundary apply until this PR's reviewed head is merged, nothing
+   else may run `terraform-apply-<env>`: no merge to `develop` that triggers it — the trigger list
+   in `.github/workflows/terraform-apply-dev.yml` is `terraform/**`, `config/*.tfvars`,
+   `config/well-known/**` and `workers/share-link/**` — and no manual `workflow_dispatch` of
+   `terraform-apply-dev` or `terraform-apply-prod` (check the open PRs; tell the other sessions).
+   **Drain** what is already there: every run must have reached `completed` — `queued`,
+   `in_progress`, `waiting`, `requested` and `pending` all count as not done — over the whole
+   list, not the last few (`--limit 200` is more runs than the workflow has had; raise it before
+   that stops being true):
+
+   ```bash
+   gh run list --repo namnh92/GoGo-Infra --workflow terraform-apply-dev.yml --limit 200 \
+     --json status,databaseId,headSha --jq '[.[] | select(.status != "completed")]'
+   ```
+
+   must print `[]` (let a running one finish; never cancel an apply midway). The same command
+   with `terraform-apply-prod.yml` when prod is in scope.
 2. **Apply the boundary** for dev (commands below). Staging and prod: the same step when those
    environments are applied — `terraform-apply-prod` would otherwise fail on the boundary the first
    time it runs with this change.
 3. **Confirm.** A fresh `plan (dev)` on this PR shows no change to `module.boundary`; otherwise the
    apply after the merge fails partway on the boundary.
 4. **Merge** this PR's reviewed head immediately; `terraform-apply-dev` applies the rest.
-5. **Unfreeze.** Only now let other Terraform PRs merge. A branch cut before this change plans a
-   boundary *rollback* until it is rebased onto `develop`: rebase it before merge, and never apply
-   such a plan.
+5. **Unfreeze.** Only now let other apply-triggering merges and dispatches through. A branch cut
+   before this change plans a boundary *rollback* until it is rebased onto `develop`: rebase it
+   before merge, and never apply such a plan.
 
 ```bash
 export AWS_PROFILE=gogo-bootstrap
@@ -594,7 +609,7 @@ and the CMS build.
 
 | Step | Action | Who | Gate |
 | --- | --- | --- | --- |
-| R1a-0 | Freeze, then apply `module.boundary` from the GoGo-Infra#194 branch in the bootstrap session ("Changing the boundary", above): no `terraform-apply-dev` run queued or running, no other `terraform/**` PR merging until R1a lands | **owner** | `gh run list --workflow terraform-apply-dev.yml` shows nothing queued or running; `plan (dev)` on the PR shows no `module.boundary` change; R1a merges next, before any other Terraform PR |
+| R1a-0 | Freeze, then apply `module.boundary` from the GoGo-Infra#194 branch in the bootstrap session ("Changing the boundary", above). Freeze = from before that apply until R1a merges: no merge to `develop` that triggers `terraform-apply-<env>` (`terraform/**`, `config/*.tfvars`, `config/well-known/**`, `workers/share-link/**`) and no manual dispatch of `terraform-apply-dev` or `terraform-apply-prod` | **owner** | Drain check prints `[]`: `gh run list --repo namnh92/GoGo-Infra --workflow terraform-apply-dev.yml --limit 200 --json status,databaseId,headSha --jq '[.[] \| select(.status != "completed")]'` — every state but `completed` (`queued`, `in_progress`, `waiting`, `requested`, `pending`) counts as not done; `plan (dev)` on the PR shows no `module.boundary` change; R1a merges next, before any other apply-triggering merge or dispatch |
 | R1a | Merge GoGo-Infra#194 (manifest rows, `put.sh --infra-readable`, IAM) → `terraform-apply-dev` | standing | `validate.sh dev` (bootstrap session) reports both rows MISSING and the retired `cms/seed-admin-*` UNDECLARED. **`deploy-dev` fails from here until R1b** |
 | R1b | `put.sh dev cms/super-admin-email --infra-readable` = the address on today's allow list; `put.sh dev cms/access-staff-emails --infra-readable` = `["<staff…>"]` or `[]`; `delete.sh dev cms/seed-admin-email`; `delete.sh dev cms/seed-admin-password` | **owner** | `validate.sh dev --strict` → `METADATA READY`, no tag finding; `deploy-dev` green |
 | R2 | Infra-2 (Access policy from SSM) merged → apply | standing | plan shows no allow-list change; Access still 302 |
