@@ -68,9 +68,13 @@ locals {
 }
 
 # The OIDC provider is account-wide and is created once, by the dev
-# configuration. Every other environment looks it up.
+# configuration. Every other environment looks it up — by ARN, not by URL:
+# a `url` lookup is iam:ListOpenIDConnectProviders, which has no resource type
+# and is denied under the boundary (DenyIamOutsideEnvironment, GoGo-Infra#196);
+# by `arn` it is GetOpenIDConnectProvider on the one provider the boundary
+# leaves readable. scripts/ci/infra-readable-iam.test.sh pins this.
 data "aws_iam_openid_connect_provider" "github" {
-  url = "https://token.actions.githubusercontent.com"
+  arn = local.oidc_provider
 }
 
 

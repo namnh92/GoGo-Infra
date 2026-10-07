@@ -24,16 +24,20 @@ Two controls narrow the gap, and both are needed:
 (1) alone does not hold against the apply role, which can rewrite its own `gogo-*` policies. (2)
 does, because of the statements in *Keeping the apply role inside* (GoGo-Infra#196): every created
 or re-bounded role must carry this boundary, only declared roles read SSM, declared roles' trust
-cannot be changed from CI, and IAM writes stay inside this environment's prefix. The plan role
-holds `ReadOnlyAccess` and cannot edit IAM.
+cannot be changed from CI, and IAM is reachable only inside this environment's prefix. The plan
+role holds `ReadOnlyAccess` and cannot edit IAM.
 
 ## Shape
 
 A boundary is intersected with the identity policy, so it allows `*` and then denies the
 specific things that convert infrastructure management into account takeover:
 
-- IAM mutation outside `role/<iam_scope_prefix>-*` and `policy/<iam_scope_prefix>-*` (the
-  environment's own prefix, e.g. `gogo-dev`; the project prefix when unset)
+- every IAM action — `iam:*`, reads included — on anything but `role/<iam_scope_prefix>-*` and
+  `policy/<iam_scope_prefix>-*` (the environment's own prefix, e.g. `gogo-dev`; the project
+  prefix when unset), the GitHub OIDC provider and AWS-managed policies
+  (`DenyIamOutsideEnvironment`); and everything but the two reads on any OIDC provider
+  (`DenyOidcProviderMutation`). Both list what is *reachable*, never what is denied — see
+  *Keeping the apply role inside*
 - creating IAM users, access keys, groups or SAML providers — none exist in this architecture,
   and creating one is the shortest path back to a long-lived credential
 - removing a permissions boundary, from itself or anything else
@@ -86,10 +90,39 @@ statements stop it from using that to widen access:
 | `OnlyKnownRolesReadSsm` — Deny every parameter read when `aws:PrincipalArn` is not a declared role | minting a role, granting it reads and assuming it |
 | `ProtectKnownRoles` — Deny `CreateRole`, `UpdateAssumeRolePolicy`, `DeleteRole` on declared roles | re-trusting a declared role (e.g. to pull requests); delete-and-recreate under the same name |
 
-With `iam_scope_prefix` set, every mutating IAM verb is limited to the environment's own roles and
-policies — not another environment's, not the account-wide GitHub OIDC provider. With `ssm_env`
-set, `SsmReadsStayInEnvironment` limits reads to `/gogo/<env>/*` and `/gogo/ci/<env>/*`, and
-`SsmWritesAreBootstrapOnly` denies every parameter write to every capped role.
+With `iam_scope_prefix` set, `DenyIamOutsideEnvironment` denies `iam:*` on everything except four
+ARN patterns: the environment's own `role/<prefix>-*` and `policy/<prefix>-*`, the GitHub OIDC
+provider `arn:aws:iam::<account>:oidc-provider/token.actions.githubusercontent.com`, and
+`arn:aws:iam::aws:policy/*`. Inverted on purpose (PR #197 confirm round, F-01): the previous
+version listed mutating verb prefixes and missed `Enable*`, `Disable*`, `Deactivate*`, `Reset*`,
+`Resync*`, `Accept*`, `Associate*`, `Send*` — a list of what is denied is complete only on the
+day it is written, a list of what is reachable is four entries and does not go stale. Two
+consequences of the inversion: reads outside the environment go too (`GetRole` on another
+environment's role, `ListRoles`, `GetAccountAuthorizationDetails`), and every action with no
+resource type — requested against `*`, which matches no reachable pattern — is denied, among them
+`EnableOutboundWebIdentityFederation`, the account password policy and the account alias. Nothing
+Terraform or CI runs needs one: every resource this repository manages is read and written through
+actions on the role, policy or provider ARN, and the one `url` lookup of the provider (staging,
+prod) was `ListOpenIDConnectProviders` and now looks up by `arn`.
+
+The provider is reachable for reads only: `DenyOidcProviderMutation` denies everything on
+`oidc-provider/*` except `GetOpenIDConnectProvider` and `ListOpenIDConnectProviderTags` — a
+`NotAction`, for the same reason. AWS-managed policies are reachable so the allowlisted
+`ReadOnlyAccess` can be read; they belong to the `aws` account and IAM refuses to change them for
+every caller, so no Deny is needed there.
+
+`scripts/ci/boundary-iam-catalogue.test.sh` (CI: `validate.yml`) downloads the AWS service
+reference for IAM — every action, its access level, its resource types — and runs
+`tests/catalogue/iam.tftest.hcl` against the rendered document: the `iam:*` statement is exactly
+that, the provider exception is exactly the catalogue's two reads, and every non-read action is
+matched by an unconditional Deny on a probe resource of each of its types outside the
+environment. A failed download fails the test. `tests/boundary.tftest.hcl` also measures the
+rendered document against IAM's 6,144-character managed-policy limit with every role dev declares
+(5,924 at the time of writing; each known role costs two ARNs, about 100 characters).
+
+With `ssm_env` set, `SsmReadsStayInEnvironment` limits reads to `/gogo/<env>/*` and
+`/gogo/ci/<env>/*`, and `SsmWritesAreBootstrapOnly` denies every parameter write to every capped
+role.
 
 Consequence: a trust-policy change to a declared role, deleting or adding one, and any OIDC
 provider change are bootstrap applies (CI is denied). List only roles that exist: a listed name

@@ -138,9 +138,14 @@ role) gets `TAGS SKIPPED`: tolerated by default, a failure under `--strict`.
   The boundary enforces everything outside that: the plan role (pull requests)
   reads only its CI credentials; `SsmReadsStayInEnvironment` and
   `SsmWritesAreBootstrapOnly` keep every capped role inside its environment's
-  parameters and out of writing any; `DenyIamMutationOutsideGoGo` denies every
-  mutating IAM verb outside `gogo-<env>-*` (other environments, the shared
-  GitHub OIDC provider); and `RequireThisBoundary`, `OnlyKnownRolesReadSsm` and
+  parameters and out of writing any; `DenyIamOutsideEnvironment` denies
+  `iam:*` — every action, read or write, present or future — on everything but
+  `gogo-<env>-*` roles and policies, the GitHub OIDC provider (reads only:
+  `DenyOidcProviderMutation` excepts just its two reads) and AWS-managed
+  policies, and `scripts/ci/boundary-iam-catalogue.test.sh` checks both
+  statements against the AWS action catalogue in CI (PR #197 confirm round,
+  F-01: a verb-prefix list had missed `Enable*`, `Disable*`, `Deactivate*`,
+  `Reset*`); and `RequireThisBoundary`, `OnlyKnownRolesReadSsm` and
   `ProtectKnownRoles` (no `CreateRole`, `UpdateAssumeRolePolicy`, `DeleteRole`
   on declared roles) stop the apply role using its IAM rights to widen any of
   this. Consequence: trust changes to declared roles, deleting or adding one,

@@ -71,8 +71,10 @@ variable "locked_tag_keys" {
 
 variable "iam_scope_prefix" {
   description = <<-DESC
-    Prefix of the IAM roles and policies a capped role may mutate (GoGo-Infra#196),
-    e.g. gogo-dev. Empty means resource_prefix (the whole project). Set per
+    Prefix of the IAM roles and policies a capped role may touch at all
+    (GoGo-Infra#196), e.g. gogo-dev: every other IAM action, read or write, is
+    denied except reads of the GitHub OIDC provider and of AWS-managed
+    policies. Empty means resource_prefix (the whole project). Set per
     environment so one environment's apply role cannot touch another's roles or
     boundary. Separate from resource_prefix because that one also names the
     policy description, and changing it would replace this policy.

@@ -21,6 +21,9 @@
 #        of those names from being read.
 #   env  the infra_readable policy is attached to plan and apply, and to no
 #        other role.
+#   env  the OIDC provider data source (staging, prod) looks the provider up
+#        by arn, never by url: the url lookup is iam:ListOpenIDConnectProviders,
+#        which has no resource type and the boundary denies (GoGo-Infra#196).
 #   mod  DenyLockedTagChanges denies tagging gogo:infra-readable to every role
 #        built from modules/aws-ssm-iam.
 #
@@ -186,6 +189,23 @@ check_env() {
     status=1
   fi
 
+  # GoGo-Infra#196 (PR #197, F-01). The boundary denies iam:* outside the
+  # environment's roles and policies, the GitHub OIDC provider and AWS-managed
+  # policies — including every action with no resource type. An environment
+  # that looks the provider up by `url` does so through
+  # iam:ListOpenIDConnectProviders, one of those, and its plan fails at the
+  # data source; by `arn` it is GetOpenIDConnectProvider on the one readable
+  # provider. dev creates the provider and has no data source.
+  local oidc_ds
+  oidc_ds="$(block "$f" '^data\s+"aws_iam_openid_connect_provider"\s+"github"\s*\{')"
+  if [[ -n "$oidc_ds" ]]; then
+    need "OIDC provider data source looks up by arn = local.oidc_provider" "$oidc_ds" 'arn[[:space:]]*=[[:space:]]*local\.oidc_provider' || status=1
+    if grep -Eq '^[[:space:]]*url[[:space:]]*=' <<<"$oidc_ds"; then
+      echo "  OIDC provider data source looks up by url: iam:ListOpenIDConnectProviders has no resource type and the boundary denies it"
+      status=1
+    fi
+  fi
+
   # Every role carries the boundary: the github_oidc module gets it, and the
   # developer role sets it itself.
   need "github_oidc passes the boundary to every role" "$(block "$f" '^module\s+"github_oidc"\s*\{')" 'permissions_boundary_arn[[:space:]]*=[[:space:]]*module\.boundary\.arn' || status=1
@@ -261,10 +281,11 @@ fi
 SCRATCH="$(mktemp -d)"
 trap 'rm -rf "$SCRATCH"' EXIT
 DEV="${REPO_ROOT}/terraform/environments/dev/main.tf"
+STAGING="${REPO_ROOT}/terraform/environments/staging/main.tf"
 cases=0
-mutate() { # mutate <env|module> <name> <perl expression>
+mutate() { # mutate <env|module> <name> <perl expression> [<source file>]
   cases=$((cases + 1))
-  local src="$DEV" kind="$1"
+  local src="${4:-$DEV}" kind="$1"
   [[ "$kind" == "module" ]] && src="$MODULE"
   local f="${SCRATCH}/case-${cases}.tf"
   if ! perl -0pe "$3" "$src" >"$f" || cmp -s "$f" "$src"; then
@@ -313,6 +334,8 @@ mutate env "the boundary without ssm_env" 's/\n\s*ssm_env\s*=\s*var\.environment
 mutate env "IAM writes scoped to the whole project" 's/\n\s*iam_scope_prefix\s*=\s*module\.tags\.name_prefix//'
 mutate env "the boundary without known roles" 's/\n\s*known_role_names\s*=\s*\[for k in local\.boundary_role_keys[^\n]*//'
 mutate env "the developer role without the boundary" 's/(resource "aws_iam_role" "developer" \{.*?)\n\s*permissions_boundary\s*=\s*module\.boundary\.arn/$1/s'
+mutate env "the OIDC provider looked up by url (staging)" 's/arn\s*=\s*local\.oidc_provider\n/url = "https:\/\/token.actions.githubusercontent.com"\n/' "$STAGING"
+mutate env "the OIDC provider looked up by url beside the arn (staging)" 's/(arn\s*=\s*local\.oidc_provider\n)/$1  url = "https:\/\/token.actions.githubusercontent.com"\n/' "$STAGING"
 
 if [[ "$failures" -gt 0 ]]; then
   echo "${failures} infra-readable IAM check(s) failed."

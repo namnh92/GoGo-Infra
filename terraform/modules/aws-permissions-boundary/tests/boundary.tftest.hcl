@@ -16,7 +16,7 @@
 # and its lists into one form before toset(); jsonencode() canonicalises an
 # object for an exact compare; try(…) is there because a `for … if` filter
 # evaluates every operand on every statement, and most statements carry no
-# Condition or NotResource at all.
+# Condition or NotResource at all — and the NotAction one no Action.
 
 provider "aws" {
   region                      = "ap-southeast-1"
@@ -77,7 +77,7 @@ run "boundary_document" {
       for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
       if s.Sid == "RequireThisBoundary"
       && s.Effect == "Deny"
-      && toset(flatten([s.Action])) == toset(["iam:CreateRole", "iam:PutRolePermissionsBoundary"])
+      && toset(flatten([try(s.Action, [])])) == toset(["iam:CreateRole", "iam:PutRolePermissionsBoundary"])
       && toset(flatten([try(s.Resource, [])])) == toset(["*"])
       && jsonencode(try(s.Condition, {})) == jsonencode({ StringNotEquals = { "iam:PermissionsBoundary" = "arn:aws:iam::111122223333:policy/gogo-dev-boundary" } })
     ]) == 1
@@ -91,7 +91,7 @@ run "boundary_document" {
       for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
       if s.Sid == "OnlyKnownRolesReadSsm"
       && s.Effect == "Deny"
-      && toset(flatten([s.Action])) == toset(["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"])
+      && toset(flatten([try(s.Action, [])])) == toset(["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"])
       && toset(flatten([try(s.Resource, [])])) == toset(["*"])
       && keys(try(s.Condition, {})) == ["ArnNotEquals"]
       && toset(flatten([try(s.Condition.ArnNotEquals["aws:PrincipalArn"], [])])) == toset([
@@ -110,7 +110,7 @@ run "boundary_document" {
       for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
       if s.Sid == "ProtectKnownRoles"
       && s.Effect == "Deny"
-      && toset(flatten([s.Action])) == toset(["iam:CreateRole", "iam:UpdateAssumeRolePolicy", "iam:DeleteRole"])
+      && toset(flatten([try(s.Action, [])])) == toset(["iam:CreateRole", "iam:UpdateAssumeRolePolicy", "iam:DeleteRole"])
       && !contains(keys(s), "Condition")
       && toset(flatten([try(s.Resource, [])])) == toset([
         "arn:aws:iam::111122223333:role/gogo-dev-plan",
@@ -121,20 +121,45 @@ run "boundary_document" {
     error_message = "ProtectKnownRoles must be exactly one unconditional Deny of CreateRole, UpdateAssumeRolePolicy and DeleteRole on the known roles"
   }
 
-  # GoGo-Infra#196 — IAM writes stay inside this environment's prefix.
+  # GoGo-Infra#196 (PR #197 confirm round, F-01) — every IAM action, on every
+  # resource but this environment's roles and policies, the GitHub OIDC
+  # provider and AWS-managed policies. Exactly "iam:*": a verb list, however
+  # long, is the defect this replaces. tests/catalogue/iam.tftest.hcl checks
+  # the same statement against the live action catalogue.
   assert {
     condition = length([
       for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
-      if s.Sid == "DenyIamMutationOutsideGoGo"
+      if s.Sid == "DenyIamOutsideEnvironment"
       && s.Effect == "Deny"
-      && toset(flatten([s.Action])) == toset(["iam:Add*", "iam:Attach*", "iam:Create*", "iam:Delete*", "iam:Detach*", "iam:PassRole", "iam:Put*", "iam:Remove*", "iam:Set*", "iam:Tag*", "iam:Untag*", "iam:Update*", "iam:Upload*"])
+      && flatten([try(s.Action, [])]) == ["iam:*"]
       && !contains(keys(s), "Condition")
+      && !contains(keys(s), "Resource")
       && toset(flatten([try(s.NotResource, [])])) == toset([
         "arn:aws:iam::111122223333:role/gogo-dev-*",
         "arn:aws:iam::111122223333:policy/gogo-dev-*",
+        "arn:aws:iam::111122223333:oidc-provider/token.actions.githubusercontent.com",
+        "arn:aws:iam::aws:policy/*",
       ])
     ]) == 1
-    error_message = "DenyIamMutationOutsideGoGo must deny every mutating IAM verb outside gogo-dev-*"
+    error_message = "DenyIamOutsideEnvironment must be exactly one unconditional Deny of iam:* with NotResource = role/gogo-dev-*, policy/gogo-dev-*, the GitHub OIDC provider and arn:aws:iam::aws:policy/*"
+  }
+
+  # GoGo-Infra#196 — the OIDC provider is reachable for reads only: a Deny of
+  # everything except the two Read/List oidc-provider actions in the IAM
+  # catalogue, on every provider in the account. NotAction, never Action — a
+  # list of writes is the verb-list defect again.
+  assert {
+    condition = length([
+      for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
+      if s.Sid == "DenyOidcProviderMutation"
+      && s.Effect == "Deny"
+      && !contains(keys(s), "Action")
+      && toset(flatten([try(s.NotAction, [])])) == toset(["iam:GetOpenIDConnectProvider", "iam:ListOpenIDConnectProviderTags"])
+      && !contains(keys(s), "Condition")
+      && !contains(keys(s), "NotResource")
+      && toset(flatten([try(s.Resource, [])])) == toset(["arn:aws:iam::111122223333:oidc-provider/*"])
+    ]) == 1
+    error_message = "DenyOidcProviderMutation must be exactly one unconditional Deny with NotAction = GetOpenIDConnectProvider, ListOpenIDConnectProviderTags on arn:aws:iam::111122223333:oidc-provider/*"
   }
 
   # GoGo-Infra#196 — reads stay in this environment's trees.
@@ -143,7 +168,7 @@ run "boundary_document" {
       for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
       if s.Sid == "SsmReadsStayInEnvironment"
       && s.Effect == "Deny"
-      && toset(flatten([s.Action])) == toset(["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"])
+      && toset(flatten([try(s.Action, [])])) == toset(["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"])
       && !contains(keys(s), "Resource")
       && !contains(keys(s), "Condition")
       && toset(flatten([try(s.NotResource, [])])) == toset([
@@ -162,7 +187,7 @@ run "boundary_document" {
       for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
       if s.Sid == "SsmWritesAreBootstrapOnly"
       && s.Effect == "Deny"
-      && toset(flatten([s.Action])) == toset(["ssm:PutParameter", "ssm:DeleteParameter", "ssm:DeleteParameters", "ssm:LabelParameterVersion", "ssm:UnlabelParameterVersion", "ssm:AddTagsToResource", "ssm:RemoveTagsFromResource"])
+      && toset(flatten([try(s.Action, [])])) == toset(["ssm:PutParameter", "ssm:DeleteParameter", "ssm:DeleteParameters", "ssm:LabelParameterVersion", "ssm:UnlabelParameterVersion", "ssm:AddTagsToResource", "ssm:RemoveTagsFromResource"])
       && toset(flatten([try(s.Resource, [])])) == toset(["*"])
       && !contains(keys(s), "Condition")
     ]) == 1
@@ -177,7 +202,7 @@ run "boundary_document" {
       for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
       if s.Sid == "SsmReadCeilingPlan"
       && s.Effect == "Deny"
-      && toset(flatten([s.Action])) == toset(["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"])
+      && toset(flatten([try(s.Action, [])])) == toset(["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"])
       && !contains(keys(s), "Resource")
       && toset(flatten([try(s.NotResource, [])])) == toset([
         "arn:aws:ssm:ap-southeast-1:111122223333:parameter/gogo/dev/backend/cms/super-admin-email",
@@ -196,7 +221,7 @@ run "boundary_document" {
       for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
       if s.Sid == "SsmReadCeilingApply"
       && s.Effect == "Deny"
-      && toset(flatten([s.Action])) == toset(["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"])
+      && toset(flatten([try(s.Action, [])])) == toset(["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"])
       && !contains(keys(s), "Resource")
       && toset(flatten([try(s.NotResource, [])])) == toset([
         "arn:aws:ssm:ap-southeast-1:111122223333:parameter/gogo/dev/backend/cms/super-admin-email",
@@ -226,7 +251,7 @@ run "boundary_document" {
       for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
       if s.Sid == "InfraReadableNamesNeedTheTag"
       && s.Effect == "Deny"
-      && toset(flatten([s.Action])) == toset(["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParameterHistory"])
+      && toset(flatten([try(s.Action, [])])) == toset(["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParameterHistory"])
       && !contains(keys(s), "NotResource")
       && toset(flatten([try(s.Resource, [])])) == toset([
         "arn:aws:ssm:ap-southeast-1:111122223333:parameter/gogo/dev/backend/cms/super-admin-email",
@@ -251,7 +276,7 @@ run "boundary_document" {
       for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
       if s.Sid == "InfraReadableNamesNeverDecrypted"
       && s.Effect == "Deny"
-      && toset(flatten([s.Action])) == toset(["kms:Decrypt"])
+      && toset(flatten([try(s.Action, [])])) == toset(["kms:Decrypt"])
       && !contains(keys(s), "NotResource")
       && toset(flatten([try(s.Resource, [])])) == toset(["*"])
       && toset(try(keys(s.Condition), [])) == toset(["StringEquals", "ArnEquals"])
@@ -277,7 +302,7 @@ run "boundary_document" {
       for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
       if s.Sid == "DenyLockedTagChanges"
       && s.Effect == "Deny"
-      && toset(flatten([s.Action])) == toset(["ssm:AddTagsToResource", "ssm:RemoveTagsFromResource", "ssm:PutParameter"])
+      && toset(flatten([try(s.Action, [])])) == toset(["ssm:AddTagsToResource", "ssm:RemoveTagsFromResource", "ssm:PutParameter"])
       && !contains(keys(s), "NotResource")
       && toset(flatten([try(s.Resource, [])])) == toset(["*"])
       && jsonencode(try(s.Condition, {})) == jsonencode({ "ForAnyValue:StringEqualsIgnoreCase" = { "aws:TagKeys" = "gogo:infra-readable" } })
@@ -292,6 +317,23 @@ run "boundary_document" {
       if can(s.Condition.ArnEquals["aws:PrincipalArn"]) && can(regex("(deploy|monitor|developer)", jsonencode(s.Condition.ArnEquals["aws:PrincipalArn"])))
     ]) == 0
     error_message = "a read ceiling names a deploy, monitor or developer role"
+  }
+}
+
+# A managed policy document is limited to 6,144 characters excluding whitespace
+# (IAM quotas). Every string in this document is whitespace-free, so stripping
+# all whitespace is exactly what IAM counts. Measured with every role dev
+# declares (local.boundary_role_keys in environments/dev, developer included),
+# because each known role costs two ARNs; the failure otherwise surfaces as a
+# bootstrap apply error after the statement that pushed it over was reviewed.
+run "document_fits_the_managed_policy_limit_with_every_dev_role" {
+  command = plan
+  variables {
+    known_role_names = ["gogo-dev-plan", "gogo-dev-apply", "gogo-dev-monitor", "gogo-dev-deploy", "gogo-dev-cms-deploy", "gogo-dev-developer"]
+  }
+  assert {
+    condition     = length(replace(data.aws_iam_policy_document.boundary.json, "/\\s/", "")) < 6144
+    error_message = "the rendered boundary is ${length(replace(data.aws_iam_policy_document.boundary.json, "/\\s/", ""))} characters without whitespace; IAM's managed-policy limit is 6,144"
   }
 }
 
@@ -312,8 +354,14 @@ run "no_known_roles_means_no_196_statements_and_project_scope" {
   assert {
     condition = length([
       for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
-      if s.Sid == "DenyIamMutationOutsideGoGo"
-      && toset(flatten([try(s.NotResource, [])])) == toset(["arn:aws:iam::111122223333:role/gogo-*", "arn:aws:iam::111122223333:policy/gogo-*"])
+      if s.Sid == "DenyIamOutsideEnvironment"
+      && flatten([try(s.Action, [])]) == ["iam:*"]
+      && toset(flatten([try(s.NotResource, [])])) == toset([
+        "arn:aws:iam::111122223333:role/gogo-*",
+        "arn:aws:iam::111122223333:policy/gogo-*",
+        "arn:aws:iam::111122223333:oidc-provider/token.actions.githubusercontent.com",
+        "arn:aws:iam::aws:policy/*",
+      ])
     ]) == 1
     error_message = "an empty iam_scope_prefix falls back to the project prefix"
   }

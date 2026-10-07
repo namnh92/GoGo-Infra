@@ -22,9 +22,34 @@ locals {
   # environment's roles or boundary. Defaults to the project prefix.
   iam_scope = var.iam_scope_prefix == "" ? var.resource_prefix : var.iam_scope_prefix
 
-  gogo_iam_resources = [
+  # The one OIDC provider every environment's roles trust (account-wide, created
+  # by the dev configuration, looked up by ARN everywhere else).
+  github_oidc_provider_arn = "arn:aws:iam::${local.account}:oidc-provider/token.actions.githubusercontent.com"
+
+  # Every IAM resource a capped role may touch at all. DenyIamOutsideEnvironment
+  # denies iam:* on everything else, so this list is the whole IAM surface of
+  # CI: this environment's roles and policies (read and write), the GitHub OIDC
+  # provider (read only — DenyOidcProviderMutation) and AWS-managed policies
+  # (read, and attach through iam:PolicyARN; nobody can change those).
+  iam_reachable = [
     "arn:aws:iam::${local.account}:role/${local.iam_scope}-*",
     "arn:aws:iam::${local.account}:policy/${local.iam_scope}-*",
+    local.github_oidc_provider_arn,
+    "arn:aws:iam::aws:policy/*",
+  ]
+
+  # The only two actions on resource type oidc-provider whose access level is
+  # Read or List, from the AWS service reference for IAM
+  # (servicereference.us-east-1.amazonaws.com/v1/iam/iam.json). Everything else
+  # on a provider — AddClientID, RemoveClientID, UpdateThumbprint, Tag, Untag,
+  # Create, Delete, and whatever IAM adds — is denied by DenyOidcProviderMutation
+  # as a NotAction, the same inversion as DenyIamOutsideEnvironment.
+  # scripts/ci/boundary-iam-catalogue.test.sh compares this list with the live
+  # catalogue and fails when they differ, so a read action AWS adds shows up
+  # as a test failure, not as a silently denied refresh.
+  oidc_provider_reads = [
+    "iam:GetOpenIDConnectProvider",
+    "iam:ListOpenIDConnectProviderTags",
   ]
 }
 
@@ -40,34 +65,65 @@ data "aws_iam_policy_document" "boundary" {
     resources = ["*"]
   }
 
-  # IAM mutation outside the GoGo namespace. This is the escalation that matters:
-  # without it, a role that can attach policies can build itself an admin role.
+  # IAM outside this environment. This is the escalation that matters: without
+  # it, a role that can attach policies can build itself an admin role.
+  #
+  # Inverted on purpose (GoGo-Infra#196, PR #197 confirm round, F-01): the
+  # previous version listed mutating verb prefixes and missed Enable*, Disable*,
+  # Deactivate*, Reset*, Acquire* and whatever IAM adds next. A list of what is
+  # denied can only ever be as complete as the day it was written; a list of
+  # what is *reachable* is four entries and does not go stale. So: iam:* on
+  # every resource except local.iam_reachable. Reads outside the environment
+  # go with it (GetRole on another environment's role, ListRoles,
+  # GetAccountAuthorizationDetails) — CI has no use for them.
+  #
+  # Actions with no resource type are requested against "*", which matches no
+  # NotResource entry, so they are all denied here. From the catalogue, the
+  # non-read ones: CreateAccountAlias, DeleteAccountAlias,
+  # DeleteAccountPasswordPolicy, DeleteCloudFrontPublicKey,
+  # DisableOrganizationsRootCredentialsManagement,
+  # DisableOrganizationsRootSessions, DisableOutboundWebIdentityFederation,
+  # EnableOrganizationsRootCredentialsManagement,
+  # EnableOrganizationsRootSessions, EnableOutboundWebIdentityFederation,
+  # PutAccountProperties, SetSTSRegionalEndpointStatus,
+  # SetSecurityTokenServicePreferences, UpdateAccountEmailAddress,
+  # UpdateAccountName, UpdateAccountPasswordPolicy, UpdateCloudFrontPublicKey,
+  # UploadCloudFrontPublicKey. The read ones Terraform or CI could plausibly
+  # want: ListOpenIDConnectProviders (the aws_iam_openid_connect_provider data
+  # source looks up by `url` through it — staging and prod look up by `arn`
+  # instead, which is GetOpenIDConnectProvider on the reachable provider),
+  # ListRoles / ListPolicies (the aws_iam_roles / aws_iam_policies data
+  # sources, not used), GetAccountSummary and SimulateCustomPolicy (not used).
+  # Every resource this repository manages — aws_iam_role,
+  # aws_iam_role_policy_attachment, aws_iam_policy,
+  # aws_iam_openid_connect_provider — is read and written through actions on
+  # the role, policy or provider ARN. scripts/bootstrap/complete.sh calls
+  # list-open-id-connect-providers as the bootstrap identity, which carries no
+  # boundary.
+  #
+  # AWS-managed policies (arn:aws:iam::aws:policy/*) are reachable so the
+  # apply role can attach the allowlisted ReadOnlyAccess (iam:PolicyARN in its
+  # own policy) and read it. They are owned by the `aws` account: IAM refuses
+  # CreatePolicyVersion, SetDefaultPolicyVersion, DeletePolicy,
+  # DeletePolicyVersion, TagPolicy and UntagPolicy on them for every caller,
+  # so no Deny is needed to keep them unchanged.
   statement {
-    sid    = "DenyIamMutationOutsideGoGo"
-    effect = "Deny"
+    sid           = "DenyIamOutsideEnvironment"
+    effect        = "Deny"
+    actions       = ["iam:*"]
+    not_resources = local.iam_reachable
+  }
 
-    # Every IAM verb that changes something, not a hand-picked list
-    # (GoGo-Infra#196, review of PR #197: tagging, PassRole and the shared
-    # GitHub OIDC provider were outside the old list). Anything that is not
-    # this environment's role or policy — another environment's roles, the
-    # account-wide OIDC provider — is changed only from the bootstrap session.
-    actions = [
-      "iam:Add*",
-      "iam:Attach*",
-      "iam:Create*",
-      "iam:Delete*",
-      "iam:Detach*",
-      "iam:PassRole",
-      "iam:Put*",
-      "iam:Remove*",
-      "iam:Set*",
-      "iam:Tag*",
-      "iam:Untag*",
-      "iam:Update*",
-      "iam:Upload*",
-    ]
-
-    not_resources = local.gogo_iam_resources
+  # The OIDC provider is reachable above only so that the provider's own state
+  # can be refreshed. Changing it — the thumbprint, the audience list, creating
+  # or deleting one — is a bootstrap apply, in every environment, including the
+  # one that created it. Deny-everything-except-reads, not a list of writes:
+  # the list would be the verb-prefix defect again, one resource type smaller.
+  statement {
+    sid         = "DenyOidcProviderMutation"
+    effect      = "Deny"
+    not_actions = local.oidc_provider_reads
+    resources   = ["arn:aws:iam::${local.account}:oidc-provider/*"]
   }
 
   # IAM users, groups and access keys are never part of this architecture.

@@ -429,10 +429,12 @@ its own CI credentials; nothing capped by one environment's boundary reads or wr
 environment's parameters or IAM; no capped role writes a parameter at all (bootstrap only); and the
 apply role cannot use its IAM rights to widen any of this — every created or re-bounded role carries
 the boundary, only declared roles (`local.boundary_role_keys`) read SSM, a declared role cannot be
-re-trusted, deleted or created again from CI, and IAM writes stay inside `gogo-<env>-*` (the shared
-GitHub OIDC provider included). So changing a declared role's trust, deleting or adding one, and
-any change to the OIDC provider are bootstrap applies under the freeze below — CI apply fails on
-them, by design.
+re-trusted, deleted or created again from CI, and IAM is reachable only inside `gogo-<env>-*`:
+`iam:*` is denied on every other resource (another environment's roles, users, the account
+itself), the shared GitHub OIDC provider is readable and never changed from CI, and that rule is
+checked against the AWS action catalogue on every CI run (`scripts/ci/boundary-iam-catalogue.test.sh`).
+So changing a declared role's trust, deleting or adding one, and any change to the OIDC provider
+are bootstrap applies under the freeze below — CI apply fails on them, by design.
 
 Adding a third parameter is a manifest row, an entry in `local.infra_readable_parameter_arns` in
 every environment, and the matching update to `scripts/ci/infra-readable-iam.test.sh` and
