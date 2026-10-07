@@ -347,8 +347,17 @@ echo "    R2_BUCKET   = $(env_value R2_BUCKET)"
 echo
 echo "==> Parameters for ${ENVIRONMENT}"
 
-while IFS=$'\t' read -r path env_var type required _namespace; do
+while IFS=$'\t' read -r path env_var type required _namespace _consumer infra_readable; do
   [[ -n "$path" ]] || continue
+
+  # GoGo-Infra#194 / ADR-0010. A row Terraform reads must carry the
+  # gogo:infra-readable tag, and only put.sh --infra-readable sets it (from the
+  # bootstrap session). Writing it here would store it untagged — the next plan
+  # fails AccessDenied while this script reports success.
+  if [[ "$infra_readable" == "true" ]]; then
+    echo "  → ${env_var} — Terraform-readable; set it with: ./scripts/secrets/put.sh ${ENVIRONMENT} ${path} --infra-readable"
+    continue
+  fi
 
   is_required="no"
   [[ ",${required}," == *",${ENVIRONMENT},"* ]] && is_required="yes"
@@ -430,7 +439,7 @@ while IFS=$'\t' read -r path env_var type required _namespace; do
   put_param "$path" "$type" "$value"
   unset value
   written=$((written + 1))
-done < <(python3 "$MANIFEST_READER" "$ENVIRONMENT")
+done < <(python3 "$MANIFEST_READER" "$ENVIRONMENT" --field infra_readable)
 
 echo
 if [[ "$DRY_RUN" == "yes" ]]; then

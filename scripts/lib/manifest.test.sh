@@ -205,11 +205,15 @@ fi
 # — and the API's process environment is still the wrong place for it. Only the
 # consumer filter can say that, so these pin that it does.
 
-seed_rows="$(python3 "$READER" dev --consumer seed | cut -f1)"
-if [[ -n "$seed_rows" ]]; then
-  ok "the seed consumer is non-empty ($(echo "$seed_rows" | wc -l | tr -d ' ') row(s))"
+# GoGo-Infra#194 retired the only seed rows (cms/seed-admin-*): the super admin
+# now follows cms/super-admin-email at deploy (GoGo-BE#687). The consumer stays
+# defined, so an empty seed set is correct; what must not happen is the retired
+# rows coming back.
+retired="$(python3 "$READER" dev --namespace all --consumer all | grep -E '^cms/seed-admin-' || true)"
+if [[ -z "$retired" ]]; then
+  ok "the retired CMS bootstrap rows are gone from every consumer"
 else
-  bad "the seed consumer is empty" "INF-069 declares cms/seed-admin-email there"
+  bad "a retired CMS bootstrap row is declared again" "$retired"
 fi
 
 # The default output is what render-env.sh and pull.sh render into the process
@@ -254,18 +258,19 @@ count_seed=$(python3 "$READER" dev --namespace all --consumer seed | wc -l | tr 
 count_obs=$(python3 "$READER" dev --namespace all --consumer observability | wc -l | tr -d ' ')
 count_pipeline=$(python3 "$READER" dev --namespace all --consumer pipeline | wc -l | tr -d ' ')
 count_consumer_all=$(python3 "$READER" dev --namespace all --consumer all | wc -l | tr -d ' ')
-if [[ "$count_consumer_all" -eq $(( count_runtime + count_seed + count_obs + count_pipeline )) ]]; then
-  ok "--consumer all is exactly runtime + seed + observability + pipeline (${count_consumer_all})"
+count_terraform=$(python3 "$READER" dev --namespace all --consumer terraform | wc -l | tr -d ' ')
+if [[ "$count_consumer_all" -eq $(( count_runtime + count_seed + count_obs + count_pipeline + count_terraform )) ]]; then
+  ok "--consumer all is exactly runtime + seed + observability + pipeline + terraform (${count_consumer_all})"
 else
   bad "--consumer all is not the union" \
-      "all=${count_consumer_all}, runtime=${count_runtime}, seed=${count_seed}, observability=${count_obs}, pipeline=${count_pipeline} — a consumer exists that no test covers"
+      "all=${count_consumer_all}, runtime=${count_runtime}, seed=${count_seed}, observability=${count_obs}, pipeline=${count_pipeline}, terraform=${count_terraform} — a consumer exists that no test covers"
 fi
 
 # A typo'd consumer has the same failure mode as a typo'd namespace: the row
 # stops appearing anywhere, and a parameter nobody renders and nobody validates
 # is a parameter nobody rotates.
 unknown_consumer="$(python3 "$READER" dev --namespace all --consumer all \
-  | awk -F'\t' '$6 != "runtime" && $6 != "seed" && $6 != "observability" && $6 != "pipeline" { print $1 " (" $6 ")" }')"
+  | awk -F'\t' '$6 != "runtime" && $6 != "seed" && $6 != "observability" && $6 != "pipeline" && $6 != "terraform" { print $1 " (" $6 ")" }')"
 if [[ -z "$unknown_consumer" ]]; then
   ok "every row declares a known consumer"
 else
@@ -300,13 +305,73 @@ done
 # The two renderers must NOT. They write the API and worker process env.
 for caller in scripts/deploy/render-env.sh scripts/secrets/pull.sh; do
   file="${DIR}/../../${caller}"
-  if grep -q '\-\-consumer runtime\|--consumer "\$CONSUMER"' "$file"; then
+  if grep -q '\-\-consumer runtime\|--consumer "\$consumer"' "$file"; then
     ok "${caller} states its consumer explicitly"
   else
     bad "${caller} inherits the default consumer" \
         "the default is load-bearing here and must be stated, not assumed"
   fi
 done
+
+# --- GoGo-Infra#194: the terraform consumer and infra_readable --------------
+#
+# A `terraform` row is read by Terraform through a data source and by nothing
+# else. It has no env_var, so a renderer that reached it would write `-=<value>`
+# into an env file. These pin that no renderer's filter can select it, and that
+# the tag IAM keys on can only ever sit on a String.
+for env in dev staging prod; do
+  tf_rows="$(python3 "$READER" "$env" --namespace all --consumer terraform | cut -f1)"
+  if grep -qxF "cms/access-staff-emails" <<< "$tf_rows"; then
+    ok "${env}: the terraform consumer declares cms/access-staff-emails"
+  else
+    bad "${env}: cms/access-staff-emails is not a terraform row" "got: ${tf_rows:-<none>}"
+  fi
+  for consumer in runtime seed observability; do
+    leaked="$(python3 "$READER" "$env" --namespace all --consumer "$consumer" \
+      | awk -F'\t' '$6 == "terraform" || $1 == "cms/access-staff-emails" { print $1 }')"
+    if [[ -z "$leaked" ]]; then
+      ok "${env}: no terraform row in --consumer ${consumer}"
+    else
+      bad "${env}: a terraform row reached --consumer ${consumer}" "$leaked"
+    fi
+  done
+  if python3 "$READER" "$env" | awk -F'\t' '$6 == "terraform"' | grep -q .; then
+    bad "${env}: a terraform row reached the default output" "render-env.sh would see it"
+  else
+    ok "${env}: default output has no terraform row"
+  fi
+done
+
+staff_env_var="$(python3 "$READER" dev --namespace all --consumer terraform | awk -F'\t' '$1 == "cms/access-staff-emails" { print $2 }')"
+if [[ "$staff_env_var" == "-" ]]; then
+  ok "cms/access-staff-emails has no env_var (placeholder '-')"
+else
+  bad "cms/access-staff-emails declares an env_var" "got '${staff_env_var}'; nothing may render it"
+fi
+
+# Column 7 = infra_readable, column 3 = type.
+infra_rows="$(python3 "$READER" dev --namespace all --consumer all --field infra_readable | awk -F'\t' '$7 == "true" { print $1 "\t" $3 "\t" $5 }')"
+infra_paths="$(cut -f1 <<< "$infra_rows" | sort | tr '\n' ' ')"
+if [[ "$infra_paths" == "cms/access-staff-emails cms/super-admin-email " ]]; then
+  ok "exactly two rows are infra_readable"
+else
+  bad "the infra_readable set changed" \
+      "got '${infra_paths}'. IAM grants Terraform exactly cms/super-admin-email and cms/access-staff-emails; a new row needs an IAM change and a review, not only a manifest line"
+fi
+
+not_string="$(awk -F'\t' '$2 != "String" || $3 != "backend" { print $1 " (" $2 ", " $3 ")" }' <<< "$infra_rows")"
+if [[ -z "$not_string" ]]; then
+  ok "every infra_readable row is a backend String"
+else
+  bad "an infra_readable row is not a backend String" "$not_string"
+fi
+
+bad_flag="$(python3 "$READER" dev --namespace all --consumer all --field infra_readable | awk -F'\t' '$7 != "" && $7 != "true" { print $1 " (" $7 ")" }')"
+if [[ -z "$bad_flag" ]]; then
+  ok "infra_readable is either absent or 'true'"
+else
+  bad "infra_readable has a value other than true" "$bad_flag — write it as true or omit it"
+fi
 
 echo
 if [[ "$failures" -gt 0 ]]; then

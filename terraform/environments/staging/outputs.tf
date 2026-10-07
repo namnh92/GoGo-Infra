@@ -8,6 +8,8 @@ output "ssm_paths" {
   value = {
     plan  = module.policy_plan.parameter_paths
     apply = module.policy_apply.parameter_paths
+    # GoGo-Infra#194: plan and apply also read these two, by exact ARN.
+    infra_readable = local.infra_readable_parameter_arns
   }
 }
 

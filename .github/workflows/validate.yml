@@ -37,6 +37,21 @@ jobs:
             echo "::endgroup::"
           done
 
+      # GoGo-Infra#194 / ADR-0010. Renders the permissions boundary offline (no
+      # AWS call: dummy provider credentials, caller identity overridden) and
+      # asserts on the exact JSON — the read ceiling for plan/apply, the tag
+      # rule, the decrypt Deny and the tag lock. Runs after validate, which has
+      # already initialised every module directory.
+      - name: terraform test (modules with tests)
+        run: |
+          set -euo pipefail
+          for dir in terraform/modules/*/; do
+            [[ -d "${dir}tests" ]] || continue
+            echo "::group::test ${dir}"
+            terraform -chdir="${dir}" test
+            echo "::endgroup::"
+          done
+
       - uses: terraform-linters/setup-tflint@v4
         with:
           tflint_version: latest
@@ -273,6 +288,21 @@ jobs:
             python3 scripts/lib/manifest.py "$env" >/dev/null
             echo "${env}: $(python3 scripts/lib/manifest.py "$env" --required | wc -l) required parameters"
           done
+
+      # GoGo-Infra#194 / ADR-0010. The tag gogo:infra-readable=true is what lets
+      # the Terraform roles read a parameter under backend/. Who can set it, on
+      # what, and whether validate.sh reports it in the wrong place are each
+      # pinned here; none of these tests reaches AWS.
+      - name: put.sh tags only declared Strings, after the write
+        run: ./scripts/secrets/put.test.sh
+      - name: validate.sh readiness and infra-readable tag findings
+        run: ./scripts/secrets/validate.test.sh
+      - name: pull.sh --seed renders runtime + seed rows only
+        run: ./scripts/secrets/pull.test.sh
+      - name: setup-env.sh hands Terraform-readable rows to put.sh
+        run: ./scripts/secrets/setup-env.test.sh
+      - name: Terraform reads two named parameters and nothing else
+        run: ./scripts/ci/infra-readable-iam.test.sh
 
       # INF-070. The value this script moves must never reach Terraform, a file,
       # an environment variable or a log, and the only way to keep that true is

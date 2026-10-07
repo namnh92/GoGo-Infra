@@ -72,7 +72,8 @@ open a pull request — see `docs/adr/0001`.
 /gogo/<env>/backend/google/{server-api-key,routes-api-key,sheets-api-key}
 /gogo/<env>/backend/observability/sentry-dsn
 /gogo/<env>/backend/observability/metrics-token
-/gogo/<env>/backend/cms/seed-admin-{email,password}   seed-only — never rendered into the API env
+/gogo/<env>/backend/cms/super-admin-email      String, tagged gogo:infra-readable — API + Terraform
+/gogo/<env>/backend/cms/access-staff-emails    String (JSON array), tagged — Terraform only, never rendered
 
 /gogo/<env>/mobile/google/maps-ios-api-key      client key — ships in the app binary
 /gogo/<env>/mobile/google/maps-android-api-key  client key — ships in the app binary
@@ -121,6 +122,13 @@ internet-exposed service here for the benefit of a machine that is not even the 
 rendered by `observability/local-grafana/bin/render-alerting-env.sh`. See
 [`adr/0009`](adr/0009-grafana-alerting-for-administrative-data.md) and
 [`runbook-administrative-alerts.md`](runbook-administrative-alerts.md).
+
+`consumer: terraform` is the fifth value, added by GoGo-Infra#194. Terraform reads the row through a
+`data "aws_ssm_parameter"` and no process does: it has no `env_var`, and no renderer asks for that
+consumer (`render-env.sh` and `pull.sh` also skip the reader's `-` placeholder, so a row without an
+`env_var` can never be written as `-=<value>`). `cms/access-staff-emails` is the case that forced it.
+`infra_readable: true` is the field that goes with it — see "Values Terraform reads from SSM" below.
+No row is `consumer: seed` any more: the CMS bootstrap rows were retired by the same change.
 
 ## Validating an environment
 
@@ -286,6 +294,18 @@ dashboard consumes a permissioned admin API on GoGo-BE, never this endpoint and 
 The value is never passed as an argument: arguments land in shell history, in `ps`, and in CI
 logs.
 
+A row the manifest marks `infra_readable: true` needs the flag, and only such a row accepts it:
+
+```bash
+printf '%s' '["staff@example.com"]' | ./scripts/secrets/put.sh dev cms/access-staff-emails --infra-readable
+./scripts/secrets/put.sh dev cms/super-admin-email --infra-readable   # prompts
+```
+
+It writes the value, then tags it `gogo:infra-readable=true` in a second call (`PutParameter`
+cannot tag a parameter it overwrites). It refuses a `SecureString`, an undeclared path even with
+`GOGO_ALLOW_UNDECLARED=1`, and the `ci` tree. Run it from the bootstrap session: every GoGo role is
+denied that tag.
+
 One value does not go through `put.sh`: the OneSignal Identity Verification key is a PEM, and
 the runtime renderers emit one line per variable, so it has to be encoded before it is stored.
 `./scripts/secrets/put-identity-key.sh <pem> <env>` validates the curve, encodes it, and
@@ -311,6 +331,107 @@ Variables). `API_ORIGIN` and `EDGE_AUTH_TOKEN` were already Cloudflare-held. One
 apply that uploads new Worker code re-sends the variables as Terraform state last saw them, so a
 dashboard edit since then is reverted unless state is re-synced first —
 `terraform/modules/cloudflare-worker/README.md` has the steps.
+
+## Values Terraform reads from SSM
+
+GoGo-Infra#194, [ADR-0010](adr/0010-terraform-reads-tagged-string-parameters.md). Terraform never
+writes a value (previous section), and until this change it read none from the application tree.
+The CMS Access allow list (GoGo-BE#687, owner decisions O-2 and O-5) needs two:
+
+| Parameter | Type | Read by |
+| --- | --- | --- |
+| `cms/super-admin-email` | `String` | GoGo-BE (`CMS_SUPER_ADMIN_EMAIL`) and Terraform |
+| `cms/access-staff-emails` | `String`, a JSON array — `[]` allowed | Terraform only |
+
+Both are allow-list entries, not credentials, which is why they may be `String`. What lets the plan
+and apply roles read them and nothing else under `/gogo/<env>/backend/`:
+
+**In the permissions boundary** (`gogo-<env>-boundary`), whose document no role it caps can edit —
+the apply role can rewrite any `gogo-*` policy, so a Deny there would not hold:
+
+1. **Read ceiling for the plan and apply roles.** Every parameter read outside a short list is
+   denied, by `aws:PrincipalArn`: plan reads `ci/<env>/terraform/read/*` and the two names; apply
+   reads `ci/<env>/terraform/write/*` and the two names. For the plan role, which cannot edit IAM,
+   this closes a hole older than this change: it holds `ReadOnlyAccess`, whose `ssm:Get*` covers
+   every parameter, and every SSM policy here grants `kms:Decrypt` through SSM — so a pull-request
+   session could read `backend/*` and the write-capable Cloudflare token. For the apply role it is
+   a ceiling it cannot edit but can route around with its IAM rights (residual, below).
+2. **Tag required.** Those two principals may read the two names only while they carry
+   `gogo:infra-readable=true`.
+3. **Never decrypted.** A Deny on `kms:Decrypt` keyed on the `PARAMETER_ARN` encryption context: a
+   `SecureString` recreated under one of the names returns ciphertext only.
+4. **Tag lock.** No role under the boundary may add, remove or create with the tag, compared
+   case-insensitively. Only the bootstrap identity (the owner's SSO session) can make a parameter
+   eligible.
+
+**In the roles' own policies**, as the grant and as defence in depth: an `ssm:GetParameter` Allow on
+exactly the two ARNs, conditioned on the tag (`<prefix>-infra-readable`, plan and apply); the
+apply role's `DenyReadingApplicationSecrets` exempting the tag; the same decrypt Deny; the same tag
+lock in every module policy.
+
+**Changing the boundary needs the bootstrap session — under a freeze.** CI apply is denied editing
+it, so the boundary is applied first, from a checkout of the change, and CI applies the rest after
+the merge. Between those two moments `develop` still describes the old boundary: any apply from an
+older checkout — a `terraform-apply-<env>` run not yet finished, a merge that triggers one, a manual
+dispatch — would change its own resources and then fail trying to roll the boundary back (review
+F-09). So:
+
+1. **Freeze.** From before the boundary apply until this PR's reviewed head is merged, nothing
+   else may run `terraform-apply-<env>`: no merge to `develop` that triggers it — the trigger list
+   in `.github/workflows/terraform-apply-dev.yml` is `terraform/**`, `config/*.tfvars`,
+   `config/well-known/**` and `workers/share-link/**` — and no manual `workflow_dispatch` of
+   `terraform-apply-dev` or `terraform-apply-prod` (check the open PRs; tell the other sessions).
+   **Drain** what is already there: every run must have reached `completed` — `queued`,
+   `in_progress`, `waiting`, `requested` and `pending` all count as not done — over the whole
+   list, not the last few (`--limit 200` is more runs than the workflow has had; raise it before
+   that stops being true):
+
+   ```bash
+   gh run list --repo namnh92/GoGo-Infra --workflow terraform-apply-dev.yml --limit 200 \
+     --json status,databaseId,headSha --jq '[.[] | select(.status != "completed")]'
+   ```
+
+   must print `[]` (let a running one finish; never cancel an apply midway). The same command
+   with `terraform-apply-prod.yml` when prod is in scope.
+2. **Apply the boundary** for dev (commands below). Staging and prod: the same step when those
+   environments are applied — `terraform-apply-prod` would otherwise fail on the boundary the first
+   time it runs with this change.
+3. **Confirm.** A fresh `plan (dev)` on this PR shows no change to `module.boundary`; otherwise the
+   apply after the merge fails partway on the boundary.
+4. **Merge** this PR's reviewed head immediately; `terraform-apply-dev` applies the rest.
+5. **Unfreeze.** Only now let other apply-triggering merges and dispatches through. A branch cut
+   before this change plans a boundary *rollback* until it is rebased onto `develop`: rebase it
+   before merge, and never apply such a plan.
+
+```bash
+export AWS_PROFILE=gogo-bootstrap
+source scripts/lib/r2-profile.sh && write_r2_profile /gogo/ci/dev/terraform/write
+export CLOUDFLARE_API_TOKEN="$(aws ssm get-parameter --name /gogo/ci/dev/terraform/write/cloudflare-token \
+  --with-decryption --query Parameter.Value --output text)"
+terraform -chdir=terraform/environments/dev apply -target=module.boundary \
+  -var-file=../../../config/global.tfvars -var-file=../../../config/dev.tfvars
+```
+
+`validate.sh` is the detective half. It reports a declared row stored without the tag, and any
+tagged parameter in `/gogo/<env>/` or `/gogo/ci/<env>/` that is a `SecureString` or not declared
+`infra_readable`. The deploy role cannot read tags, so `deploy-dev` sees `TAGS SKIPPED` and carries
+on; `--strict` from the bootstrap session fails on it instead.
+
+What this does not protect against: the bootstrap identity tagging a secret by hand. `validate.sh`
+reports it; remove the tag and rotate the value.
+
+Nor against the apply role's own IAM rights. It administers `gogo-*` IAM, and the boundary is a
+document it cannot edit, not a cage: by inline policy it can grant itself
+`iam:PutRolePermissionsBoundary` and swap its boundary, mint a new `gogo-*` role that no ceiling
+names and assume it, or re-trust the deploy role. Pre-existing, and accepted by the owner on
+2026-10-06 as residual (GoGo-Infra#196): the ceilings turn a quiet policy edit into a visible IAM
+change, and what stops that change is review plus CODEOWNER on `terraform/**` and the
+`environment: dev` subject on the apply role. The plan role cannot edit IAM at all
+(`ReadOnlyAccess`), so its ceiling holds as written.
+
+Adding a third parameter is a manifest row, an entry in `local.infra_readable_parameter_arns` in
+every environment, and the matching update to `scripts/ci/infra-readable-iam.test.sh` and
+`scripts/lib/manifest.test.sh`. Each of those tests fails until all of them agree.
 
 ## Local development
 
@@ -357,12 +478,17 @@ rotated at the provider — removing it from the latest revision changes nothing
 ## The permissions boundary is not editable from CI
 
 Every IAM role GoGo-Infra creates carries `gogo-<env>-boundary`, and that boundary denies edits
-to itself. So `terraform apply` running in CI as the apply role **cannot change it**. Boundary
-changes go through `scripts/bootstrap/aws.sh` in an operator session.
+to itself. So `terraform apply` running in CI as the apply role **cannot change that policy's
+document**. Boundary changes go through `scripts/bootstrap/aws.sh` in an operator session, under
+the freeze in "Values Terraform reads from SSM".
 
 That is deliberate friction. A ceiling its occupant can rewrite is not a ceiling. An
 access-denied error in CI naming the boundary policy is the control working — apply that change
 from a bootstrap session rather than widening the policy to make CI green.
+
+It is a ceiling on the document, not on the apply role's IAM rights: within `gogo-*` the role can
+still attach a different boundary to a role, or create one no ceiling names — residual risk,
+accepted 2026-10-06, GoGo-Infra#196.
 
 ## Log redaction
 
@@ -435,13 +561,13 @@ session deploys in between, redo the observation.
 | R1 | Deploy a GoGo-BE that contains ADR-0032 (`deploy-dev`) | password | `GET /v1/cms/auth/methods` → `{password:true, accessSso:false}`; password login 201 |
 | R2 | Deploy a GoGo-CMS that reads `methods` (`deploy-cms-dev`); record that revision as the minimum SSO-capable CMS | password | form sign-in unchanged |
 | R3a | `put.sh <env> access/team-domain`, `put.sh <env> access/aud` (Turning on CMS SSO, step 3) → `deploy-dev` | password + SSO | `methods` → `{true,true}`; `access-exchange` with no header → 401 `ACCESS_ASSERTION_MISSING`, with a garbage token → 401 `ACCESS_ASSERTION_INVALID` |
-| R3b | Deploy a GoGo-BE that contains the audited email change (GoGo-BE#681) → as the super admin, `PATCH /v1/cms/auth/admins/{id}` with the SSO address and a reason → `put.sh <env> cms/seed-admin-email` | password + SSO | audit row `admin.email_changed`; password login with the **new** address 201 |
+| R3b | Deploy a GoGo-BE that contains the audited email change (GoGo-BE#681) → as the super admin, `PATCH /v1/cms/auth/admins/{id}` with the SSO address and a reason → `put.sh <env> cms/seed-admin-email` (retired by GoGo-Infra#194: the address is now `cms/super-admin-email`, next section) | password + SSO | audit row `admin.email_changed`; password login with the **new** address 201 |
 | R4 | (a) In a **fresh** browser session, sign in through Access and open a super-admin page. (b) The integration harness with `CMS_AUTH=sso` and a fresh `CF_ACCESS_TOKEN` reaches its first `/cms/*` call. (c) The same harness with `CMS_AUTH=password` still signs in | password + SSO | **all of:** `GET /v1/cms/auth/admins` 200 inside the SSO session; a matching `admin.login.sso` row for the super admin in the same minute; (b) and (c) pass; the BE revision and CMS build recorded at R3b are still the ones running. If any of these is missing, do not go to R5 |
 | R5 | `put.sh <env> cms/password-login-enabled false` → `deploy-dev` | SSO | `methods` → `{false,true}`; `POST /v1/cms/auth/login` with the correct and with a wrong password → both 403 `PASSWORD_LOGIN_DISABLED`; in a fresh browser session the sign-in screen renders **no password field** and SSO opens the super-admin page, with a matching `admin.login.sso` row written **after** the flip; the harness with `CMS_AUTH=sso` and a token minted after the flip (`cloudflared access token`) reaches its first `/cms/*` call; a password session captured before the flip fails to refresh (401 `SESSION_REVOKED`); the R0 list returns the same statuses |
 
 Three steps change state outside the repositories and each needs its own order from the owner, every
 time: the SSM writes in R3a and R5, and the whole of R3b (the identity re-binding through the API
-**and** the matching `cms/seed-admin-email` write). An order given for one environment or one run
+**and** the matching address write). An order given for one environment or one run
 does not carry to the next.
 
 **Rollback.** `put.sh <env> cms/password-login-enabled true`, then run `deploy-dev`. Then confirm from
@@ -471,49 +597,82 @@ script access, not the browser console.
 
 ## `super_admin` through Access only, other roles by password
 
-GoGo-BE ADR-0034 (GoGo-BE#687). DEV runs like this: `cms/password-login-enabled` stays `true`, and
-`cms/super-admin-sso-only` is `true`. The super admin's password login answers
-`403 SUPER_ADMIN_SSO_ONLY`, and its password sessions stop refreshing. `editor`, `moderator` and
-`ops_admin` keep signing in with the passwords the super admin gave them. `GET /v1/cms/auth/methods`
-reports `superAdminSsoOnly`.
+GoGo-BE ADR-0034 as amended for GoGo-BE#687 (owner decisions O-1…O-12, 2026-10-06). There is
+**exactly one** `super_admin`. Its address lives in SSM (`cms/super-admin-email`) and nowhere else;
+every deploy syncs the admin row to it. It signs in through Cloudflare Access only, and once its SSO
+door is proven its password hash is erased. `editor`, `moderator` and `ops_admin` keep two doors:
+Access SSO, or a password the super admin issued plus the matching Access assertion. Both lists come
+from SSM and are applied by Terraform (`cms/access-staff-emails`, previous section).
 
-| Step | Action | Doors after (super admin / others) | Gate |
+DEV is shared between sessions. Before and after every deploy, record the running GoGo-BE revision
+and the CMS build.
+
+| Step | Action | Who | Gate |
 | --- | --- | --- | --- |
-| R0 | Record the baseline from the previous section's R0 list. Capture one super admin password session for the refresh check (keep the token `0600` in a scratch file, delete it after the check) | password + SSO / password + SSO | — |
-| R1 | Deploy a GoGo-BE that contains ADR-0034 (`deploy-dev`) | same | `methods` → `{password:true, accessSso:true, superAdminSsoOnly:false}`; super admin password login 201 |
-| R2 | Deploy a GoGo-CMS that renders `superAdminSsoOnly` (`deploy-cms-dev`) | same | sign-in screen unchanged |
-| R3a | Merge the manifest row `cms/super-admin-sso-only` (this repository). That merge is the **Infra floor** | same | `validate.sh dev` lists the path as declared, optional, absent |
-| R3b | **Prove the SSO door first.** (a) In a **fresh** browser session, sign in through Access and open a super-admin page. (b) The integration harness with `CMS_AUTH=sso` and a fresh `CF_ACCESS_TOKEN` reaches its first `/cms/*` call | same | **all of:** `GET /v1/cms/auth/admins` 200 inside the SSO session; a matching `admin.login.sso` row for the super admin in the same minute; (b) passes; the BE and CMS revisions from R1/R2 are still the ones running. If any is missing, do not go to R4 |
-| R4 | `put.sh <env> cms/super-admin-sso-only true` → `deploy-dev` | SSO / password + SSO | `methods` → `superAdminSsoOnly:true`; super admin login with the correct and with a wrong password → both 403 `SUPER_ADMIN_SSO_ONLY` (first check that the account is not locked out and the runner's IP is under the login rate limit; otherwise a 429 is BLOCKED, not FAIL); the R0 session fails to refresh (401 `SESSION_REVOKED`); another role signs in by password in the browser; SSO still opens a super-admin page; the R0 list returns the same statuses |
+| R1a-0 | Freeze, then apply `module.boundary` from the GoGo-Infra#194 branch in the bootstrap session ("Changing the boundary", above). Freeze = from before that apply until R1a merges: no merge to `develop` that triggers `terraform-apply-<env>` (`terraform/**`, `config/*.tfvars`, `config/well-known/**`, `workers/share-link/**`) and no manual dispatch of `terraform-apply-dev` or `terraform-apply-prod` | **owner** | Drain check prints `[]`: `gh run list --repo namnh92/GoGo-Infra --workflow terraform-apply-dev.yml --limit 200 --json status,databaseId,headSha --jq '[.[] \| select(.status != "completed")]'` — every state but `completed` (`queued`, `in_progress`, `waiting`, `requested`, `pending`) counts as not done; `plan (dev)` on the PR shows no `module.boundary` change; R1a merges next, before any other apply-triggering merge or dispatch |
+| R1a | Merge GoGo-Infra#194 (manifest rows, `put.sh --infra-readable`, IAM) → `terraform-apply-dev` | standing | `validate.sh dev` (bootstrap session) reports both rows MISSING and the retired `cms/seed-admin-*` UNDECLARED. **`deploy-dev` fails from here until R1b** |
+| R1b | `put.sh dev cms/super-admin-email --infra-readable` = the address on today's allow list; `put.sh dev cms/access-staff-emails --infra-readable` = `["<staff…>"]` or `[]`; `delete.sh dev cms/seed-admin-email`; `delete.sh dev cms/seed-admin-password` | **owner** | `validate.sh dev --strict` → `METADATA READY`, no tag finding; `deploy-dev` green |
+| R2 | Infra-2 (Access policy from SSM) merged → apply | standing | plan shows no allow-list change; Access still 302 |
+| R3 | BE-b (row follows `CMS_SUPER_ADMIN_EMAIL`) merged → `deploy-dev` | standing | one `super_admin` row with the SSM address; password hash untouched |
+| R4 | BE-a + CMS-1 → deploy both; owner: fresh SSO session → `GET /v1/cms/auth/admins` 200 → `POST …/super-admin/confirm-sso` 201 | standing + owner | audit `admin.sso_confirmed` with the current address |
+| R5 | `put.sh dev cms/super-admin-sso-only true` → `deploy-dev` (the sync erases the hash: the gate is met) | **owner** | super admin password login 403 `SUPER_ADMIN_SSO_ONLY`; hash and `must_change_password_at` NULL |
+| R6–R8 | Address-change rehearsal, BE-c (assertion on the password door), CMS-2, BE-c2 | per GoGo-BE#687 | per GoGo-BE#687 |
 
-The SSM write in R4 needs its own order from the owner, every time.
+Every SSM write and delete above needs its own order from the owner, every time.
 
-**Rollback.** `put.sh <env> cms/super-admin-sso-only false`, then `deploy-dev`. Then confirm from
-outside that the super admin's password login answers 201. This holds only while
-`cms/password-login-enabled` is `true`; otherwise set that to `true` as well. This is one action, with no console
-deploy. Revoked sessions stay revoked.
+**Change the super admin's address — with overlap, in this order.**
 
-**Compatibility while the value is `true`.** Each of these floors, once crossed, rolls back the
-decision. Record it as a rollback.
+1. Add the **old** address to `cms/access-staff-emails` (`put.sh --infra-readable`).
+2. Set `cms/super-admin-email` to the new address (`put.sh --infra-readable`).
+3. Dispatch `terraform-apply-<env>`. Before going on, the owner reads
+   `terraform output cms_access_emails` and sees the new address in it.
+4. `deploy-dev`. The sync moves the row to the new address, revokes its sessions and writes
+   `admin.email_changed` (actor `system`).
+5. Sign in through Access with the new address and `POST …/super-admin/confirm-sso`.
+6. Remove the old address from `cms/access-staff-emails` → apply.
+
+Steps 3 and 4 are the order that matters: the deploy is not bound to the SSM version Terraform
+applied, so a deploy run first lands the row on an address Access does not yet admit.
+
+**Recovery** is set by what has already committed, and every way out is SSM plus a deploy — none
+needs a console session:
+
+| Access applied for new? | Row synced to new? | New SSO proven? | Way out |
+| --- | --- | --- | --- |
+| no | no | — | nothing changed; fix the list, apply |
+| yes | no (deploy failed before the sync) | — | deploy again, or set SSM back → deploy |
+| no | yes (deployed before applying) | — | set `cms/super-admin-email` back to the old address → `deploy-dev` (the sync reverts the row and audits it); then redo the steps in order |
+| yes | yes | no | same: SSM back → `deploy-dev`; investigate before retrying |
+| yes | yes | yes | remove the old address from the staff list → apply |
+
+**There is no password break-glass for the super admin (O-1, owner decision 2026-10-06).** Once the
+hash is erased it stays NULL: the API refuses `reset-password`, `change-password` and
+`set-temporary-password` for the super admin while `cms/super-admin-sso-only` is `true`, and setting
+the switch back to `false` restores nothing, because there is no password to log in with. Every
+recovery is Access SSO plus SSM → `terraform-apply-<env>` → `deploy-dev` (the table above). An Access
+or identity-provider outage therefore blocks the super admin's console and API access until it ends;
+staff password sign-in also needs the Access assertion once BE-c is on the environment.
+
+**Lock a staff member.** Suspend the admin row through the CMS (immediate: every door closes,
+sessions are revoked). Then remove the address from `cms/access-staff-emails` and apply, which closes
+the edge. Suspension alone is sufficient; the list change is hygiene.
+
+**Add a staff member.** Add the address to `cms/access-staff-emails` → apply → create the CMS row in
+the console with a temporary password (changed at first sign-in). GoGo-BE never writes to Cloudflare.
+
+**Compatibility while `cms/super-admin-sso-only` is `true`.** Each of these floors, once crossed,
+rolls back the decision. Record it as a rollback.
 
 - **GoGo-BE** below the first revision with ADR-0034: the API ignores the variable and re-opens the
-  super admin's password door.
-- **GoGo-Infra** below the R3a merge: `deploy-dev` renders the env from the manifest of the ref it
-  runs on. An older manifest does not render the variable, and the API reads `false`. Dispatch
-  `deploy-dev` only from a ref at or above R3a.
-- **GoGo-CMS** below the first build that reads `methods` (ADR-0032's minimum SSO-capable build):
-  that build has no SSO button. Re-open the door and check that it works first.
-
-**Super admin address.** Its `admin_users.email` and `cms/seed-admin-email` must be addresses the
-Access policy admits. Change the address only while `cms/super-admin-sso-only` is `false`, and
-`cms/password-login-enabled` is `true`. To recover from a wrong address: set
-`cms/super-admin-sso-only` to `false` **and** `cms/password-login-enabled` to `true`, deploy, and
-check that the super admin's password login answers 201. Then correct the address, and restore the
-intended values. Turning off only the first switch does not help while the global door is closed.
+  super admin's password door (if a hash still exists).
+- **GoGo-Infra** below the `cms/super-admin-sso-only` row: `deploy-dev` renders the env from the
+  manifest of the ref it runs on, and an older manifest does not render the variable. Below
+  GoGo-Infra#194, `CMS_SUPER_ADMIN_EMAIL` is not rendered either and GoGo-BE BE-b refuses to start.
+  Dispatch `deploy-dev` only from a ref at or above GoGo-Infra#194.
+- **GoGo-CMS** below the first build with the SSO button: re-open a door and check it works first.
 
 **Interaction with the global switch.** Setting `cms/password-login-enabled` to `false` closes the
-password door for every role again, the super admin included. It re-locks out staff who are not on
-the Access allow list, and that is what was rolled back on 2026-10-06.
+password door for every role. It re-locks out staff, and that is what was rolled back on 2026-10-06.
 
 ## Grafana Cloud (INF-054)
 

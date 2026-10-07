@@ -123,6 +123,129 @@ data "aws_iam_policy_document" "boundary" {
     not_resources = ["arn:aws:ssm:*:${local.account}:parameter/gogo/*"]
   }
 
+  # --- GoGo-Infra#194 / ADR-0010: what the Terraform roles may read ---------
+  #
+  # These live here, not in the roles' own policies, because the apply role can
+  # rewrite any gogo-* policy and attach inline ones (ManageGoGoPolicies,
+  # PutRolePolicy) — a Deny it can edit is not a control. This document it
+  # cannot edit; swapping which boundary a gogo-* role carries, or minting a
+  # gogo-* role no ceiling names, stays within its IAM rights — residual risk,
+  # accepted by the owner 2026-10-06, GoGo-Infra#196. Each statement names its
+  # principals with aws:PrincipalArn, because the boundary caps every GoGo role
+  # and the deploy, monitor and developer roles read backend/* legitimately.
+
+  # Read ceiling. The plan role holds ReadOnlyAccess, whose ssm:Get* covers every
+  # parameter, and every SSM policy here grants kms:Decrypt through SSM — so
+  # without this a pull-request session reads backend/* and the write-capable
+  # ci/<env>/terraform/write/* token. Everything not listed is denied.
+  dynamic "statement" {
+    for_each = var.ssm_read_ceilings
+
+    content {
+      sid    = "SsmReadCeiling${statement.key}"
+      effect = "Deny"
+
+      actions = [
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+        "ssm:GetParametersByPath",
+        "ssm:GetParameterHistory",
+      ]
+
+      not_resources = statement.value.readable_arns
+
+      condition {
+        test     = "ArnEquals"
+        variable = "aws:PrincipalArn"
+        values   = [statement.value.principal_arn]
+      }
+    }
+  }
+
+  # The two Terraform-readable names are readable by those principals only while
+  # tagged, and never decrypted: a SecureString recreated under one of them
+  # returns ciphertext. Parameter Store passes PARAMETER_ARN as the KMS
+  # encryption context on every decrypt.
+  dynamic "statement" {
+    for_each = length(var.infra_readable_arns) == 0 ? [] : [1]
+
+    content {
+      sid    = "InfraReadableNamesNeedTheTag"
+      effect = "Deny"
+
+      actions = [
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+        "ssm:GetParameterHistory",
+      ]
+
+      resources = var.infra_readable_arns
+
+      condition {
+        test     = "StringNotEquals"
+        variable = "aws:ResourceTag/gogo:infra-readable"
+        values   = ["true"]
+      }
+
+      condition {
+        test     = "ArnEquals"
+        variable = "aws:PrincipalArn"
+        values   = [for c in var.ssm_read_ceilings : c.principal_arn]
+      }
+    }
+  }
+
+  dynamic "statement" {
+    for_each = length(var.infra_readable_arns) == 0 ? [] : [1]
+
+    content {
+      sid       = "InfraReadableNamesNeverDecrypted"
+      effect    = "Deny"
+      actions   = ["kms:Decrypt"]
+      resources = ["*"]
+
+      condition {
+        test     = "StringEquals"
+        variable = "kms:EncryptionContext:PARAMETER_ARN"
+        values   = var.infra_readable_arns
+      }
+
+      condition {
+        test     = "ArnEquals"
+        variable = "aws:PrincipalArn"
+        values   = [for c in var.ssm_read_ceilings : c.principal_arn]
+      }
+    }
+  }
+
+  # Tag lock. gogo:infra-readable decides what the Terraform roles may read, so
+  # no role under this boundary may add, remove or create with it — only the
+  # bootstrap identity, which carries no boundary. IgnoreCase because tag keys
+  # match case-insensitively in aws:ResourceTag conditions; PutParameter because
+  # it accepts tags at creation.
+  dynamic "statement" {
+    for_each = length(var.locked_tag_keys) == 0 ? [] : [1]
+
+    content {
+      sid    = "DenyLockedTagChanges"
+      effect = "Deny"
+
+      actions = [
+        "ssm:AddTagsToResource",
+        "ssm:RemoveTagsFromResource",
+        "ssm:PutParameter",
+      ]
+
+      resources = ["*"]
+
+      condition {
+        test     = "ForAnyValue:StringEqualsIgnoreCase"
+        variable = "aws:TagKeys"
+        values   = var.locked_tag_keys
+      }
+    }
+  }
+
   # Tampering with the audit trail.
   statement {
     sid    = "DenyAuditTampering"

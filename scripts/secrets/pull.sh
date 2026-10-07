@@ -15,6 +15,11 @@
 # .env.runtime, and that is the entire point: .env.runtime is the file a
 # developer keeps loaded all day and the shape the deployed env file copies.
 # Shred the seed file when the command that needed it has finished.
+#
+# --seed reads `runtime` and `seed` rows, named, never `all`: `all` also holds
+# rows no process may load — `terraform` (GoGo-Infra#194, read by Terraform
+# only), `observability`, `pipeline` — and a row without an env_var would be
+# written as `-=<value>`.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 # shellcheck source=../lib/place-refresh-budget.sh
@@ -27,7 +32,8 @@ require_env_arg "$ENVIRONMENT"
 shift || true
 
 OUT_FILE=""
-CONSUMER="runtime"
+MODE="runtime"
+CONSUMERS=(runtime)
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --out)
@@ -35,7 +41,8 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --seed)
-      CONSUMER="all"
+      MODE="seed"
+      CONSUMERS=(runtime seed)
       shift
       ;;
     *) die "unknown argument: $1" ;;
@@ -45,7 +52,7 @@ done
 # Defaulted after parsing so --out wins regardless of flag order, and so the
 # two modes cannot land on the same filename by accident.
 if [[ -z "$OUT_FILE" ]]; then
-  [[ "$CONSUMER" == "all" ]] && OUT_FILE=".env.seed" || OUT_FILE=".env.runtime"
+  [[ "$MODE" == "seed" ]] && OUT_FILE=".env.seed" || OUT_FILE=".env.runtime"
 fi
 
 if [[ "$ENVIRONMENT" == "prod" && "${GOGO_ALLOW_PROD_PULL:-}" != "1" ]]; then
@@ -71,7 +78,9 @@ chmod 600 "$tmp_file"
 
 missing=0
 while IFS=$'\t' read -r path env_var _type required _namespace; do
-  [[ -n "$env_var" ]] || continue
+  # "-" is the reader's placeholder for "no env_var" (manifest.py keeps column
+  # positions fixed with it). Rendering it would write `-=<value>`.
+  [[ -n "$env_var" && "$env_var" != "-" ]] || continue
 
   if ! value="$(aws ssm get-parameter --name "${prefix}/${path}" --with-decryption --query 'Parameter.Value' --output text 2>/dev/null)"; then
     if [[ ",${required}," == *",${ENVIRONMENT},"* ]]; then
@@ -88,9 +97,11 @@ while IFS=$'\t' read -r path env_var _type required _namespace; do
 # process env, and it lives under a prefix this prefix cannot even reach.
 #
 # The consumer is stated for the same reason and defaults to `runtime`: without
-# --seed this file must not carry the CMS bootstrap password, because the API
-# started from it would then hold a super_admin credential it never uses.
-done < <(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace backend --consumer "$CONSUMER")
+# --seed this file must not carry a seed-only credential, because the API
+# started from it would then hold a credential it never uses.
+done < <(for consumer in "${CONSUMERS[@]}"; do
+  python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace backend --consumer "$consumer"
+done)
 
 if [[ "$missing" -gt 0 ]]; then
   die "${missing} required parameter(s) missing. Run ./scripts/secrets/validate.sh ${ENVIRONMENT} for the full diff."
@@ -100,7 +111,7 @@ install -m 600 "$tmp_file" "$OUT_FILE"
 variable_count=$(env_variable_count "$OUT_FILE")
 echo "wrote ${OUT_FILE} (mode 0600, ${variable_count} variables)"
 
-if [[ "$CONSUMER" == "all" ]]; then
+if [[ "$MODE" == "seed" ]]; then
   echo "  Includes seed-only parameters. Shred it when the provisioning command is done:"
   echo "    shred -u ${OUT_FILE} 2>/dev/null || rm -P ${OUT_FILE}"
 fi

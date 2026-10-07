@@ -145,6 +145,86 @@ for namespace in $(manifest_namespaces "$ENVIRONMENT"); do
   fi
 done
 
+# The gogo:infra-readable tag (GoGo-Infra#194, ADR-0010).
+#
+# The tag is what exempts a parameter from the Terraform roles' read Deny, so it
+# is checked both ways: every row the manifest marks `infra_readable: true` must
+# carry it (otherwise the next plan fails AccessDenied), and nothing else may —
+# above all no SecureString. This is the detective half; the preventive half is
+# IAM (exact-ARN Allow, a kms:Decrypt Deny on those two names, and a Deny on
+# tagging that key for every GoGo role).
+#
+# Reading tags needs ssm:ListTagsForResource and ssm:DescribeParameters, which
+# the deploy role does not hold and should not get. An identity that cannot read
+# them gets TAGS SKIPPED — tolerated in the default mode deploy-dev uses, a
+# failure under --strict, exactly like a namespace nobody could list. Values are
+# never read.
+INFRA_TAG_KEY="gogo:infra-readable"
+tag_missing=""
+tag_misplaced=""
+tag_skipped=""
+
+infra_rows="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace all --consumer all --field infra_readable \
+  | awk -F'\t' '$7 == "true" { print $5 "\t" $1 }')"
+
+while IFS=$'\t' read -r namespace path; do
+  [[ -n "$path" ]] || continue
+  # Absent rows are reported MISSING above; an unread namespace SKIPPED.
+  grep -qxF "${namespace}:${path}" <<< "$present_paths" || continue
+  full="$(ssm_prefix "$ENVIRONMENT" "$namespace")/${path}"
+  if ! tag_value="$(aws ssm list-tags-for-resource --resource-type Parameter --resource-id "$full" \
+      --query "TagList[?Key=='${INFRA_TAG_KEY}'].Value" --output text 2>&1)"; then
+    tag_skipped="cannot read tags of ${full} — $(echo "$tag_value" | tail -1)"
+    break
+  fi
+  [[ "$tag_value" == "true" ]] || tag_missing+="  - ${namespace}/${path}"$'\n'
+done <<< "$infra_rows"
+
+if [[ -z "$tag_skipped" ]]; then
+  for tree in "$(ssm_prefix "$ENVIRONMENT" backend | sed 's#/backend$##')/" "$(ssm_prefix "$ENVIRONMENT" ci)/"; do
+    if ! tagged="$(aws ssm describe-parameters \
+        --parameter-filters "Key=tag:${INFRA_TAG_KEY},Values=true" "Key=Name,Option=BeginsWith,Values=${tree}" \
+        --query 'Parameters[].[Name,Type]' --output text 2>&1)"; then
+      tag_skipped="cannot search tags under ${tree} — $(echo "$tagged" | tail -1)"
+      break
+    fi
+    while IFS=$'\t' read -r name type; do
+      [[ -n "$name" && "$name" != "None" ]] || continue
+      declared=no
+      while IFS=$'\t' read -r namespace path; do
+        [[ -n "$path" ]] || continue
+        [[ "$name" == "$(ssm_prefix "$ENVIRONMENT" "$namespace")/${path}" ]] && declared=yes
+      done <<< "$infra_rows"
+      if [[ "$type" != "String" ]]; then
+        tag_misplaced+="  - ${name} (${type}): a secret carrying the tag is readable by the Terraform roles' identity policy"$'\n'
+      elif [[ "$declared" == "no" ]]; then
+        tag_misplaced+="  - ${name} (${type}): not declared infra_readable in the manifest"$'\n'
+      fi
+    done <<< "$tagged"
+  done
+fi
+
+if [[ -n "$tag_missing" ]]; then
+  echo "INFRA-READABLE TAG MISSING (declared infra_readable, stored without ${INFRA_TAG_KEY}=true):"
+  printf '%s' "$tag_missing"
+  echo "  Terraform's read of these is denied until the tag is set. Re-write with:"
+  echo "      ./scripts/secrets/put.sh ${ENVIRONMENT} <path> --infra-readable"
+  status=1
+fi
+
+if [[ -n "$tag_misplaced" ]]; then
+  echo "INFRA-READABLE TAG ON A SECRET OR UNDECLARED PARAMETER:"
+  printf '%s' "$tag_misplaced"
+  echo "  Remove the tag from the bootstrap session:"
+  echo "      aws ssm remove-tags-from-resource --resource-type Parameter --resource-id <name> --tag-keys ${INFRA_TAG_KEY}"
+  echo "  If a SecureString carried it, treat the value as exposed to the Terraform roles and rotate it."
+  status=1
+fi
+
+if [[ -n "$tag_skipped" ]]; then
+  skipped+=("tags: ${tag_skipped}")
+fi
+
 # Capability prerequisites.
 #
 # A capability is only checked where the environment declares it — `enabled` for
@@ -195,7 +275,7 @@ if [[ "$STRICT" == "yes" ]]; then
 fi
 
 if [[ "${#skipped[@]}" -gt 0 ]]; then
-  echo "SKIPPED (namespace not readable by this identity):"
+  echo "SKIPPED (namespace or tags not readable by this identity):"
   printf '  - %s\n' "${skipped[@]}"
   if [[ "$STRICT" == "yes" ]]; then
     echo "  In --strict mode this is a failure. A readiness check that passes because it could"

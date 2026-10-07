@@ -31,6 +31,9 @@ trap 'rm -rf "$WORK"' EXIT
 #   $WORK/deny            newline-separated prefixes that answer AccessDenied
 #   $WORK/absent          newline-separated parameter paths to omit from listings
 #   $WORK/type_override   "path<TAB>Type" lines
+#   $WORK/untagged        full names of infra_readable rows stored WITHOUT the tag
+#   $WORK/extra_tagged    "name<TAB>Type" of other parameters that carry the tag
+#   $WORK/tag_deny        non-empty → tag reads answer AccessDenied
 make_stub() {
   cat > "${WORK}/aws" <<'STUB'
 #!/usr/bin/env bash
@@ -62,6 +65,42 @@ if [[ "$1" == "ssm" && "$2" == "get-parameters-by-path" ]]; then
       done | paste -sd'\t' -
   exit 0
 fi
+# Tags (GoGo-Infra#194). By default every present infra_readable row is tagged
+# and nothing else is — the correctly provisioned state.
+tagged_set() {
+  local env="$1" tree="$2"
+  [[ "$tree" == /gogo/ci/* ]] || python3 "${MANIFEST_READER}" "$env" --namespace all --consumer all --field infra_readable \
+    | awk -F'\t' -v e="$env" '$7 == "true" { print "/gogo/" e "/" $5 "/" $1 "\t" $3 }' \
+    | while IFS=$'\t' read -r n t; do
+        grep -qxF "${n#/gogo/${env}/backend/}" "${WORK}/absent" && continue
+        grep -qxF "$n" "${WORK}/untagged" && continue
+        printf '%s\t%s\n' "$n" "$t"
+      done
+  awk -F'\t' -v tr="$tree" 'index($1, tr) == 1' "${WORK}/extra_tagged"
+}
+if [[ "$1" == "ssm" && ( "$2" == "list-tags-for-resource" || "$2" == "describe-parameters" ) ]]; then
+  if [[ -s "${WORK}/tag_deny" ]]; then
+    echo "An error occurred (AccessDeniedException) when calling the ListTagsForResource operation: not authorized" >&2
+    exit 254
+  fi
+fi
+if [[ "$1" == "ssm" && "$2" == "list-tags-for-resource" ]]; then
+  id=""
+  for ((i=1;i<=$#;i++)); do [[ "${!i}" == "--resource-id" ]] && { j=$((i+1)); id="${!j}"; }; done
+  env="$(cut -d/ -f3 <<< "$id")"
+  if tagged_set "$env" "/gogo/${env}/" | cut -f1 | grep -qxF "$id"; then echo "true"; else echo ""; fi
+  exit 0
+fi
+if [[ "$1" == "ssm" && "$2" == "describe-parameters" ]]; then
+  tree=""
+  for arg in "$@"; do [[ "$arg" == Key=Name,Option=BeginsWith,Values=* ]] && tree="${arg#Key=Name,Option=BeginsWith,Values=}"; done
+  case "$tree" in
+    /gogo/ci/*) env="$(cut -d/ -f4 <<< "$tree")" ;;
+    *)          env="$(cut -d/ -f3 <<< "$tree")" ;;
+  esac
+  tagged_set "$env" "$tree"
+  exit 0
+fi
 if [[ "$1" == "ssm" && "$2" == "get-parameter" ]]; then
   name=""
   for ((i=1;i<=$#;i++)); do [[ "${!i}" == "--name" ]] && { j=$((i+1)); name="${!j}"; }; done
@@ -81,6 +120,7 @@ exit 0
 STUB
   chmod +x "${WORK}/aws"
   : > "${WORK}/deny"; : > "${WORK}/absent"; : > "${WORK}/type_override"
+  : > "${WORK}/untagged"; : > "${WORK}/extra_tagged"; : > "${WORK}/tag_deny"
   printf 'staging\nprod\n' > "${WORK}/empty_envs"
 }
 
@@ -222,6 +262,60 @@ if [[ "$out" == *"METADATA READY"* && "$out" == *"metadata only"* \
 else
   bad "readiness must not read as a permission guarantee" "$out"
 fi
+
+# --- GoGo-Infra#194: the gogo:infra-readable tag ----------------------------
+out="$(run dev --strict)"; rc=$?
+if [[ $rc -eq 0 && "$out" != *"INFRA-READABLE"* ]]; then
+  ok "both infra_readable rows tagged and nothing else: no tag finding"
+else bad "a correctly tagged environment must pass" "rc=$rc $out"; fi
+
+echo "/gogo/dev/backend/cms/access-staff-emails" > "${WORK}/untagged"
+out="$(run dev)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"INFRA-READABLE TAG MISSING"* && "$out" == *"backend/cms/access-staff-emails"* ]]; then
+  ok "an infra_readable row stored without the tag is a finding"
+else bad "a missing infra-readable tag must fail" "rc=$rc $out"; fi
+: > "${WORK}/untagged"
+
+printf '/gogo/dev/backend/database/url\tSecureString\n' > "${WORK}/extra_tagged"
+out="$(run dev)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"TAG ON A SECRET"* && "$out" == *"/gogo/dev/backend/database/url (SecureString)"* && "$out" == *"rotate"* ]]; then
+  ok "a tagged SecureString is a finding that says rotate"
+else bad "a tagged SecureString must fail" "rc=$rc $out"; fi
+
+printf '/gogo/dev/backend/auth/cookie-secure\tString\n' > "${WORK}/extra_tagged"
+out="$(run dev)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"auth/cookie-secure (String): not declared infra_readable"* ]]; then
+  ok "a tagged String the manifest does not declare infra_readable is a finding"
+else bad "an undeclared tagged String must fail" "rc=$rc $out"; fi
+
+printf '/gogo/ci/dev/terraform/read/cloudflare-token\tSecureString\n' > "${WORK}/extra_tagged"
+out="$(run dev)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"/gogo/ci/dev/terraform/read/cloudflare-token (SecureString)"* ]]; then
+  ok "a tagged parameter in the ci tree is a finding too"
+else bad "a tagged ci credential must fail" "rc=$rc $out"; fi
+: > "${WORK}/extra_tagged"
+
+# An identity that cannot read tags (the deploy role): tolerated by default,
+# a failure under --strict — never a silent pass.
+echo deny > "${WORK}/tag_deny"
+out="$(run dev)"; rc=$?
+if [[ $rc -eq 0 && "$out" == *"SKIPPED"* && "$out" == *"tags: cannot read tags"* && "$out" == *"OK: dev"* ]]; then
+  ok "tags unreadable: default mode reports SKIPPED and still passes (deploy role)"
+else bad "default mode must tolerate an identity that cannot read tags" "rc=$rc $out"; fi
+out="$(run dev --strict)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"tags: cannot read tags"* && "$out" != *"READY:"* ]]; then
+  ok "tags unreadable: --strict fails"
+else bad "--strict must fail when tags cannot be read" "rc=$rc $out"; fi
+: > "${WORK}/tag_deny"
+
+# R1a: the two rows declared but not provisioned are MISSING — the expected
+# state right after GoGo-Infra#194 is applied, before the owner writes them.
+printf 'cms/super-admin-email\ncms/access-staff-emails\n' > "${WORK}/absent"
+out="$(run dev)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"MISSING"* && "$out" == *"cms/super-admin-email"* && "$out" == *"cms/access-staff-emails"* && "$out" != *"INFRA-READABLE"* ]]; then
+  ok "R1a: both rows absent are MISSING, with no tag finding for rows that do not exist"
+else bad "R1a state must read MISSING for both rows" "rc=$rc $out"; fi
+: > "${WORK}/absent"
 
 printf '\n'
 if [[ "$failures" -eq 0 ]]; then echo "validate.sh: all checks passed"; else echo "validate.sh: ${failures} failure(s)"; fi

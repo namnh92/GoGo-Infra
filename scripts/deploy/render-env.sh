@@ -40,7 +40,10 @@ aws_err="$(mktemp)"
 trap 'rm -f "$aws_err"' EXIT
 
 while IFS=$'\t' read -r path env_var _type required _namespace; do
-  [[ -n "$env_var" ]] || continue
+  # "-" is the reader's placeholder for "no env_var". A row like that is not
+  # for this file (GoGo-Infra#194: the Terraform-only staff list), and rendering
+  # it would write `-=<value>` into the API's environment.
+  [[ -n "$env_var" && "$env_var" != "-" ]] || continue
 
   # GoGo-Infra#187 (GoGo-BE#679, F-07). Only ParameterNotFound means absent. An
   # optional value that exists but could not be read — throttled, denied, the

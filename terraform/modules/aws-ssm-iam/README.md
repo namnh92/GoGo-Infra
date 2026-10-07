@@ -42,3 +42,16 @@ module "plan_policy" {
   tags            = module.tags.tags
 }
 ```
+
+## Tag lock
+
+Every policy this module emits also denies `ssm:AddTagsToResource`, `ssm:RemoveTagsFromResource` and
+`ssm:PutParameter` on `/gogo/*` when the request names a key in `locked_tag_keys` (default
+`gogo:infra-readable`). That tag exempts a parameter from the apply role's read Deny on
+`<env>/backend/*` (GoGo-Infra#194, ADR-0010), so whoever can set it decides what Terraform may read.
+Every GoGo role attaches a policy from here; the bootstrap identity attaches none and is the only one
+that can tag. `scripts/ci/infra-readable-iam.test.sh` pins the statement.
+
+`kms:Decrypt` on the SSM key stays in every policy (each role decrypts its own SecureStrings). The two
+Terraform-readable names are excluded from it by a separate `kms:EncryptionContext:PARAMETER_ARN` Deny
+in each environment, not here.
