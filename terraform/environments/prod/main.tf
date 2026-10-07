@@ -55,6 +55,11 @@ locals {
   # true` in config/secrets.manifest.yml. Named exactly — a wildcard here would
   # hand the plan role whatever is added under backend/ next.
   # scripts/lib/manifest.test.sh pins the manifest side of this list.
+  # Every role this environment declares, by the key it is named after
+  # (<prefix>-<key>). Static on purpose: the boundary cannot read the role map
+  # without a dependency cycle (the roles carry the boundary).
+  boundary_role_keys = ["plan", "apply", "deploy", "mobile-release"]
+
   ssm_arn_prefix = "arn:aws:ssm:${data.aws_region.current.name}:${local.account}:parameter/gogo"
   infra_readable_parameter_arns = [
     for path in ["cms/super-admin-email", "cms/access-staff-emails"] :
@@ -63,9 +68,13 @@ locals {
 }
 
 # The OIDC provider is account-wide and is created once, by the dev
-# configuration. Every other environment looks it up.
+# configuration. Every other environment looks it up — by ARN, not by URL:
+# a `url` lookup is iam:ListOpenIDConnectProviders, which has no resource type
+# and is denied under the boundary (DenyIamOutsideEnvironment, GoGo-Infra#196);
+# by `arn` it is GetOpenIDConnectProvider on the one provider the boundary
+# leaves readable. scripts/ci/infra-readable-iam.test.sh pins this.
 data "aws_iam_openid_connect_provider" "github" {
-  url = "https://token.actions.githubusercontent.com"
+  arn = local.oidc_provider
 }
 
 
@@ -100,6 +109,16 @@ module "boundary" {
     }
   }
   infra_readable_arns = local.infra_readable_parameter_arns
+
+  # GoGo-Infra#196. The apply role administers gogo-* IAM; these keep it inside
+  # the boundary: every created role carries it, only the roles below read SSM,
+  # their trust cannot be rewritten or the role deleted from CI, and IAM writes
+  # stay within this environment's prefix. scripts/ci/infra-readable-iam.test.sh
+  # checks this list against the roles module.github_oidc (and the developer
+  # role) actually declare.
+  iam_scope_prefix = module.tags.name_prefix
+  ssm_env          = var.environment
+  known_role_names = [for k in local.boundary_role_keys : "${module.tags.name_prefix}-${k}"]
 }
 
 # --- Scoped SSM policies -----------------------------------------------------
@@ -169,11 +188,10 @@ module "policy_mobile_release" {
 #   2. an iam:PermissionsBoundary condition on role creation (below)
 #   3. the boundary itself, capping whatever a created role ends up holding
 #
-# Against the apply role's own IAM rights they do not hold: it can rewrite its
-# own gogo-* policies, drop (1) and (2), and create or re-bound a gogo-* role
-# the boundary does not cap. Residual, accepted by the owner 2026-10-06
-# (GoGo-Infra#196); see modules/aws-permissions-boundary/README.md, "What it
-# does not stop".
+# (1) and (2) live in this policy, which the apply role can rewrite. (3) holds
+# because the boundary also requires itself on every created role, freezes the
+# declared roles' trust and keeps SSM reads to declared roles (GoGo-Infra#196;
+# modules/aws-permissions-boundary/README.md, "Keeping the apply role inside").
 data "aws_iam_policy_document" "infra_apply" {
   # Read and enumerate. These actions do not support resource-level scoping.
   statement {

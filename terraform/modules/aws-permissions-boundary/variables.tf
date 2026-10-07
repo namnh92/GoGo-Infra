@@ -68,3 +68,49 @@ variable "locked_tag_keys" {
   type        = list(string)
   default     = ["gogo:infra-readable"]
 }
+
+variable "iam_scope_prefix" {
+  description = <<-DESC
+    Prefix of the IAM roles and policies a capped role may touch at all
+    (GoGo-Infra#196), e.g. gogo-dev: every other IAM action, read or write, is
+    denied except reads of the GitHub OIDC provider and of AWS-managed
+    policies. Empty means resource_prefix (the whole project). Set per
+    environment so one environment's apply role cannot touch another's roles or
+    boundary. Separate from resource_prefix because that one also names the
+    policy description, and changing it would replace this policy.
+  DESC
+  type        = string
+  default     = ""
+}
+
+variable "known_role_names" {
+  description = <<-DESC
+    Every role this environment declares (GoGo-Infra#196). Only these may read
+    SSM parameters, their trust policies cannot be changed and they cannot be
+    deleted by a capped role, and any role created or re-bounded must carry
+    this boundary. Empty disables the three statements.
+  DESC
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for n in var.known_role_names : can(regex("^[A-Za-z0-9+=,.@_-]+$", n))])
+    error_message = "known_role_names are plain role names, no ARNs and no wildcards."
+  }
+}
+
+variable "ssm_env" {
+  description = <<-DESC
+    Environment whose parameter trees (/gogo/<env>/*, /gogo/ci/<env>/*) roles
+    under this boundary may read (GoGo-Infra#196). Also turns on the Deny of
+    every parameter write — only the bootstrap identity writes SSM. Empty
+    disables both.
+  DESC
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.ssm_env == "" || can(regex("^[a-z0-9-]+$", var.ssm_env))
+    error_message = "ssm_env is an environment name such as dev, no wildcards."
+  }
+}

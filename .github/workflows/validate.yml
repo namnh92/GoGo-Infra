@@ -52,6 +52,17 @@ jobs:
             echo "::endgroup::"
           done
 
+      # GoGo-Infra#196 (PR #197, F-01). The boundary denies iam:* outside the
+      # environment's own roles and policies, and everything but two reads on
+      # the OIDC provider — statements that list what is reachable, not what is
+      # denied. This renders them offline and checks them against the AWS
+      # service reference for IAM, every action it knows, so a rewrite back
+      # into a verb list fails here and not in an incident. The catalogue is
+      # downloaded (public, no credentials); a download failure fails the step
+      # rather than passing it.
+      - name: the boundary denies every IAM action the catalogue knows, outside the environment
+        run: ./scripts/ci/boundary-iam-catalogue.test.sh
+
       - uses: terraform-linters/setup-tflint@v4
         with:
           tflint_version: latest
