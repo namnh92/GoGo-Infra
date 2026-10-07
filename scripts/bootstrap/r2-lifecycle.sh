@@ -33,6 +33,12 @@ cat >"$config" <<'JSON'
       "Status": "Enabled",
       "Filter": { "Prefix": "imports/tmp/" },
       "Expiration": { "Days": 7 }
+    },
+    {
+      "ID": "expire-privacy-exports",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "privacy-exports/" },
+      "Expiration": { "Days": 2 }
     }
   ]
 }
