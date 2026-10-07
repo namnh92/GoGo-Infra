@@ -67,6 +67,12 @@ fi
 
 echo "==> Rolling back to ${TARGET_REF}"
 remote "cd '${DEPLOY_PATH}' && git checkout --detach '${TARGET_REF}'"
+# GoGo-BE#687 (review F-06): the API records the commit it was started from in
+# its boot-time audit rows, so the value handed to `up -d` is the commit the
+# checkout resolved to — never the ref, which may be a branch or a tag.
+target="$(remote "cd '${DEPLOY_PATH}' && git rev-parse HEAD")"
+target="$(printf '%s' "$target" | tr -d '[:space:]')"
+echo "    ${TARGET_REF} -> ${target}"
 
 # The environment file is left alone. It is rendered from SSM and is not
 # versioned with the code; rolling it back would silently undo a secret rotation.
@@ -87,9 +93,9 @@ remote "cd '${DEPLOY_PATH}' && ${COMPOSE} build api worker"
 # of the rollback. Changing that is a production decision, not this fix.
 if [[ "$COMPOSE_EDGE" == *edge-tunnel* ]]; then
   remote "cd '${DEPLOY_PATH}' && ${COMPOSE} up -d --no-recreate ${ACCESS_SERVICES}"
-  remote "cd '${DEPLOY_PATH}' && ${COMPOSE} up -d ${DEPLOY_SERVICES}"
+  remote "cd '${DEPLOY_PATH}' && GOGO_REVISION='${target}' ${COMPOSE} up -d ${DEPLOY_SERVICES}"
 else
-  remote "cd '${DEPLOY_PATH}' && ${COMPOSE} up -d"
+  remote "cd '${DEPLOY_PATH}' && GOGO_REVISION='${target}' ${COMPOSE} up -d"
 fi
 
 # A bind-mounted config.alloy that changed is not a changed service definition,
