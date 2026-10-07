@@ -24,6 +24,35 @@ fail() {
 
 echo "deploy-vps.sh (INF-071)"
 
+# --- the deploy commit reaches the migrate container (GoGo-BE#687) -----------
+
+if grep -qF "GOGO_REVISION='\${target}' \${COMPOSE} run --rm migrate" "$DEPLOY"; then
+  pass "migrate runs with GOGO_REVISION set to the resolved commit"
+else
+  fail "migrate runs with GOGO_REVISION set to the resolved commit"
+fi
+
+# F-06 (review of GoGo-BE PR #690): the API audits its boot-time erase with the
+# same revision, so every `up -d` that starts api must export it — the target on
+# the way up, the previous revision on the deploy's own rollback path.
+if grep -qF "GOGO_REVISION='\${target}' \${COMPOSE} up -d \${DEPLOY_SERVICES}" "$DEPLOY"; then
+  pass "F-06: the stack is started with GOGO_REVISION set to the resolved commit"
+else
+  fail "F-06: the stack is started with GOGO_REVISION set to the resolved commit"
+fi
+
+if grep -qF "GOGO_REVISION='\${previous}' \${COMPOSE} up -d \${DEPLOY_SERVICES}" "$DEPLOY"; then
+  pass "F-06: the rollback path starts the stack with GOGO_REVISION set to the previous commit"
+else
+  fail "F-06: the rollback path starts the stack with GOGO_REVISION set to the previous commit"
+fi
+
+if grep -E '\$\{COMPOSE\} up -d \$\{DEPLOY_SERVICES\}' "$DEPLOY" | grep -qvF "GOGO_REVISION="; then
+  fail "F-06: no 'up -d \${DEPLOY_SERVICES}' starts api without GOGO_REVISION"
+else
+  pass "F-06: no 'up -d \${DEPLOY_SERVICES}' starts api without GOGO_REVISION"
+fi
+
 # --- the access path is never recreated ---------------------------------------
 
 if grep -q 'up -d --no-recreate ${ACCESS_SERVICES}' "$DEPLOY"; then
@@ -263,6 +292,11 @@ if [[ -n "${DROP_ON:-}" && "$cmd" == *"${DROP_ON}"* ]]; then
   echo "client_loop: send disconnect: Broken pipe" >&2
   exit 255
 fi
+# SSH_BANNER: what a chatty login profile prints before the output of a
+# command matching SSH_BANNER_ON (scoped, so only the read under test sees it).
+if [[ -n "${SSH_BANNER:-}" && "$cmd" == *"${SSH_BANNER_ON:-}"* ]]; then
+  printf '%s\n' "$SSH_BANNER"
+fi
 # remote() sends `bash -lc <quoted>`; run it without the login profile.
 eval "bash -c ${cmd#bash -lc }"
 FAKE
@@ -359,7 +393,9 @@ cp "${HOST_SB}/bin/ssh" "${HOST_SB}/bin/scp" "${AL_SB}/bin/"
 # plain `docker ps -aq` returns.
 cat >"${AL_SB}/bin/docker" <<'FAKE'
 #!/usr/bin/env bash
-echo "$*" >>"${DOCKER_LOG}"
+# Each line is prefixed with the GOGO_REVISION the call inherited (F-06), so a
+# compose call that starts api can be matched to the commit it was given.
+echo "rev=${GOGO_REVISION:-} $*" >>"${DOCKER_LOG}"
 if [[ "$1" == ps ]]; then echo "${ALLOY_CONTAINER:-}"; exit 0; fi
 if [[ " $* " == *" ps "* ]]; then
   printf '%s running\n' cloudflared api
@@ -402,6 +438,23 @@ else
   fail "#408: a deploy that changes docker/alloy/config.alloy recreates Alloy (compose calls: $(tr '\n' '|' <"${AL_SB}/docker.log"))"
 fi
 
+# --- GoGo-BE#687 F-06: the api is started with the commit it will audit ------
+#
+# Same completed B2 deploy. The migrate run and the `up -d api worker` that
+# starts the new API must both inherit GOGO_REVISION=B; nothing that starts api
+# may run with it empty.
+al_rev_up() { grep -qE "^rev=$1 .* up -d api worker$" "${AL_SB}/docker.log"; }
+if grep -qE "^rev=${AL_B} .* run --rm migrate$" "${AL_SB}/docker.log" && al_rev_up "$AL_B"; then
+  pass "#687 F-06: migrate and the api start both inherit GOGO_REVISION=<deployed commit>"
+else
+  fail "#687 F-06: migrate and the api start both inherit GOGO_REVISION=<deployed commit> (compose calls: $(tr '\n' '|' <"${AL_SB}/docker.log"))"
+fi
+if grep -qE '^rev= .* up -d api worker$' "${AL_SB}/docker.log"; then
+  fail "#687 F-06: no api start runs with GOGO_REVISION empty"
+else
+  pass "#687 F-06: no api start runs with GOGO_REVISION empty"
+fi
+
 al_run "$DEPLOY" "$AL_C" "$OBS"
 if al_upped && ! al_forced; then
   pass "#408: a deploy that leaves config.alloy alone starts Alloy without recreating it"
@@ -428,6 +481,29 @@ if grep -q -- '--remove-orphans' "${AL_SB}/docker.log"; then
   fail "rollback.sh does not pass --remove-orphans (it deletes Alloy when the overlay is not exported)"
 else
   pass "rollback.sh does not pass --remove-orphans (it deletes Alloy when the overlay is not exported)"
+fi
+# F-06: a hand-run rollback starts the API it rolled back to with that commit —
+# the resolved one, not the ref `.previous-revision` or the operator named.
+if al_rev_up "$AL_A"; then
+  pass "#687 F-06: rollback.sh starts api with GOGO_REVISION set to the rolled-back commit"
+else
+  fail "#687 F-06: rollback.sh starts api with GOGO_REVISION set to the rolled-back commit (compose calls: $(tr '\n' '|' <"${AL_SB}/docker.log"))"
+fi
+# Infra#201 F-02: a symbolic ref (here a tag) is resolved to its commit, and a
+# login banner ahead of rev-parse's output does not leak into the value (F-01).
+git_q -C "${AL_SB}/host" tag -f rollback-target "$AL_A"
+printf '%s' rollback-target >"${AL_SB}/host/.previous-revision"
+SSH_BANNER="Welcome to the deploy host" SSH_BANNER_ON="rev-parse" al_run "$ROLLBACK" "" "$OBS"
+if al_rev_up "$AL_A" && ! grep -q 'Welcome' "${AL_SB}/docker.log"; then
+  pass "#201 F-01/F-02: a tag rolls back with GOGO_REVISION=<its commit>, banner ignored"
+else
+  fail "#201 F-01/F-02: a tag rolls back with GOGO_REVISION=<its commit>, banner ignored (compose calls: $(tr '\n' '|' <"${AL_SB}/docker.log"))"
+fi
+printf '%s' "$AL_A" >"${AL_SB}/host/.previous-revision"
+if [[ "$(grep -cF "GOGO_REVISION='\${target}' \${COMPOSE} up -d" "$ROLLBACK")" -eq 2 ]]; then
+  pass "#687 F-06: both of rollback.sh's 'up -d' calls export GOGO_REVISION"
+else
+  fail "#687 F-06: both of rollback.sh's 'up -d' calls export GOGO_REVISION"
 fi
 
 # --- #408 F-01: a hand-run rollback derives the overlay like deploy-dev -------
@@ -480,6 +556,11 @@ if grep -qE ' up -d$' "${AL_SB}/docker.log" && ! grep -q -- '--no-recreate' "${A
 else
   fail "#408 F-02: Caddy-edge (production) rollback keeps its unscoped 'up -d' unchanged ($(tr '\n' '|' <"${AL_SB}/docker.log"))"
 fi
+if grep -qE "^rev=${AL_A} .* up -d$" "${AL_SB}/docker.log"; then
+  pass "#687 F-06: the Caddy-edge rollback's unscoped 'up -d' carries the rolled-back commit too"
+else
+  fail "#687 F-06: the Caddy-edge rollback's unscoped 'up -d' carries the rolled-back commit too ($(tr '\n' '|' <"${AL_SB}/docker.log"))"
+fi
 
 # --- #408 F-04: an Alloy failure never fails the deploy -----------------------
 
@@ -511,6 +592,13 @@ if [[ "$code" -ne 0 && "$(cat "${AL_SB}/host/.deployed-revision")" == "$AL_A" ]]
   pass "#408 F-04: the deploy's own rollback branch recreates Alloy on A's configuration"
 else
   fail "#408 F-04: the deploy's own rollback branch recreates Alloy on A's configuration (exit ${code}; $(tr '\n' '|' <"${AL_SB}/out"))"
+fi
+# F-06, same run: the failed attempt started api as B, the rollback restarts it
+# as A — each `up` names the commit it actually starts.
+if al_rev_up "$AL_B" && al_rev_up "$AL_A"; then
+  pass "#687 F-06: the deploy's own rollback branch restarts api with GOGO_REVISION set to the previous commit"
+else
+  fail "#687 F-06: the deploy's own rollback branch restarts api with GOGO_REVISION set to the previous commit (compose calls: $(tr '\n' '|' <"${AL_SB}/docker.log"))"
 fi
 
 echo

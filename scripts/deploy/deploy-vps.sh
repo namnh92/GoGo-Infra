@@ -178,7 +178,15 @@ remote "cd '${DEPLOY_PATH}' && ${COMPOSE} run --rm --no-deps api pnpm config:che
 echo "==> Running migrations"
 # Before the new containers take traffic, and expand-only, so the previous
 # revision still runs against this schema if the health check fails.
-remote "cd '${DEPLOY_PATH}' && ${COMPOSE} run --rm migrate"
+#
+# GOGO_REVISION (GoGo-BE#687): the migrate container also runs the super admin
+# sync, whose audit rows carry the commit being deployed. The compose file
+# passes it through (`GOGO_REVISION: ${GOGO_REVISION:-}`); an older GoGo-BE
+# ignores it. The API re-runs the erase gate at boot and audits it the same
+# way (review F-06), so every `up -d` below that starts api exports it too —
+# with the commit that `up` actually starts, which on the rollback path is the
+# previous one.
+remote "cd '${DEPLOY_PATH}' && GOGO_REVISION='${target}' ${COMPOSE} run --rm migrate"
 
 echo "==> Ensuring the access tunnel is up (never recreated)"
 # --no-recreate: present-and-running is left exactly alone. This is the command
@@ -189,7 +197,7 @@ echo "==> Starting the stack"
 # Named services, and no --remove-orphans: the flag would delete anything not
 # in this compose set, which is precisely how a separately-managed access
 # container would disappear the first time one exists.
-remote "cd '${DEPLOY_PATH}' && ${COMPOSE} up -d ${DEPLOY_SERVICES}"
+remote "cd '${DEPLOY_PATH}' && GOGO_REVISION='${target}' ${COMPOSE} up -d ${DEPLOY_SERVICES}"
 
 # INF-071 — verify, then decide. The incident left four containers `Created`
 # and nothing noticed, because the step that would have noticed was skipped
@@ -214,7 +222,9 @@ if [[ -n "$not_running" ]]; then
     echo "==> Rolling back to ${previous}"
     remote "cd '${DEPLOY_PATH}' && git checkout --detach '${previous}'"
     remote "cd '${DEPLOY_PATH}' && ${COMPOSE} build api worker migrate"
-    remote "cd '${DEPLOY_PATH}' && ${COMPOSE} up -d ${DEPLOY_SERVICES}"
+    # The revision this `up` starts is the previous one, so that is what its
+    # boot-time audit rows must say (GoGo-BE#687 F-06).
+    remote "cd '${DEPLOY_PATH}' && GOGO_REVISION='${previous}' ${COMPOSE} up -d ${DEPLOY_SERVICES}"
     still="$(verify_running)"
     if [[ -n "$still" ]]; then
       echo "ROLLBACK DID NOT RESTORE SERVICE:${still}" >&2
