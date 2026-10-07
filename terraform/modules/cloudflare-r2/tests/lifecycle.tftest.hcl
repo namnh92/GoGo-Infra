@@ -1,4 +1,4 @@
-# GoGo-Infra#186 / GoGo-BE#256 (ADR-0031). The assets bucket's default lifecycle
+# GoGo-Infra#186 / GoGo-BE#256 (ADR-0033). The assets bucket's default lifecycle
 # must expire privacy-exports/ after two days: the backstop for an encrypted
 # export artifact the worker sweep missed. Offline: the cloudflare provider is
 # mocked, and the rules are computed from configuration alone.
