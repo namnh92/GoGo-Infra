@@ -118,15 +118,11 @@ cors_allowed_origins = [
 # that across repositories, and a mismatch binds the hostname to a script nobody
 # deploys — a 404 that looks like DNS.
 #
-# Both addresses are on the allow list because the Cloudflare account signs in
-# through GitHub OAuth and either may be the primary address receiving the
-# one-time PIN. Locking to the wrong one locks out the only operator.
+# The Access allow list is not here: it comes from SSM cms/super-admin-email and
+# cms/access-staff-emails (GoGo-BE#687, GoGo-Infra#199). Change it with
+# `put.sh dev <path> --infra-readable`, then dispatch terraform-apply-dev.
 cms_host        = "cms-dev.gogo.id.vn"
 cms_script_name = "gogo-cms-dev"
-cms_access_emails = [
-  "namnhse02061@gmail.com",
-  "namnh.code4fun@gmail.com",
-]
 
 # api-dev is served through the tunnel, so it has no A record: the module
 # creates a CNAME to <tunnel-id>.cfargotunnel.com. Nothing here names the

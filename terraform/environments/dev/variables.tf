@@ -182,10 +182,10 @@ variable "cms_script_name" {
   default     = ""
 }
 
-variable "cms_access_emails" {
-  description = "Emails allowed through Cloudflare Access to the CMS hostname. One-time PIN, no identity provider needed."
-  type        = list(string)
-  default     = []
+variable "cms_require_mfa" {
+  description = "Require Cloudflare MFA on the CMS Access policy (GoGo-BE#687 D-8). false in dev (one-time PIN); the module refuses false elsewhere."
+  type        = bool
+  default     = false
 }
 
 variable "tunnel_ingress" {
@@ -202,21 +202,6 @@ variable "tunnel_read_connector_token" {
 
 variable "assets_host" {
   description = "Public hostname serving catalogue images from R2. Empty leaves every bucket private."
-  type        = string
-  default     = ""
-}
-
-# Created by hand in the Cloudflare dashboard: a GitHub OAuth app has a client
-# secret, and declaring it here would write that secret into Terraform state.
-# Only the id lives in configuration, which is not a secret.
-variable "cms_access_idp_id" {
-  description = "Cloudflare Access identity provider id for the CMS. Empty keeps one-time PIN as the only method."
-  type        = string
-  default     = ""
-}
-
-variable "cms_access_github_org" {
-  description = "GitHub organisation whose members may reach the CMS."
   type        = string
   default     = ""
 }
