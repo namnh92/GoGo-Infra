@@ -718,9 +718,14 @@ data "aws_ssm_parameter" "cms_access_staff_emails" {
   name  = "/gogo/${var.environment}/backend/cms/access-staff-emails"
 }
 
+# The provider marks every parameter value sensitive. These two are allow-list
+# addresses in Strings, not credentials (ADR-0010), and the owner reads them back
+# through `terraform output cms_access_emails` before an address change (R6), so
+# they are unmarked here. A SecureString under either name would not reach this
+# point decrypted: the boundary denies kms:Decrypt for both (GoGo-Infra#194).
 locals {
-  cms_super_admin_email = var.cms_host == "" ? "" : trimspace(data.aws_ssm_parameter.cms_super_admin_email[0].value)
-  cms_staff_emails_raw  = var.cms_host == "" ? "[]" : data.aws_ssm_parameter.cms_access_staff_emails[0].value
+  cms_super_admin_email = var.cms_host == "" ? "" : trimspace(nonsensitive(data.aws_ssm_parameter.cms_super_admin_email[0].value))
+  cms_staff_emails_raw  = var.cms_host == "" ? "[]" : nonsensitive(data.aws_ssm_parameter.cms_access_staff_emails[0].value)
   cms_staff_emails      = try([for e in jsondecode(local.cms_staff_emails_raw) : tostring(e)], null)
 }
 
