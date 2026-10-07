@@ -96,3 +96,19 @@ variable "known_role_names" {
     error_message = "known_role_names are plain role names, no ARNs and no wildcards."
   }
 }
+
+variable "ssm_env" {
+  description = <<-DESC
+    Environment whose parameter trees (/gogo/<env>/*, /gogo/ci/<env>/*) roles
+    under this boundary may read (GoGo-Infra#196). Also turns on the Deny of
+    every parameter write — only the bootstrap identity writes SSM. Empty
+    disables both.
+  DESC
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.ssm_env == "" || can(regex("^[a-z0-9-]+$", var.ssm_env))
+    error_message = "ssm_env is an environment name such as dev, no wildcards."
+  }
+}

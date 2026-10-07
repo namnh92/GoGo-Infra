@@ -63,6 +63,7 @@ variables {
     "arn:aws:ssm:ap-southeast-1:111122223333:parameter/gogo/dev/backend/cms/access-staff-emails",
   ]
   iam_scope_prefix = "gogo-dev"
+  ssm_env          = "dev"
   known_role_names = ["gogo-dev-plan", "gogo-dev-apply", "gogo-dev-deploy"]
 }
 
@@ -109,7 +110,7 @@ run "boundary_document" {
       for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
       if s.Sid == "ProtectKnownRoles"
       && s.Effect == "Deny"
-      && toset(flatten([s.Action])) == toset(["iam:UpdateAssumeRolePolicy", "iam:DeleteRole"])
+      && toset(flatten([s.Action])) == toset(["iam:CreateRole", "iam:UpdateAssumeRolePolicy", "iam:DeleteRole"])
       && !contains(keys(s), "Condition")
       && toset(flatten([try(s.Resource, [])])) == toset([
         "arn:aws:iam::111122223333:role/gogo-dev-plan",
@@ -117,7 +118,7 @@ run "boundary_document" {
         "arn:aws:iam::111122223333:role/gogo-dev-deploy",
       ])
     ]) == 1
-    error_message = "ProtectKnownRoles must be exactly one unconditional Deny of UpdateAssumeRolePolicy and DeleteRole on the known roles"
+    error_message = "ProtectKnownRoles must be exactly one unconditional Deny of CreateRole, UpdateAssumeRolePolicy and DeleteRole on the known roles"
   }
 
   # GoGo-Infra#196 — IAM writes stay inside this environment's prefix.
@@ -126,14 +127,46 @@ run "boundary_document" {
       for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
       if s.Sid == "DenyIamMutationOutsideGoGo"
       && s.Effect == "Deny"
-      && contains(flatten([s.Action]), "iam:UpdateAssumeRolePolicy")
-      && contains(flatten([s.Action]), "iam:CreatePolicyVersion")
+      && toset(flatten([s.Action])) == toset(["iam:Add*", "iam:Attach*", "iam:Create*", "iam:Delete*", "iam:Detach*", "iam:PassRole", "iam:Put*", "iam:Remove*", "iam:Set*", "iam:Tag*", "iam:Untag*", "iam:Update*", "iam:Upload*"])
+      && !contains(keys(s), "Condition")
       && toset(flatten([try(s.NotResource, [])])) == toset([
         "arn:aws:iam::111122223333:role/gogo-dev-*",
         "arn:aws:iam::111122223333:policy/gogo-dev-*",
       ])
     ]) == 1
-    error_message = "DenyIamMutationOutsideGoGo must scope IAM writes to gogo-dev-*"
+    error_message = "DenyIamMutationOutsideGoGo must deny every mutating IAM verb outside gogo-dev-*"
+  }
+
+  # GoGo-Infra#196 — reads stay in this environment's trees.
+  assert {
+    condition = length([
+      for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
+      if s.Sid == "SsmReadsStayInEnvironment"
+      && s.Effect == "Deny"
+      && toset(flatten([s.Action])) == toset(["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"])
+      && !contains(keys(s), "Resource")
+      && !contains(keys(s), "Condition")
+      && toset(flatten([try(s.NotResource, [])])) == toset([
+        "arn:aws:ssm:*:111122223333:parameter/gogo/dev",
+        "arn:aws:ssm:*:111122223333:parameter/gogo/dev/*",
+        "arn:aws:ssm:*:111122223333:parameter/gogo/ci/dev",
+        "arn:aws:ssm:*:111122223333:parameter/gogo/ci/dev/*",
+      ])
+    ]) == 1
+    error_message = "SsmReadsStayInEnvironment must be exactly one unconditional Deny of the four reads outside /gogo/dev and /gogo/ci/dev"
+  }
+
+  # GoGo-Infra#196 — no capped role writes a parameter.
+  assert {
+    condition = length([
+      for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
+      if s.Sid == "SsmWritesAreBootstrapOnly"
+      && s.Effect == "Deny"
+      && toset(flatten([s.Action])) == toset(["ssm:PutParameter", "ssm:DeleteParameter", "ssm:DeleteParameters", "ssm:LabelParameterVersion", "ssm:UnlabelParameterVersion", "ssm:AddTagsToResource", "ssm:RemoveTagsFromResource"])
+      && toset(flatten([try(s.Resource, [])])) == toset(["*"])
+      && !contains(keys(s), "Condition")
+    ]) == 1
+    error_message = "SsmWritesAreBootstrapOnly must be exactly one unconditional Deny of every parameter write"
   }
 
   # SsmReadCeilingPlan: Deny the four reads, for the plan role only, on
@@ -267,11 +300,12 @@ run "no_known_roles_means_no_196_statements_and_project_scope" {
   variables {
     known_role_names = []
     iam_scope_prefix = ""
+    ssm_env          = ""
   }
   assert {
     condition = length([
       for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
-      if contains(["RequireThisBoundary", "OnlyKnownRolesReadSsm", "ProtectKnownRoles"], s.Sid)
+      if contains(["RequireThisBoundary", "OnlyKnownRolesReadSsm", "ProtectKnownRoles", "SsmReadsStayInEnvironment", "SsmWritesAreBootstrapOnly"], s.Sid)
     ]) == 0
     error_message = "the #196 statements must be off without known roles"
   }
@@ -291,6 +325,14 @@ run "a_known_role_given_as_an_arn_is_refused" {
     known_role_names = ["arn:aws:iam::111122223333:role/gogo-dev-plan"]
   }
   expect_failures = [var.known_role_names]
+}
+
+run "a_wildcard_ssm_env_is_refused" {
+  command = plan
+  variables {
+    ssm_env = "*"
+  }
+  expect_failures = [var.ssm_env]
 }
 
 run "a_wildcard_known_role_is_refused" {

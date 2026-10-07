@@ -130,23 +130,24 @@ role) gets `TAGS SKIPPED`: tolerated by default, a failure under `--strict`.
   done). CI apply is denied editing it; a merge that still carries a boundary
   diff makes `terraform-apply-<env>` fail partway. The PR's next `plan (dev)`
   must show no boundary change first.
-- **The apply role's IAM rights are held in by the boundary** (GoGo-Infra#196,
-  closing review A-F-02 / S-F-03 of PR #195). The apply role administers
-  `gogo-*` IAM; four boundary statements stop it from using that to reach a
-  secret: `RequireThisBoundary` (a role is created or re-bounded only with this
-  exact boundary, so it cannot swap its own), `OnlyKnownRolesReadSsm` (a
-  principal not in the environment's declared role list reads no parameter, so
-  a role it mints and assumes gets nothing), `ProtectKnownRoles` (no
-  `UpdateAssumeRolePolicy` or `DeleteRole` on a declared role, so it cannot
-  re-trust or recreate the deploy role, or itself), and an environment-scoped
-  `DenyIamMutationOutsideGoGo` (`gogo-<env>-*` only, so dev cannot touch prod).
-  Consequence: changing a declared role's trust policy, deleting one, or adding
-  a role to the list is a bootstrap apply, like any boundary change. What is
-  left: inside the boundary the apply role still holds non-SSM AWS powers
-  (`AllowByDefault`) and can widen a declared role's permission policies; no
-  GoGo secret lives outside SSM, and the declared roles are assumable only by
-  their own reviewed workflows. The plan role holds `ReadOnlyAccess` and cannot
-  edit IAM.
+- **Trust boundary = the GitHub Environment** (owner decision 2026-10-07,
+  GoGo-Infra#196, closing A-F-02 / S-F-03 of PR #195). Every job in `dev`
+  (apply, deploy, cms-deploy) receives the same OIDC subject, so code running
+  there can assume any `dev` role: it is trusted with DEV's secrets, and what
+  gets code there is review, CODEOWNER and the `develop`-only environment rule.
+  The boundary enforces everything outside that: the plan role (pull requests)
+  reads only its CI credentials; `SsmReadsStayInEnvironment` and
+  `SsmWritesAreBootstrapOnly` keep every capped role inside its environment's
+  parameters and out of writing any; `DenyIamMutationOutsideGoGo` denies every
+  mutating IAM verb outside `gogo-<env>-*` (other environments, the shared
+  GitHub OIDC provider); and `RequireThisBoundary`, `OnlyKnownRolesReadSsm` and
+  `ProtectKnownRoles` (no `CreateRole`, `UpdateAssumeRolePolicy`, `DeleteRole`
+  on declared roles) stop the apply role using its IAM rights to widen any of
+  this. Consequence: trust changes to declared roles, deleting or adding one,
+  and OIDC provider changes are bootstrap applies. Splitting subjects per
+  workflow (`job_workflow_ref`) was considered and not taken: it changes the
+  authentication of every CI job for isolation inside one environment the
+  owner already trusts as a unit.
 - The plan and apply roles lose every SSM read they did not need. If a future
   Terraform change needs another parameter, the ceiling list, the manifest and
   both tests change together, through a bootstrap apply.

@@ -46,22 +46,25 @@ data "aws_iam_policy_document" "boundary" {
     sid    = "DenyIamMutationOutsideGoGo"
     effect = "Deny"
 
+    # Every IAM verb that changes something, not a hand-picked list
+    # (GoGo-Infra#196, review of PR #197: tagging, PassRole and the shared
+    # GitHub OIDC provider were outside the old list). Anything that is not
+    # this environment's role or policy — another environment's roles, the
+    # account-wide OIDC provider — is changed only from the bootstrap session.
     actions = [
-      "iam:CreateRole",
-      "iam:DeleteRole",
-      "iam:UpdateRole",
-      "iam:UpdateRoleDescription",
-      "iam:UpdateAssumeRolePolicy",
-      "iam:AttachRolePolicy",
-      "iam:DetachRolePolicy",
-      "iam:PutRolePolicy",
-      "iam:DeleteRolePolicy",
-      "iam:CreatePolicy",
-      "iam:DeletePolicy",
-      "iam:CreatePolicyVersion",
-      "iam:DeletePolicyVersion",
-      "iam:SetDefaultPolicyVersion",
-      "iam:PutRolePermissionsBoundary",
+      "iam:Add*",
+      "iam:Attach*",
+      "iam:Create*",
+      "iam:Delete*",
+      "iam:Detach*",
+      "iam:PassRole",
+      "iam:Put*",
+      "iam:Remove*",
+      "iam:Set*",
+      "iam:Tag*",
+      "iam:Untag*",
+      "iam:Update*",
+      "iam:Upload*",
     ]
 
     not_resources = local.gogo_iam_resources
@@ -320,8 +323,64 @@ data "aws_iam_policy_document" "boundary" {
     content {
       sid       = "ProtectKnownRoles"
       effect    = "Deny"
-      actions   = ["iam:UpdateAssumeRolePolicy", "iam:DeleteRole"]
+      actions   = ["iam:CreateRole", "iam:UpdateAssumeRolePolicy", "iam:DeleteRole"]
       resources = local.known_role_arns
+    }
+  }
+
+  # --- GoGo-Infra#196: environments do not reach each other's parameters -----
+  #
+  # The trust boundary is the GitHub Environment (owner decision 2026-10-07):
+  # every job that runs in `dev` gets the same OIDC subject, so code running
+  # there is trusted with DEV's secrets. What must hold is that nothing capped
+  # by the dev boundary reads or writes another environment's parameters, and
+  # that no capped role writes a parameter at all.
+
+  # Reads stay inside this environment's trees.
+  dynamic "statement" {
+    for_each = var.ssm_env == "" ? [] : [1]
+
+    content {
+      sid    = "SsmReadsStayInEnvironment"
+      effect = "Deny"
+
+      actions = [
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+        "ssm:GetParametersByPath",
+        "ssm:GetParameterHistory",
+      ]
+
+      not_resources = [
+        "arn:aws:ssm:*:${local.account}:parameter/gogo/${var.ssm_env}",
+        "arn:aws:ssm:*:${local.account}:parameter/gogo/${var.ssm_env}/*",
+        "arn:aws:ssm:*:${local.account}:parameter/gogo/ci/${var.ssm_env}",
+        "arn:aws:ssm:*:${local.account}:parameter/gogo/ci/${var.ssm_env}/*",
+      ]
+    }
+  }
+
+  # Parameters are written only by the bootstrap identity (put.sh, delete.sh).
+  # No GoGo workflow writes one; a capped role that grants itself the right —
+  # in this environment or another — is refused here.
+  dynamic "statement" {
+    for_each = var.ssm_env == "" ? [] : [1]
+
+    content {
+      sid    = "SsmWritesAreBootstrapOnly"
+      effect = "Deny"
+
+      actions = [
+        "ssm:PutParameter",
+        "ssm:DeleteParameter",
+        "ssm:DeleteParameters",
+        "ssm:LabelParameterVersion",
+        "ssm:UnlabelParameterVersion",
+        "ssm:AddTagsToResource",
+        "ssm:RemoveTagsFromResource",
+      ]
+
+      resources = ["*"]
     }
   }
 

@@ -168,7 +168,18 @@ check_env() {
   need "boundary scopes IAM writes to this environment" "$bnd" 'iam_scope_prefix[[:space:]]*=[[:space:]]*module\.tags\.name_prefix' || status=1
   need "boundary known_role_names come from local.boundary_role_keys" "$bnd" 'known_role_names[[:space:]]*=[[:space:]]*\[for k in local\.boundary_role_keys[[:space:]]*:[[:space:]]*"\$\{module\.tags\.name_prefix\}-\$\{k\}"\]' || status=1
   local listed declared
-  listed="$(perl -0777 -ne 's{(?://|#)[^\n]*}{}g; print "$1\n" if /boundary_role_keys\s*=\s*\[(.*?)\]/s' "$f" | grep -oE '"[^"]+"' | tr -d '"' | sort | tr '\n' ' ')"
+  local keys_expr
+  keys_expr="$(perl -0777 -ne 's{(?://|#)[^\n]*}{}g; print "$1\n" if /boundary_role_keys\s*=\s*(concat\(.*?\n\s*\)|\[[^\]]*\])/s' "$f")"
+  listed="$(grep -oE '"[a-z][a-z-]*"' <<<"$keys_expr" | tr -d '"' | sort | tr '\n' ' ')"
+  # The developer role exists only with developer_sso_principal_arn, so it may
+  # be listed only behind that same condition (review of PR #197): a listed
+  # name that does not exist is a reader ARN anyone with CreateRole could fill.
+  if grep -q '"developer"' <<<"$keys_expr" \
+     && ! grep -Eq 'var\.developer_sso_principal_arn[[:space:]]*==[[:space:]]*""[[:space:]]*\?[[:space:]]*\[\][[:space:]]*:[[:space:]]*\["developer"\]' <<<"$keys_expr"; then
+    echo "  developer is in boundary_role_keys without the developer_sso_principal_arn condition"
+    status=1
+  fi
+  need "boundary reads/writes scoped to this environment (ssm_env)" "$bnd" 'ssm_env[[:space:]]*=[[:space:]]*var\.environment' || status=1
   declared="$( { block "$f" '^module\s+"github_oidc"\s*\{' | perl -0777 -ne 'while (/\n {4}([a-z][a-z-]*)\s*=\s*\{/g) { print "$1\n" }'; grep -q 'resource "aws_iam_role" "developer"' "$f" && echo developer; } | sort | tr '\n' ' ')"
   if [[ -z "$listed" || "$listed" != "$declared" ]]; then
     echo "  boundary_role_keys (${listed:-<none>}) != declared roles (${declared:-<none>})"
@@ -295,8 +306,10 @@ mutate env "the env tree appended to the plan ceiling" 's/(terraform\/read\/\*",
 mutate env "the plan ceiling without the two names" 's/(Plan\s*=\s*\{.*?readable_arns\s*=\s*)concat\(local\.infra_readable_parameter_arns,\s*(\[.*?\])\)/$1$2/s'
 mutate env "the boundary without the two names" 's/\n\s*infra_readable_arns\s*=\s*local\.infra_readable_parameter_arns//'
 mutate env "a caller disabling the tag lock" 's/(\n\s*infra_readable_arns\s*=\s*local\.infra_readable_parameter_arns)/$1\n  locked_tag_keys     = []/'
-mutate env "a declared role missing from boundary_role_keys" 's/boundary_role_keys = \["plan", /boundary_role_keys = [/'
-mutate env "an undeclared role in boundary_role_keys" 's/boundary_role_keys = \["plan", /boundary_role_keys = ["plan", "ghost", /'
+mutate env "a declared role missing from boundary_role_keys" 's/\["plan", "apply", "monitor"/["apply", "monitor"/'
+mutate env "an undeclared role in boundary_role_keys" 's/\["plan", "apply", "monitor"/["plan", "ghost", "apply", "monitor"/'
+mutate env "developer listed unconditionally" 's/\["plan", "apply", "monitor", "deploy", "cms-deploy"\]/["plan", "apply", "monitor", "deploy", "cms-deploy", "developer"]/; s/var\.developer_sso_principal_arn == "" \? \[\] : \["developer"\],/[],/'
+mutate env "the boundary without ssm_env" 's/\n\s*ssm_env\s*=\s*var\.environment//'
 mutate env "IAM writes scoped to the whole project" 's/\n\s*iam_scope_prefix\s*=\s*module\.tags\.name_prefix//'
 mutate env "the boundary without known roles" 's/\n\s*known_role_names\s*=\s*\[for k in local\.boundary_role_keys[^\n]*//'
 mutate env "the developer role without the boundary" 's/(resource "aws_iam_role" "developer" \{.*?)\n\s*permissions_boundary\s*=\s*module\.boundary\.arn/$1/s'

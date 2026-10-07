@@ -74,19 +74,24 @@ as designed — apply the change from a bootstrap session instead of widening th
 
 ## Keeping the apply role inside (GoGo-Infra#196)
 
-The apply role administers `<prefix>-*` IAM. With `known_role_names` set (every environment sets
-it from `local.boundary_role_keys`), three statements stop it from using that to step outside:
+The trust boundary is the GitHub Environment (owner decision 2026-10-07): every job in `dev` gets
+the same OIDC subject, so code there can assume any `dev` role and is trusted with DEV's secrets.
+These statements keep everything else out of reach. The apply role administers `<prefix>-*` IAM;
+with `known_role_names` set (every environment sets it from `local.boundary_role_keys`), three
+statements stop it from using that to widen access:
 
 | Statement | Stops |
 | --- | --- |
 | `RequireThisBoundary` — Deny `CreateRole`, `PutRolePermissionsBoundary` unless `iam:PermissionsBoundary` is this policy | swapping its own boundary through an inline grant; creating an unbounded role |
 | `OnlyKnownRolesReadSsm` — Deny every parameter read when `aws:PrincipalArn` is not a declared role | minting a role, granting it reads and assuming it |
-| `ProtectKnownRoles` — Deny `UpdateAssumeRolePolicy`, `DeleteRole` on declared roles | re-trusting the deploy role (or plan, or itself) to the apply role; delete-and-recreate under the same name |
+| `ProtectKnownRoles` — Deny `CreateRole`, `UpdateAssumeRolePolicy`, `DeleteRole` on declared roles | re-trusting a declared role (e.g. to pull requests); delete-and-recreate under the same name |
 
-With `iam_scope_prefix` set, IAM writes are limited to the environment's own prefix, so the dev
-apply role cannot touch prod roles or the prod boundary.
+With `iam_scope_prefix` set, every mutating IAM verb is limited to the environment's own roles and
+policies — not another environment's, not the account-wide GitHub OIDC provider. With `ssm_env`
+set, `SsmReadsStayInEnvironment` limits reads to `/gogo/<env>/*` and `/gogo/ci/<env>/*`, and
+`SsmWritesAreBootstrapOnly` denies every parameter write to every capped role.
 
-Consequence: a trust-policy change to a declared role, deleting one, and adding a role to
-`known_role_names` are bootstrap applies (CI is denied). What stays possible inside the boundary:
-non-SSM AWS actions, and widening a declared role's permission policies — no GoGo secret lives
-outside SSM, and each declared role is assumable only by its own reviewed workflow.
+Consequence: a trust-policy change to a declared role, deleting or adding one, and any OIDC
+provider change are bootstrap applies (CI is denied). List only roles that exist: a listed name
+that does not exist is a reader ARN that `CreateRole` could otherwise fill (the `developer` role is
+listed only when `developer_sso_principal_arn` creates it).

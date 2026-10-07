@@ -355,7 +355,7 @@ the apply role can rewrite any `gogo-*` policy, so a Deny there would not hold:
    this closes a hole older than this change: it holds `ReadOnlyAccess`, whose `ssm:Get*` covers
    every parameter, and every SSM policy here grants `kms:Decrypt` through SSM — so a pull-request
    session could read `backend/*` and the write-capable Cloudflare token. For the apply role it is
-   a ceiling it cannot edit, and *Declared roles are frozen from CI* below stops it routing around it.
+   a ceiling it cannot edit, and the statements under *Trust model* below stop it routing around it.
 2. **Tag required.** Those two principals may read the two names only while they carry
    `gogo:infra-readable=true`.
 3. **Never decrypted.** A Deny on `kms:Decrypt` keyed on the `PARAMETER_ARN` encryption context: a
@@ -420,14 +420,19 @@ on; `--strict` from the bootstrap session fails on it instead.
 What this does not protect against: the bootstrap identity tagging a secret by hand. `validate.sh`
 reports it; remove the tag and rotate the value.
 
-**Declared roles are frozen from CI** (GoGo-Infra#196). The apply role administers `gogo-*` IAM,
-so the boundary also: requires itself on every created or re-bounded role; denies every parameter
-read to any principal not in the environment's declared role list (`local.boundary_role_keys`); denies
-`UpdateAssumeRolePolicy` and `DeleteRole` on those roles; and scopes IAM writes to `gogo-<env>-*`.
-So changing a declared role's trust policy, deleting one, or adding a role is a bootstrap apply
-under the freeze below — CI apply fails on it, by design. What remains inside the boundary: the
-apply role's non-SSM AWS powers, and widening a declared role's permission policies; no GoGo secret
-lives outside SSM, and each declared role is assumable only by its own reviewed workflow.
+**Trust model (owner decision 2026-10-07, GoGo-Infra#196).** The trust boundary is the GitHub
+Environment. Every job that runs in `dev` — `terraform-apply-dev`, `deploy-dev`, `deploy-cms-dev` —
+gets the same OIDC subject, so code running there can assume any `dev` role and is trusted with
+DEV's secrets; what gets code there is review, CODEOWNER, and the environment's `develop`-only branch
+rule. The boundary guarantees what sits outside that: pull-request code (the plan role) reads only
+its own CI credentials; nothing capped by one environment's boundary reads or writes another
+environment's parameters or IAM; no capped role writes a parameter at all (bootstrap only); and the
+apply role cannot use its IAM rights to widen any of this — every created or re-bounded role carries
+the boundary, only declared roles (`local.boundary_role_keys`) read SSM, a declared role cannot be
+re-trusted, deleted or created again from CI, and IAM writes stay inside `gogo-<env>-*` (the shared
+GitHub OIDC provider included). So changing a declared role's trust, deleting or adding one, and
+any change to the OIDC provider are bootstrap applies under the freeze below — CI apply fails on
+them, by design.
 
 Adding a third parameter is a manifest row, an entry in `local.infra_readable_parameter_arns` in
 every environment, and the matching update to `scripts/ci/infra-readable-iam.test.sh` and

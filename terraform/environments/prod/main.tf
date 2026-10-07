@@ -113,6 +113,7 @@ module "boundary" {
   # checks this list against the roles module.github_oidc (and the developer
   # role) actually declare.
   iam_scope_prefix = module.tags.name_prefix
+  ssm_env          = var.environment
   known_role_names = [for k in local.boundary_role_keys : "${module.tags.name_prefix}-${k}"]
 }
 

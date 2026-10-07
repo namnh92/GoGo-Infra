@@ -58,7 +58,12 @@ locals {
   # Every role this environment declares, by the key it is named after
   # (<prefix>-<key>). Static on purpose: the boundary cannot read the role map
   # without a dependency cycle (the roles carry the boundary).
-  boundary_role_keys = ["plan", "apply", "monitor", "deploy", "cms-deploy", "developer"]
+  # `developer` only when that role exists: a listed name that does not exist is
+  # a reader ARN anyone with CreateRole could fill (review of PR #197).
+  boundary_role_keys = concat(
+    ["plan", "apply", "monitor", "deploy", "cms-deploy"],
+    var.developer_sso_principal_arn == "" ? [] : ["developer"],
+  )
 
   ssm_arn_prefix = "arn:aws:ssm:${data.aws_region.current.name}:${local.account}:parameter/gogo"
   infra_readable_parameter_arns = [
@@ -107,6 +112,7 @@ module "boundary" {
   # checks this list against the roles module.github_oidc (and the developer
   # role) actually declare.
   iam_scope_prefix = module.tags.name_prefix
+  ssm_env          = var.environment
   known_role_names = [for k in local.boundary_role_keys : "${module.tags.name_prefix}-${k}"]
 }
 
