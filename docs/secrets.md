@@ -431,7 +431,9 @@ apply role cannot use its IAM rights to widen any of this — every created or r
 the boundary, only declared roles (`local.boundary_role_keys`) read SSM, a declared role cannot be
 re-trusted, deleted or created again from CI, and IAM is reachable only inside `gogo-<env>-*`:
 `iam:*` is denied on every other resource (another environment's roles, users, the account
-itself), the shared GitHub OIDC provider is readable and never changed from CI, and that rule is
+itself), with two read-only exceptions — the shared GitHub OIDC provider (readable, never changed
+from CI) and AWS-managed policies `arn:aws:iam::aws:policy/*` (readable; IAM refuses changes to
+them for every caller) — and that rule is
 checked against the AWS action catalogue on every CI run (`scripts/ci/boundary-iam-catalogue.test.sh`).
 So changing a declared role's trust, deleting or adding one, and any change to the OIDC provider
 are bootstrap applies under the freeze below — CI apply fails on them, by design.
