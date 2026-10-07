@@ -55,7 +55,8 @@ credential-stuffed.
 
 ## Who is admitted (GoGo-Infra#199, GoGo-BE#687)
 
-One admission policy: `super_admin_email` plus `staff_emails`, which the
+One admission policy: `super_admin_email` plus `staff_emails_json` (the raw
+SSM value, a JSON array of address strings, validated here), which the
 environment reads from SSM (`cms/super-admin-email`, `cms/access-staff-emails`).
 No organisation-membership policy — a parallel `include` would admit people the
 list does not name. `require_mfa` adds Cloudflare MFA as a requirement and is
