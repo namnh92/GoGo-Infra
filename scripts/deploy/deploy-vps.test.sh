@@ -292,6 +292,11 @@ if [[ -n "${DROP_ON:-}" && "$cmd" == *"${DROP_ON}"* ]]; then
   echo "client_loop: send disconnect: Broken pipe" >&2
   exit 255
 fi
+# SSH_BANNER: what a chatty login profile prints before the output of a
+# command matching SSH_BANNER_ON (scoped, so only the read under test sees it).
+if [[ -n "${SSH_BANNER:-}" && "$cmd" == *"${SSH_BANNER_ON:-}"* ]]; then
+  printf '%s\n' "$SSH_BANNER"
+fi
 # remote() sends `bash -lc <quoted>`; run it without the login profile.
 eval "bash -c ${cmd#bash -lc }"
 FAKE
@@ -484,6 +489,17 @@ if al_rev_up "$AL_A"; then
 else
   fail "#687 F-06: rollback.sh starts api with GOGO_REVISION set to the rolled-back commit (compose calls: $(tr '\n' '|' <"${AL_SB}/docker.log"))"
 fi
+# Infra#201 F-02: a symbolic ref (here a tag) is resolved to its commit, and a
+# login banner ahead of rev-parse's output does not leak into the value (F-01).
+git_q -C "${AL_SB}/host" tag -f rollback-target "$AL_A"
+printf '%s' rollback-target >"${AL_SB}/host/.previous-revision"
+SSH_BANNER="Welcome to the deploy host" SSH_BANNER_ON="rev-parse" al_run "$ROLLBACK" "" "$OBS"
+if al_rev_up "$AL_A" && ! grep -q 'Welcome' "${AL_SB}/docker.log"; then
+  pass "#201 F-01/F-02: a tag rolls back with GOGO_REVISION=<its commit>, banner ignored"
+else
+  fail "#201 F-01/F-02: a tag rolls back with GOGO_REVISION=<its commit>, banner ignored (compose calls: $(tr '\n' '|' <"${AL_SB}/docker.log"))"
+fi
+printf '%s' "$AL_A" >"${AL_SB}/host/.previous-revision"
 if [[ "$(grep -cF "GOGO_REVISION='\${target}' \${COMPOSE} up -d" "$ROLLBACK")" -eq 2 ]]; then
   pass "#687 F-06: both of rollback.sh's 'up -d' calls export GOGO_REVISION"
 else
