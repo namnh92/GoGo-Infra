@@ -69,12 +69,28 @@ resource "cloudflare_zero_trust_access_policy" "cms" {
   require = var.require_mfa ? [{ auth_method = { auth_method = "mfa" } }] : null
 }
 
+# GoGo-BE#687 shape rev 6 (owner 2026-10-08, every environment): the console
+# is public. Access gates only the single sign-on path — `/sso`, where the
+# console starts SSO with a real page load, and the exchange endpoint the
+# console proxies to the API — so staff reach the password form without an
+# Access screen and the super admin meets Access only when choosing SSO.
+locals {
+  sso_paths = ["/sso", "/v1/cms/auth/access-exchange"]
+}
+
 resource "cloudflare_zero_trust_access_application" "cms" {
   account_id       = var.account_id
   name             = "GoGo CMS (${var.environment})"
-  domain           = var.hostname
+  domain           = "${var.hostname}${local.sso_paths[0]}"
   type             = "self_hosted"
   session_duration = var.session_duration
+
+  destinations = [
+    for path in local.sso_paths : {
+      type = "public"
+      uri  = "${var.hostname}${path}"
+    }
+  ]
 
   # Not in the App Launcher: the launcher lists applications to every member of
   # the account, which advertises the hostname to people who cannot use it.

@@ -157,3 +157,21 @@ run "a_super_admin_with_an_empty_domain_label_is_refused" {
   }
   expect_failures = [var.super_admin_email]
 }
+
+# GoGo-BE#687 shape rev 6 — Access gates only the SSO path; the rest of the
+# console is public.
+run "access_gates_only_the_sso_path" {
+  command = plan
+  assert {
+    condition     = toset([for d in cloudflare_zero_trust_access_application.cms.destinations : d.uri]) == toset(["cms-dev.gogo.id.vn/sso", "cms-dev.gogo.id.vn/v1/cms/auth/access-exchange"])
+    error_message = "the application must protect exactly /sso and the exchange endpoint"
+  }
+  assert {
+    condition     = alltrue([for d in cloudflare_zero_trust_access_application.cms.destinations : d.type == "public"])
+    error_message = "every destination is a public hostname path"
+  }
+  assert {
+    condition     = cloudflare_zero_trust_access_application.cms.domain == "cms-dev.gogo.id.vn/sso"
+    error_message = "the primary domain must be the SSO path, never the bare hostname"
+  }
+}

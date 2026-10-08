@@ -33,6 +33,15 @@ people, gated behind an apply, shown as a plan that also touches IAM and DNS.
 A custom domain cannot bind to a script that does not exist. GoGo-CMS deploys
 first, then this applies. An order, not a manual step.
 
+**Rev 6 (GoGo-BE#687, Infra#202).** Narrowing Access to the SSO path is applied
+only after both dependants are **deployed** to the environment: GoGo-BE#693
+(password login without an Access assertion), then GoGo-CMS#237 (the console
+starts single sign-on with a page load of `/sso`). Applied earlier, staff on
+the public page meet an API that still demands an assertion, and the old
+console starts the exchange from `/login`, which Access no longer covers.
+Merging to `develop` applies DEV automatically (`terraform-apply-dev`), so the
+merge itself waits for both deploys.
+
 `script_name` must match `name` in GoGo-CMS's `wrangler.jsonc`. Nothing enforces
 that across repositories, and a mismatch binds the hostname to a script nobody
 deploys — which shows up as a 404 that looks like DNS.
@@ -50,8 +59,12 @@ Access decides who reaches the hostname and nothing about what they may do.
 GoGo-BE remains the only authority on permissions; a request that gets past
 Access carries no privilege by itself.
 
-What it buys is that an admin login page is not on the open internet being
-credential-stuffed.
+~~What it buys is that an admin login page is not on the open internet being
+credential-stuffed.~~ Superseded by GoGo-BE#687 shape rev 6 (owner 2026-10-08,
+every environment): the console is public. Access gates only `/sso` and
+`/v1/cms/auth/access-exchange` — the single sign-on path, which is the super
+admin's only door. Staff sign in with email + password on the public login page,
+protected by GoGo-BE's per-account lockout, per-IP rate limit and Argon2id.
 
 ## Who is admitted (GoGo-Infra#199, GoGo-BE#687)
 
