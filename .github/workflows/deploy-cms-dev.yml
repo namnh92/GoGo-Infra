@@ -197,10 +197,14 @@ jobs:
           fi
           pnpm exec wrangler versions deploy "${version_id}@100%" -y
 
-      # The hostname sits behind Cloudflare Access, so an unauthenticated probe
-      # cannot check the app. What it can check is that Access is still in front
-      # — a 200 here would mean the admin console is open to the internet.
-      - name: Access still guards the hostname
+      # GoGo-BE#687 shape rev 6 (owner 2026-10-08): the console is public and
+      # Cloudflare Access gates only the single sign-on path. What an
+      # unauthenticated probe can check is that Access is still in front of
+      # that path — /sso and the exchange — and that the root answers (200 once
+      # Infra#202 is applied; a redirect before that, while the whole host was
+      # still behind Access). A 200 on /sso, or the API answering the exchange
+      # itself, would mean the super admin's door is open without Access.
+      - name: Access still guards the SSO path
         env:
           CMS_URL: ${{ vars.CMS_URL_DEV }}
         run: |
@@ -209,14 +213,31 @@ jobs:
             echo "CMS_URL_DEV is not set; skipping the Access check" >&2
             exit 0
           fi
-          code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${CMS_URL}/")"
-          case "$code" in
-            301 | 302) echo "Access is in front (HTTP ${code})" ;;
-            200)
-              echo "::error::${CMS_URL} answered 200 unauthenticated — Access is NOT in front"
+          root="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${CMS_URL}/")"
+          case "$root" in
+            200 | 301 | 302) echo "root answered HTTP ${root}" ;;
+            *)
+              echo "::error::${CMS_URL}/ answered HTTP ${root}"
               exit 1
               ;;
-            *) echo "::warning::unexpected HTTP ${code} from ${CMS_URL}" ;;
+          esac
+          sso="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${CMS_URL}/sso?start=1")"
+          case "$sso" in
+            301 | 302 | 403) echo "Access is in front of /sso (HTTP ${sso})" ;;
+            *)
+              echo "::error::${CMS_URL}/sso answered HTTP ${sso} unauthenticated — Access is NOT in front of single sign-on"
+              exit 1
+              ;;
+          esac
+          exch="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -X POST \
+            -H 'content-type: application/json' --data '{}' \
+            "${CMS_URL}/v1/cms/auth/access-exchange")"
+          case "$exch" in
+            301 | 302 | 403) echo "Access is in front of the exchange (HTTP ${exch})" ;;
+            *)
+              echo "::error::the exchange answered HTTP ${exch} unauthenticated — Access is NOT in front of it"
+              exit 1
+              ;;
           esac
 
       # The other door. `versions upload` / `versions deploy` never apply

@@ -33,6 +33,15 @@ people, gated behind an apply, shown as a plan that also touches IAM and DNS.
 A custom domain cannot bind to a script that does not exist. GoGo-CMS deploys
 first, then this applies. An order, not a manual step.
 
+**Rev 6 (GoGo-BE#687, Infra#202).** Narrowing Access to the SSO path is applied
+only after both dependants are **deployed** to the environment: GoGo-BE#693
+(password login without an Access assertion), then GoGo-CMS#237 (the console
+starts single sign-on with a page load of `/sso`). Applied earlier, staff on
+the public page meet an API that still demands an assertion, and the old
+console starts the exchange from `/login`, which Access no longer covers.
+Merging to `develop` applies DEV automatically (`terraform-apply-dev`), so the
+merge itself waits for both deploys.
+
 `script_name` must match `name` in GoGo-CMS's `wrangler.jsonc`. Nothing enforces
 that across repositories, and a mismatch binds the hostname to a script nobody
 deploys — which shows up as a 404 that looks like DNS.
