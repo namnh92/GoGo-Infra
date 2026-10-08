@@ -50,8 +50,12 @@ Access decides who reaches the hostname and nothing about what they may do.
 GoGo-BE remains the only authority on permissions; a request that gets past
 Access carries no privilege by itself.
 
-What it buys is that an admin login page is not on the open internet being
-credential-stuffed.
+~~What it buys is that an admin login page is not on the open internet being
+credential-stuffed.~~ Superseded by GoGo-BE#687 shape rev 6 (owner 2026-10-08,
+every environment): the console is public. Access gates only `/sso` and
+`/v1/cms/auth/access-exchange` — the single sign-on path, which is the super
+admin's only door. Staff sign in with email + password on the public login page,
+protected by GoGo-BE's per-account lockout, per-IP rate limit and Argon2id.
 
 ## Who is admitted (GoGo-Infra#199, GoGo-BE#687)
 
