@@ -86,6 +86,21 @@ the probe's sentinel strings appears in any session item. A field the list above
 ADR before any real-DSN use, not a local exception. The file header of `sentry.ts`, which today says "no sessions", changes with it.
 Timing: folded into PR #337 before it merges; if #337 merges first, a separate PR `Refs GoGo-MobileApp#336` with a
 relay run limited to the session step. GoGo-MobileApp's ADR 0010 gains one sentence pointing here.
+**Measured 2026-10-14 (GoGo-Infra#217; relay of GoGo-MobileApp PR #339 @3b1b378, release builds, iPhone 11 Pro Max
+and Samsung SM-A226B, 11 + 12 session items across signed in, sign-out, signed out, sign-in and native crash + restart;
+workspace evidence `dev/test-evidence/sentry-mobile-sessions-2026-10-14/`).** This replaces the "expected" lines above
+for native sessions:
+- Fields present: `sid`, `did`, `init`, `status`, `errors`, `started`, `timestamp`, `duration`, `seq`,
+  `attrs { release, environment }`. **`seq` is added to the list** (owner decision 2026-10-14): an update sequence
+  number the native SDKs set (iOS a small counter, Android an epoch-millisecond value); it carries no user data.
+  `abnormal_mechanism` did not occur (no ANR or watchdog provoked) and stays on the list.
+- `did` is the native installation id on both platforms **in every state, signed in included**; the app user id set by
+  `setSentryUser` never reaches a session. Never an email or a username.
+- No `ip_address` and no `user_agent` in any item. No probe sentinel in any item. `attrs.release` =
+  `max.gogo.dev@0.1.0+1` as ADR-0011 D-3 set.
+- Android re-sends a crashed session as `exited` with a higher `seq` after the restart; iOS does not. This does not touch
+  privacy; the real-build acceptance below checks that the crash still counts in the crash-free rate.
+A new field from a future SDK version is still a finding against this ADR, as stated above.
 Acceptance on a real build: the DEV release shows ≥ 1 session and a crash-free rate in Releases; an alert on
 `crash_free_rate(session) < 99.5 %` for `environment:prod` exists (harmless until prod has traffic).
 
