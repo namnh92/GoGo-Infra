@@ -86,7 +86,31 @@ the probe's sentinel strings appears in any session item. A field the list above
 ADR before any real-DSN use, not a local exception. The file header of `sentry.ts`, which today says "no sessions", changes with it.
 Timing: folded into PR #337 before it merges; if #337 merges first, a separate PR `Refs GoGo-MobileApp#336` with a
 relay run limited to the session step. GoGo-MobileApp's ADR 0010 gains one sentence pointing here.
-Acceptance on a real build: the DEV release shows ≥ 1 session and a crash-free rate in Releases; an alert on
+**Measured 2026-10-14 (GoGo-Infra#217; relay of GoGo-MobileApp PR #339 @3b1b378, release builds, iPhone 11 Pro Max
+and Samsung SM-A226B, 11 + 12 session items across signed in, sign-out (Android: readback printed by the driver, not
+saved), signed out, sign-in and native crash + restart;
+workspace evidence `dev/test-evidence/sentry-mobile-sessions-2026-10-14/`).** This replaces the "expected" lines above
+for native sessions:
+- Fields present: `sid`, `did`, `init`, `status`, `errors`, `started`, `timestamp`, `duration`, `seq`,
+  `attrs { release, environment }`. **`seq` is added to the list** (owner decision 2026-10-14): an update sequence
+  number the sentry-cocoa / sentry-android SDKs bundled by `@sentry/react-native` 8.30.0 set (iOS a small counter,
+  Android the update's epoch-millisecond timestamp; `init` items on Android carry no `seq`); it carries no user data.
+  `abnormal_mechanism` did not occur (no ANR or watchdog provoked) and stays on the list.
+- `did` is the native installation id on both platforms **in every state, signed in included**; the app user id set by
+  `setSentryUser` never reaches a session. Never an email or a username. (Android cross-checked against the crash
+  event's `user.id`; iOS by constancy across all states, the crash there happened signed in.) The iOS crash envelope
+  carries the session (installation id) and the event (app user id) together, so Sentry can link the two ids; the
+  basis holds under GoGo-MobileApp ADR 0010, and the ADR-0011 D-7 record on #208 names this link.
+- No `ip_address` and no `user_agent` in any item. No probe sentinel in any item. `attrs.release` =
+  `max.gogo.dev@0.1.0+1` as ADR-0011 D-3 set.
+- Android re-sends a crashed session as `exited` with a higher `seq` after the restart; iOS does not. This does not touch
+  privacy; the real-build acceptance below checks that the crash still counts in the crash-free rate.
+For native sessions the measured list above is the list the rule at D-2 (b) binds to; the earlier list describes the JS
+serializer only. The relay scanner's allowlist (`dev/integration/sentry-session-scan.mjs`, `SESSION_FIELDS`) follows the
+measured list; `ip_address` stays a FAIL. A field a future SDK version adds is still a finding against this ADR.
+Acceptance on a real build: the DEV release shows ≥ 1 session and a crash-free rate in Releases; after one provoked
+native crash per platform the release's crash-free sessions rate is below 100 % (Android's crashed→exited re-send,
+`errors` 1→0, must not undo the crash); an alert on
 `crash_free_rate(session) < 99.5 %` for `environment:prod` exists (harmless until prod has traffic).
 
 **D-3 Sentry's GitHub App on five repositories; Seer reads code and may propose fixes as pull requests, which go
