@@ -121,6 +121,31 @@
       "expected": "password=[redacted] idempotency_key=[redacted] guestToken=[redacted]"
     },
     {
+      "id": "C-4.7",
+      "surface": "text",
+      "input": "key=k1 signature=s1 jwt=j1 assertion=a1 email=e1",
+      "expected": "key=[redacted] signature=[redacted] jwt=[redacted] assertion=[redacted] email=[redacted]"
+    },
+    {
+      "id": "C-4.8",
+      "surface": "text",
+      "input": "accessToken=t&invite=i&code=c&idempotencyKey=k",
+      "expected": "accessToken=[redacted]&invite=[redacted]&code=[redacted]&idempotencyKey=[redacted]"
+    },
+    {
+      "id": "C-4.9",
+      "surface": "text",
+      "input": "Refresh_Token=x ACCESS_TOKEN=y InviteCode=z",
+      "expected": "Refresh_Token=[redacted] ACCESS_TOKEN=[redacted] InviteCode=[redacted]",
+      "note": "names compare case-insensitively, camelCase and snake_case alike"
+    },
+    {
+      "id": "C-4.10",
+      "surface": "text",
+      "input": "{\"signature\":\"s\",\"jwt\":\"j\",\"email\":\"e\",\"code\":\"c\"}",
+      "expected": "{\"signature\":\"[redacted]\",\"jwt\":\"[redacted]\",\"email\":\"[redacted]\",\"code\":\"[redacted]\"}"
+    },
+    {
       "id": "C-4.6",
       "surface": "text",
       "input": "cursor=eyJ0aWQiOjEyMzQ1Njc4OX0",
@@ -145,6 +170,18 @@
       "input": "{\"latitude\":10.7769,\"name\":\"cafe\"}",
       "expected": "{\"latitude\":\"[redacted]\",\"name\":\"cafe\"}",
       "note": "a JSON-text value is replaced by the quoted literal so the text stays valid JSON"
+    },
+    {
+      "id": "C-5.4",
+      "surface": "text",
+      "input": "lon=1.5 longitude=2.5 userLon=3 homeLatitude=4 homeLongitude=5",
+      "expected": "lon=[redacted] longitude=[redacted] userLon=[redacted] homeLatitude=[redacted] homeLongitude=[redacted]"
+    },
+    {
+      "id": "C-5.5",
+      "surface": "text",
+      "input": "pickup_lon=6 dest_latitude=7 dest_longitude=8 Origin_Lat=9",
+      "expected": "pickup_lon=[redacted] dest_latitude=[redacted] dest_longitude=[redacted] Origin_Lat=[redacted]"
     },
     {
       "id": "C-6.1",
@@ -308,6 +345,20 @@
       "expected": "abcdef"
     },
     {
+      "id": "C-19.8",
+      "surface": "text",
+      "input": "431b947",
+      "expected": "[redacted]",
+      "note": "accepted false positive: a short git SHA in non-opaque text"
+    },
+    {
+      "id": "C-19.9",
+      "surface": "text",
+      "input": "iPhone15",
+      "expected": "[redacted]",
+      "note": "accepted false positive"
+    },
+    {
       "id": "C-7",
       "surface": "deep",
       "input": {
@@ -319,10 +370,13 @@
         "bounds": {},
         "viewport": {},
         "latlng": "",
-        "ll": "",
+        "ll": null,
         "geom": "",
         "geometry": {},
-        "point": null,
+        "point": {
+          "x": 1,
+          "y": 2
+        },
         "origin": {
           "lat": 1
         },
@@ -334,13 +388,14 @@
         "bounds": "[redacted]",
         "viewport": "[redacted]",
         "latlng": "[redacted]",
-        "ll": "[redacted]",
+        "ll": null,
         "geom": "[redacted]",
         "geometry": "[redacted]",
-        "point": null,
+        "point": "[redacted]",
         "origin": "[redacted]",
         "id": "keep"
-      }
+      },
+      "note": "every container key's value becomes the literal; null and undefined stay as they are"
     },
     {
       "id": "C-20",
@@ -452,6 +507,15 @@
           },
           "os": {
             "build": "22B83"
+          },
+          "react_native_context": {
+            "js_engine": "hermes2"
+          },
+          "app": {
+            "app_build": "build42a"
+          },
+          "browser": {
+            "version": "chrome129"
           }
         },
         "tags": {
@@ -461,7 +525,7 @@
         "exception": {
           "values": [
             {
-              "type": "TypeError",
+              "type": "ContractError2",
               "value": "boom lat=10.7769",
               "stacktrace": {
                 "frames": [
@@ -469,11 +533,45 @@
                     "function": "a1b2c3"
                   }
                 ]
+              },
+              "mechanism": {
+                "type": "onerror2"
               }
             }
           ]
         },
-        "release": "max.gogo.dev@0.1.0+42"
+        "release": "max.gogo.dev@0.1.0+42",
+        "event_id": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+        "timestamp": "2026-10-14T05:00:00Z",
+        "dist": "42abc1",
+        "platform": "node2",
+        "environment": "dev1x2",
+        "level": "error1",
+        "sdk": {
+          "name": "sentry.javascript.react-native",
+          "version": "6.1.0x1"
+        },
+        "debug_meta": {
+          "images": [
+            {
+              "uuid": "img123abc"
+            }
+          ]
+        },
+        "modules": {
+          "react2x": "19.0.0"
+        },
+        "breadcrumbs": [
+          {
+            "category": "navigation",
+            "timestamp": "2026-10-14T05:00:01Z",
+            "level": "info2x",
+            "data": {
+              "from": "/a",
+              "to": "/b"
+            }
+          }
+        ]
       },
       "expected": {
         "extra": {
@@ -489,6 +587,15 @@
           },
           "os": {
             "build": "22B83"
+          },
+          "react_native_context": {
+            "js_engine": "hermes2"
+          },
+          "app": {
+            "app_build": "build42a"
+          },
+          "browser": {
+            "version": "chrome129"
           }
         },
         "tags": {
@@ -498,7 +605,7 @@
         "exception": {
           "values": [
             {
-              "type": "TypeError",
+              "type": "ContractError2",
               "value": "boom lat=[redacted]",
               "stacktrace": {
                 "frames": [
@@ -506,13 +613,47 @@
                     "function": "a1b2c3"
                   }
                 ]
+              },
+              "mechanism": {
+                "type": "onerror2"
               }
             }
           ]
         },
-        "release": "max.gogo.dev@0.1.0+42"
+        "release": "max.gogo.dev@0.1.0+42",
+        "event_id": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+        "timestamp": "2026-10-14T05:00:00Z",
+        "dist": "42abc1",
+        "platform": "node2",
+        "environment": "dev1x2",
+        "level": "error1",
+        "sdk": {
+          "name": "sentry.javascript.react-native",
+          "version": "6.1.0x1"
+        },
+        "debug_meta": {
+          "images": [
+            {
+              "uuid": "img123abc"
+            }
+          ]
+        },
+        "modules": {
+          "react2x": "19.0.0"
+        },
+        "breadcrumbs": [
+          {
+            "category": "navigation",
+            "timestamp": "2026-10-14T05:00:01Z",
+            "level": "info2x",
+            "data": {
+              "from": "/a",
+              "to": "/b"
+            }
+          }
+        ]
       },
-      "note": "applied at the event root: opaque paths (ADR-0011 §Oracle) are copied untouched"
+      "note": "applied at the event root. Every opaque path carries a value stage 6 would redact; all of them must come back unchanged, while extra/contexts.custom/tags/exception value are redacted"
     },
     {
       "id": "C-23.1",
@@ -523,7 +664,7 @@
       "expected": {
         "self": "[redacted]"
       },
-      "note": "the repeated reference becomes the literal"
+      "note": "cycle construct is { self: <itself> }; the repeated reference becomes the literal"
     },
     {
       "id": "C-23.2",
@@ -533,8 +674,14 @@
         "depth": 40,
         "leaf": "x"
       },
-      "expected": "completes",
-      "note": "levels deeper than 32 become the literal"
+      "expected": {
+        "construct": {
+          "kind": "nest",
+          "depth": 32,
+          "leaf": "[redacted]"
+        }
+      },
+      "note": "the root is level 0; the value found at level 32 is replaced by the literal, so 32 nested `a` keys end in the literal"
     },
     {
       "id": "C-8",
@@ -974,7 +1121,10 @@
         "dsn": ""
       },
       "expected": {
-        "init": false
+        "init": false,
+        "captureErrorCallsSdk": false,
+        "setSentryUserCallsSdk": false,
+        "helpersThrow": false
       }
     },
     {
@@ -984,7 +1134,10 @@
         "dsn": "off"
       },
       "expected": {
-        "init": false
+        "init": false,
+        "captureErrorCallsSdk": false,
+        "setSentryUserCallsSdk": false,
+        "helpersThrow": false
       }
     },
     {
@@ -995,6 +1148,7 @@
       },
       "expected": {
         "init": true,
+        "initCalls": 1,
         "sendDefaultPii": false,
         "tracesSampleRate": "absent"
       }

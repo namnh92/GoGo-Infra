@@ -37,7 +37,7 @@ Clients vendor the file verbatim and pin it by version and sha256 in their own A
 digest. A case a client cannot pass is a change to this ADR, not a local exception. Version 1:
 
 ```
-sha256  b24ea1c3678df5da205be22db22a79a9f69ed3dad8113b7890891f745417ee55  0011/redaction-cases.v1.json
+sha256  1b7f1e9141d5ec0940cbc4537a83603e400032f875240d622afd478ade6356c0  0011/redaction-cases.v1.json
 ```
 
 **D-3 Init contract.** DSN from the build environment; `''` or the literal `off` → the SDK is not initialised and
@@ -86,9 +86,13 @@ set); everything else does not exist after `beforeSend`. Breadcrumb categories k
 `navigation`, `ui.click`, `app.lifecycle`, `device.orientation`, `touch`; every other category, including `console`,
 is dropped. Text passes through one redactor with a fixed rule order (named parameters, credential path segments
 including their percent-decoded form, coordinate shapes, `Bearer`/JWT, emails, then any `[A-Za-z0-9_-]` run of six or
-more characters containing a letter and a digit that is not a uuid). Opaque paths — stack frames, exception type and
-mechanism, `sdk`, `release`, `dist`, `event_id`, device/OS/app/browser contexts, `debug_meta`, `modules` — are copied
-untouched. Accepted false positives on non-opaque text (`x86_64`, a short git SHA) are recorded in the oracle.
+more characters containing a letter and a digit that is not a uuid). Opaque paths are copied untouched, the complete
+set: `event_id`, `timestamp`, `release`, `dist`, `sdk`, `platform`, `environment`, `level`,
+`exception.values[].stacktrace`, `exception.values[].type`, `exception.values[].mechanism`, `contexts.device`,
+`contexts.os`, `contexts.app`, `contexts.react_native_context`, `contexts.browser`, `debug_meta`, `modules`, and on every
+breadcrumb `timestamp` and `level`. Oracle case C-22 puts a value the token rule would redact on each of them. Accepted
+false positives on non-opaque text — `x86_64`, `sha256`, `iPhone15`, a short git SHA such as `431b947` — are oracle
+rows C-19.3, C-19.4, C-19.9, C-19.8.
 
 **D-10 What is captured.** Uncaught errors, unhandled rejections, native crashes (Mobile), React render errors via the
 root error boundary; CMS additionally reports a response-contract mismatch from `apiFetchParsed` as path template and
@@ -119,5 +123,13 @@ Rebuilding with the DSN set to `off` stops *transmission*. Neither needs a code 
   blank `CMS_SENTRY_DSN`; `mobile-env.py` fails staging/prod without the parameter.
 - `docs/accounts.md` lists the three projects, where each DSN lives and both kill switches.
 - Business-plan cost is a manual subscription line in GoGo-BE's cost registry (follow-up to GoGo-BE#389).
-- Rollback: delete the manifest row and the workflow step; clients built with the DSN keep sending until rebuilt with
-  `off` or until the client key is disabled.
+- Rollback, all of it (one revert of the PR that introduced this ADR does the same):
+  - `config/secrets.manifest.yml`: remove the `sentry/dsn` mobile row, and delete the SSM parameter
+    (`delete.sh <env> sentry/dsn`) so `validate.sh --strict` does not report it as undeclared;
+  - `scripts/secrets/mobile-env.py`: remove the second SSM read and the `EXPO_PUBLIC_SENTRY_DSN` output — otherwise
+    staging/prod mobile builds keep being refused without the parameter;
+  - `.github/workflows/deploy-cms-dev.yml`: remove the `CMS_SENTRY_DSN` env line, the check step and the
+    `VITE_SENTRY_DSN`/`VITE_RELEASE_SHA` exports; then remove the variable from the `dev` environment;
+  - `.github/workflows/validate.yml` and `scripts/deploy/check-sentry-dsn.sh` (+ test): remove;
+  - `docs/accounts.md`, `docs/secrets.md`: restore the single `gogo-be` row and the mobile table.
+  Clients already built with a DSN keep sending until rebuilt with `off` or until the client key is disabled (D-11).
