@@ -66,11 +66,18 @@ promoting an existing version keeps the DSN baked into it, so rollback works wit
 minified and native crash frames are not symbolicated beyond system symbols — a native crash is countable and
 attributable to a release, not readable. Uploads are phase 2, each with its own scoped token
 (`ci/<env>/sentry/mobile-auth-token`, which the prod Terraform already grants to a mobile-release role; a
-cms-deploy-scoped token for the CMS), never the backend deploy token.
+cms-deploy-scoped token for the CMS), never the backend deploy token. Sentry additionally fetches the minified bundle from the CMS host
+(`scrapeJavaScript`, bounded to `allowedDomains`) and attaches `context_line`/`pre_context`/`post_context` to stored
+frames: bundle text, never event data, never sent by the SDK. Off at phase 2 once artifacts are uploaded.
 
 **D-6 Project settings before the first client event** (owner, console): `scrubIPAddresses` on, `storeCrashReports`
-0, `sensitiveFields` for invite/slug/token/coordinate/email names on `gogo-mobile` and `gogo-cms`; `allowedDomains` on
-`gogo-cms` limited to the CMS hosts. These are a second layer only; acceptance never relies on them (D-10).
+0, `sensitiveFields` for invite/slug/token/coordinate/email names on `gogo-mobile` and `gogo-cms` (not `code`: the
+match is a substring on keys and values, so it also nulled `status_code` and `country_code` — removed 2026-10-14,
+GoGo-Infra#215); `allowedDomains` on `gogo-cms` limited to the CMS hosts; Advanced Data Scrubbing rule
+`[Remove] [Anything] from [$user.geo.**]` on `gogo-mobile` and `gogo-cms` (and `gogo-be`, owner 2026-10-14). These are
+a second layer only and acceptance never relies on them (D-10) — **except `user.geo`**: Sentry derives it from the
+connection IP at ingest even with IP scrubbing on, no SDK setting prevents it, so the `$user.geo.**` rule is the only
+layer and the stored-event acceptance (CMS#238 S06, Mobile#336) measures it.
 
 **D-7 Seer.** No client data reaches Seer — automatically or by manual invocation — until a privacy review and the
 Sentry DPA are recorded as a dated owner decision on GoGo-Infra#208. Seer switches are organisation-wide with
@@ -78,7 +85,9 @@ per-project automation toggles only, so the default is Seer off for the organisa
 be isolated nor switched off, the client rollout stops before the first real event. The privacy review may cite the
 relay evidence of D-10, which needs no Sentry at all.
 
-**D-8 User context** is a pseudonymous id or nothing. The event's `user` is rebuilt as `{ id }` before send.
+**D-8 User context** is a pseudonymous id or nothing. The event's `user` is rebuilt as `{ id }` before send. Sentry adds
+`user.sentry_user` = `id:<id>` (and the `user` tag) from that id; no other member of `user` may hold a non-null value
+on a stored event (a `geo` left null or empty by the D-6 rule is not a value).
 
 **D-9 Allowlists, not denylists.** Requests and breadcrumb data are rebuilt from named fields (`url`, `method`,
 `query_string`, and the headers `accept accept-language content-length content-type user-agent x-request-id` — BE's
