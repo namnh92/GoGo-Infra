@@ -18,6 +18,9 @@ Required, not optional:
   there instantly cuts console access for that provider; revoking one by accident locks the
   account owner out of the console, though it does **not** invalidate the API tokens below.
 - No GitHub account sharing. A shared login makes the audit trail on every provider useless.
+- Periodic review of **Settings → Applications → Installed GitHub Apps** as well. An installed App
+  reads repositories, not just the login: Sentry's App (ADR-0012a D-3) is on "Only select repositories"
+  (five, see the register), and removing a repository from its selection, or uninstalling it, is the off switch.
 
 ## 2. OAuth is for humans; machines use scoped tokens
 
@@ -138,7 +141,7 @@ Fill in as accounts are created. "Owner" is a person; "backup" must not be the s
 | Tenjin | | GitHub OAuth | | **none** | | |
 | Google Cloud | project number `186055730568` — every DEV server key | Google | | **none** | | |
 | Grafana Cloud | Free stack `prometheus-prod-37-prod-ap-southeast-1`, instance id `3553140` — dev and prod share it via an `env` label. Superseded for DEV by ADR-0007 on 04/09/2026; tokens revoked 05/09/2026 after cutover | GitHub OAuth | | **none** | | 01/09/2026 |
-| Sentry | org `gogo-vn` (region US; slug renamed from `gogo-fe` 2026-10-14 — DSN unchanged), team `gogo`. Plan: **Business + Seer AI** (owner stated 2026-10-14) — supersedes the Free plan ADR-0006 budgeted; Seer sends error payloads to an AI provider. **Seer** stays **on** (owner Q-1, 2026-10-14: Seer purchased); ADR-0011 D-7 gate = privacy review + Sentry DPA, both before the first real client event — **met 2026-10-14**: owner accepted the privacy review and signed the DPA (#208 comments 6164369716, 6164377573), subject to relay evidence per client; GitHub integration for Seer not connected. Org state read 2026-10-14: `hideAiFeatures` false, `genAIConsent` false, per-project `seerScannerAutomation` true, `autofixAutomationTuning` medium | GitHub OAuth | `namnh92` (owner stated 2026-10-05) | **none** | | 2026-10-05 |
+| Sentry | org `gogo-vn` (region US; slug renamed from `gogo-fe` 2026-10-14 — DSN unchanged), team `gogo`. Plan: **Business + Seer AI** (owner stated 2026-10-14) — supersedes the Free plan ADR-0006 budgeted; Seer sends error payloads to an AI provider. **Seer** stays **on** (owner Q-1, 2026-10-14: Seer purchased); ADR-0011 D-7 gate = privacy review + Sentry DPA, both before the first real client event — **met 2026-10-14**: owner accepted the privacy review and signed the DPA (#208 comments 6164369716, 6164377573), subject to relay evidence per client. GitHub integration: see *Sentry — GitHub App and spend controls* below (ADR-0012a D-3, D-4). Org state read 2026-10-14: `hideAiFeatures` false, `genAIConsent` false, per-project `seerScannerAutomation` true, `autofixAutomationTuning` medium | GitHub OAuth | `namnh92` (owner stated 2026-10-05) | **none** | | 2026-10-05 |
 | Sentry · `gogo-be` | `node-nestjs`, id `4512201628254209` — api and worker, every environment; `environment` from `APP_ENV` since GoGo-BE#674 (DEV api/worker report `dev`, checked 2026-10-14). Settings 2026-10-14: dataScrubber + defaults on, `scrubIPAddresses` false (BE drops IP structurally; Q-2 on #208), `allowedDomains` `*` | GitHub OAuth | `namnh92` | **none** | | 2026-10-05 |
 | Sentry · `gogo-mobile` | `react-native`, id `4512252504178688` — GoGo-MobileApp, every flavour; `environment` dev/staging/prod from the build flavour. Settings 2026-10-14 (ADR-0011 D-6, O-1 done): dataScrubber + defaults on, `scrubIPAddresses` true, `storeCrashReports` 0, `sensitiveFields` = inviteCode invite code slug token refreshToken accessToken guestToken authorization cookie lat lng latitude longitude originLat originLng email, `allowedDomains` `*` (native), default alert rules | GitHub OAuth | `namnh92` | **none** | | 2026-10-14 |
 | Sentry · `gogo-cms` | `javascript-react`, id `4512252504178689` — GoGo-CMS browser bundle (not the Worker); `environment` from `VITE_APP_ENV`, `release` = deployed SHA. Settings 2026-10-14 (ADR-0011 D-6, O-1 done): as `gogo-mobile`, except `allowedDomains` = `cms-dev.gogo.id.vn` (add each CMS host when it exists) | GitHub OAuth | `namnh92` | **none** | | 2026-10-14 |
@@ -151,6 +154,41 @@ worse than the blank it replaced.
 
 Every row has one owner and no backup. That is the accepted state as of 31/08/2026, not an
 omission in the table — see the decision above, and the trigger that ends it.
+
+### Sentry — GitHub App and spend controls (ADR-0012a)
+
+**GitHub App (D-3).** Sentry's GitHub App, GitHub installation 171214525 on `namnh92` (Sentry integration
+id 540770), "Only select repositories": **GoGo-BE, GoGo-CMS, GoGo-FE, GoGo-Infra, GoGo-MobileApp** (owner
+decision 2026-10-14, replacing "GoGo-BE first"). GoGo-WebApp and GoGo-Mockup are not connected. Precondition
+met 2026-10-14 on GoGo-Infra#208: the privacy review covers repository content for all five, and DPA 5.1.0
+covers the subprocessors. Code mapping: `gogo-be` → GoGo-BE `develop`, stack trace root `/app/`, source root
+empty (fixed 2026-10-14); `gogo-cms`, `gogo-mobile` have empty roots until source maps are uploaded; GoGo-FE and GoGo-Infra have no Sentry project. Granted permissions (read 2026-10-14): read on
+administration, code quality, metadata, security events; read and write on actions, checks, code, commit
+statuses, issues, pull requests, repository hooks; no `workflows`. Seer: root-cause analysis on; **Enable Code
+Generation on** (owner decision 2026-10-14). A Seer pull request goes through the normal chain: issue, `Refs`,
+Sol review, CI, evidence, DEV merge. Other GitHub-writing features stay off: suspect-PR comments, comment
+sync, status and assignment sync (read 2026-10-14). Toggles are operational restrictions, not a narrower
+grant; branch protection on `develop`/`master` is what still stands if a setting flips. Each repository added
+or setting changed is recorded on GoGo-Infra#208 with the date and the settings read before and after. Seer
+bills per active contributor (owner = one seat; accepted 2026-10-14).
+
+**Spend controls (D-4).** Set by the owner at the console 2026-10-14, values confirmed in session (Settings → Subscription / Spend
+Allocations, org owner only):
+
+| Control | Value |
+| --- | --- |
+| Pay-as-you-go budget | $100 / month |
+| Spend Allocation per project | errors: `gogo-be` 30k · `gogo-mobile` 10k · `gogo-cms` 10k |
+| Usage notification | at 80 % |
+| Spike protection | on |
+
+Plan: Business + Seer, annual, renewal **2027-10-14**; year one draws on a promotional credit before
+the card (owner-reported balance $9,040 on 2026-10-14; credit expires **2027-10-14**, owner confirmed 2026-10-14). Year-two
+run-rate target: **≤ $150 / month** all-in (owner decision 2026-10-14). **Milestone:** **2027-09-14**,
+one month before the renewal and the credit's expiry — set year two so that
+monthly plan + Seer contributors + PAYG budget ≤ $150, from the run-rate measured in GoGo-BE's Cost
+Center (GoGo-BE#695 manual items, #696 usage collector). Adjustment path, owner's choice: lower PAYG;
+fewer Seer contributors or Seer off; a lower plan tier at renewal (ADR-0012a D-4).
 
 ### Which Google Cloud project owns a DEV credential
 
