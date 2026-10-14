@@ -370,7 +370,7 @@
         "bounds": {},
         "viewport": {},
         "latlng": "",
-        "ll": null,
+        "ll": "10.7769,106.7009",
         "geom": "",
         "geometry": {},
         "point": {
@@ -388,14 +388,31 @@
         "bounds": "[redacted]",
         "viewport": "[redacted]",
         "latlng": "[redacted]",
-        "ll": null,
+        "ll": "[redacted]",
         "geom": "[redacted]",
         "geometry": "[redacted]",
         "point": "[redacted]",
         "origin": "[redacted]",
         "id": "keep"
       },
-      "note": "every container key's value becomes the literal; null and undefined stay as they are"
+      "note": "every container key's value becomes the literal"
+    },
+    {
+      "id": "C-7b",
+      "surface": "deep",
+      "input": {
+        "point": null,
+        "bbox": null,
+        "ll": null,
+        "id": "keep"
+      },
+      "expected": {
+        "point": null,
+        "bbox": null,
+        "ll": null,
+        "id": "keep"
+      },
+      "note": "null stays null under a container key"
     },
     {
       "id": "C-20",
@@ -506,7 +523,7 @@
             "model": "SM-S911B"
           },
           "os": {
-            "build": "22B83"
+            "build": "22B83a1"
           },
           "react_native_context": {
             "js_engine": "hermes2"
@@ -540,16 +557,16 @@
             }
           ]
         },
-        "release": "max.gogo.dev@0.1.0+42",
+        "release": "max.gogo.dev@0.1.0+build42a",
         "event_id": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
         "timestamp": "2026-10-14T05:00:00Z",
         "dist": "42abc1",
-        "platform": "node2",
+        "platform": "native2x",
         "environment": "dev1x2",
         "level": "error1",
         "sdk": {
-          "name": "sentry.javascript.react-native",
-          "version": "6.1.0x1"
+          "name": "sentry.react2native",
+          "version": "v610rc1"
         },
         "debug_meta": {
           "images": [
@@ -559,7 +576,7 @@
           ]
         },
         "modules": {
-          "react2x": "19.0.0"
+          "react2x": "19.0.0-rc2abc"
         },
         "breadcrumbs": [
           {
@@ -586,7 +603,7 @@
             "model": "SM-S911B"
           },
           "os": {
-            "build": "22B83"
+            "build": "22B83a1"
           },
           "react_native_context": {
             "js_engine": "hermes2"
@@ -620,16 +637,16 @@
             }
           ]
         },
-        "release": "max.gogo.dev@0.1.0+42",
+        "release": "max.gogo.dev@0.1.0+build42a",
         "event_id": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
         "timestamp": "2026-10-14T05:00:00Z",
         "dist": "42abc1",
-        "platform": "node2",
+        "platform": "native2x",
         "environment": "dev1x2",
         "level": "error1",
         "sdk": {
-          "name": "sentry.javascript.react-native",
-          "version": "6.1.0x1"
+          "name": "sentry.react2native",
+          "version": "v610rc1"
         },
         "debug_meta": {
           "images": [
@@ -639,7 +656,7 @@
           ]
         },
         "modules": {
-          "react2x": "19.0.0"
+          "react2x": "19.0.0-rc2abc"
         },
         "breadcrumbs": [
           {
@@ -675,10 +692,68 @@
         "leaf": "x"
       },
       "expected": {
-        "construct": {
-          "kind": "nest",
-          "depth": 32,
-          "leaf": "[redacted]"
+        "a": {
+          "a": {
+            "a": {
+              "a": {
+                "a": {
+                  "a": {
+                    "a": {
+                      "a": {
+                        "a": {
+                          "a": {
+                            "a": {
+                              "a": {
+                                "a": {
+                                  "a": {
+                                    "a": {
+                                      "a": {
+                                        "a": {
+                                          "a": {
+                                            "a": {
+                                              "a": {
+                                                "a": {
+                                                  "a": {
+                                                    "a": {
+                                                      "a": {
+                                                        "a": {
+                                                          "a": {
+                                                            "a": {
+                                                              "a": {
+                                                                "a": {
+                                                                  "a": {
+                                                                    "a": {
+                                                                      "a": "[redacted]"
+                                                                    }
+                                                                  }
+                                                                }
+                                                              }
+                                                            }
+                                                          }
+                                                        }
+                                                      }
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "note": "the root is level 0; the value found at level 32 is replaced by the literal, so 32 nested `a` keys end in the literal"

@@ -37,7 +37,7 @@ Clients vendor the file verbatim and pin it by version and sha256 in their own A
 digest. A case a client cannot pass is a change to this ADR, not a local exception. Version 1:
 
 ```
-sha256  1b7f1e9141d5ec0940cbc4537a83603e400032f875240d622afd478ade6356c0  0011/redaction-cases.v1.json
+sha256  decf6c4336269b086b209a4d27a9c36ca2c392b307c9d76e4b24883a4f4ef6a0  0011/redaction-cases.v1.json
 ```
 
 **D-3 Init contract.** DSN from the build environment; `''` or the literal `off` → the SDK is not initialised and
@@ -123,7 +123,8 @@ Rebuilding with the DSN set to `off` stops *transmission*. Neither needs a code 
   blank `CMS_SENTRY_DSN`; `mobile-env.py` fails staging/prod without the parameter.
 - `docs/accounts.md` lists the three projects, where each DSN lives and both kill switches.
 - Business-plan cost is a manual subscription line in GoGo-BE's cost registry (follow-up to GoGo-BE#389).
-- Rollback, all of it (one revert of the PR that introduced this ADR does the same):
+- Rollback = a revert of the PR that introduced this ADR (the repository items below) **plus** the external cleanup a
+  revert cannot do (the SSM parameter and the GitHub variable, named below):
   - `config/secrets.manifest.yml`: remove the `sentry/dsn` mobile row, and delete the SSM parameter
     (`delete.sh <env> sentry/dsn`) so `validate.sh --strict` does not report it as undeclared;
   - `scripts/secrets/mobile-env.py`: remove the second SSM read and the `EXPO_PUBLIC_SENTRY_DSN` output — otherwise
