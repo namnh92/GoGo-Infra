@@ -5,7 +5,9 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
+import sys
 import tempfile
 import uuid
 from urllib.parse import urlparse
@@ -21,6 +23,30 @@ def app_id(value):
         raise ValueError("ONESIGNAL_APP_ID must be a UUID") from None
 
 
+# GoGo-Infra#208, ADR-0011. A Sentry DSN is config that ships in the binary, not
+# a credential: its only power is to submit events to one project. The one other
+# accepted value is the literal `off` — a single spelling, so a typo (`OFF`,
+# `false`, `0`) cannot disable crash reporting on a store build by accident.
+SENTRY_DSN = re.compile(r"^https://[A-Za-z0-9]+@[A-Za-z0-9.-]+/[0-9]+$")
+SENTRY_OFF = "off"
+
+
+def sentry_dsn(environment, value):
+    """The value written as EXPO_PUBLIC_SENTRY_DSN, or ValueError.
+
+    `value` is None when the SSM parameter does not exist. Only dev may build
+    without one: a staging or production binary that silently reports nothing
+    is found after it ships, and app.config.ts refuses the same build.
+    """
+    if value is None:
+        if environment == "dev":
+            return ""
+        raise ValueError(f"/gogo/{environment}/mobile/sentry/dsn is required for {environment} builds")
+    if value == SENTRY_OFF or SENTRY_DSN.match(value):
+        return value
+    raise ValueError("EXPO_PUBLIC_SENTRY_DSN must be a Sentry DSN (https://<key>@<host>/<project>) or the literal off")
+
+
 def https_url(value):
     parsed = urlparse(value)
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
@@ -28,7 +54,7 @@ def https_url(value):
     return value.rstrip("/")
 
 
-def mobile_values(environment, identifier, api_url, web_url, apns_mode):
+def mobile_values(environment, identifier, api_url, web_url, apns_mode, dsn=""):
     if environment not in FLAVORS or apns_mode not in ("development", "production"):
         raise ValueError("Invalid environment or APNs signing mode")
     return {
@@ -38,6 +64,7 @@ def mobile_values(environment, identifier, api_url, web_url, apns_mode):
         "ONESIGNAL_APP_ID": app_id(identifier),
         "ONESIGNAL_CONFIG_ENV": environment,
         "ONESIGNAL_APNS_MODE": apns_mode,
+        "EXPO_PUBLIC_SENTRY_DSN": dsn,
     }
 
 
@@ -59,6 +86,24 @@ def write_env(path, values):
             os.unlink(temporary)
 
 
+class ParameterMissing(Exception):
+    pass
+
+
+def read_parameter(args, name):
+    """The parameter's value. ParameterMissing only when SSM says it does not
+    exist; any other failure (session, permission) is not "absent" and stops."""
+    command = ["aws", "ssm", "get-parameter", "--region", args.region, "--name", name, "--output", "json"]
+    if args.profile:
+        command += ["--profile", args.profile]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+    if result.returncode:
+        if "ParameterNotFound" in result.stderr:
+            raise ParameterMissing(name)
+        raise RuntimeError(name)
+    return json.loads(result.stdout)["Parameter"]["Value"]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("environment", choices=FLAVORS)
@@ -69,18 +114,26 @@ def main():
     parser.add_argument("--apns-mode", required=True, choices=["development", "production"], help="Signing channel, not GoGo environment: TestFlight uses production even for DEV")
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
-    command = ["aws", "ssm", "get-parameter", "--region", args.region, "--name", f"/gogo/{args.environment}/backend/onesignal/app-id", "--output", "json"]
-    if args.profile:
-        command += ["--profile", args.profile]
-    result = subprocess.run(command, capture_output=True, text=True, timeout=30)
-    if result.returncode:
+    try:
+        identifier = read_parameter(args, f"/gogo/{args.environment}/backend/onesignal/app-id")
+    except (ParameterMissing, RuntimeError, ValueError, KeyError):
         parser.exit(1, "Cannot read this environment's OneSignal App ID from SSM; check AWS session/path.\n")
     try:
-        identifier = json.loads(result.stdout)["Parameter"]["Value"]
-        values = mobile_values(args.environment, identifier, args.api_url, args.web_url, args.apns_mode)
+        raw_dsn = read_parameter(args, f"/gogo/{args.environment}/mobile/sentry/dsn")
+    except ParameterMissing:
+        raw_dsn = None
+    except (RuntimeError, ValueError, KeyError):
+        parser.exit(1, "Cannot read this environment's Sentry DSN from SSM; check AWS session/path.\n")
+    try:
+        dsn = sentry_dsn(args.environment, raw_dsn)
+        values = mobile_values(args.environment, identifier, args.api_url, args.web_url, args.apns_mode, dsn)
         write_env(args.out, values)
-    except (ValueError, KeyError):
+    except ValueError as error:
+        parser.exit(1, f"Invalid mobile configuration ({error}); no output updated.\n")
+    except KeyError:
         parser.exit(1, "Invalid mobile configuration; no output updated.\n")
+    if raw_dsn is None:
+        print("warning: no Sentry DSN for dev; crash reporting is off in this build", file=sys.stderr)
     print(f"Wrote {args.out}: {args.environment}, {len(values)} public variables, mode 0600")
 
 

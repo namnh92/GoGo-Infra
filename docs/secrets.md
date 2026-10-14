@@ -77,6 +77,7 @@ open a pull request — see `docs/adr/0001`.
 
 /gogo/<env>/mobile/google/maps-ios-api-key      client key — ships in the app binary
 /gogo/<env>/mobile/google/maps-android-api-key  client key — ships in the app binary
+/gogo/<env>/mobile/sentry/dsn                   String — Sentry DSN or `off`, ships in the app binary (ADR-0011)
 ```
 
 The `mobile` branch holds client keys. They are `SecureString` like everything else — public in
@@ -84,6 +85,12 @@ a shipped app is not the same as public in a parameter store an offboarded opera
 but their protection model is the restriction on the key, not secrecy. See
 `docs/provider-setup.md` §7. Read by the developer role only; the deploy and monitor roles are
 not granted the path.
+
+One exception, `mobile/sentry/dsn` (GoGo-Infra#208, ADR-0011), is a `String`: a DSN is not a key
+with a restriction behind it but config whose only power is to submit events to one Sentry
+project — the same reason `backend/observability/sentry-dsn` is a `String`. It is the only
+`mobile` value JavaScript reads (`EXPO_PUBLIC_SENTRY_DSN`), rendered by `mobile-env.py`, which
+accepts a DSN or the literal `off` and refuses a staging/prod build without one.
 
 `SecureString`, Standard tier. One parameter per independently permissioned value — a single
 JSON blob would force every consumer to hold every secret.
