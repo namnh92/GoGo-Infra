@@ -177,6 +177,13 @@ jobs:
           VITE_SENTRY_DSN="${CMS_SENTRY_DSN}"
           VITE_RELEASE_SHA="$(git rev-parse HEAD)"
           export VITE_SENTRY_DSN VITE_RELEASE_SHA
+          # `wrangler versions upload` runs the CMS's own build.command again in
+          # the next step; without these in GITHUB_ENV that rebuild ships
+          # dsn "" and release "local" (cms-dev, 2026-10-14). The DSN is one
+          # line by construction (check-sentry-dsn.sh), so it cannot inject a
+          # second variable.
+          echo "VITE_SENTRY_DSN=${VITE_SENTRY_DSN}" >> "$GITHUB_ENV"
+          echo "VITE_RELEASE_SHA=${VITE_RELEASE_SHA}" >> "$GITHUB_ENV"
           # The quality gates live in GoGo-CMS's own CI and run on every PR and
           # push; re-running them here would double the compute without being
           # the thing that decides mergeability. What this asserts is the one
@@ -207,6 +214,14 @@ jobs:
           fi
           echo "version_id=${version_id}" >> "$GITHUB_OUTPUT"
           echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
+      # The bundle wrangler uploaded is the one that ships; prove the decision
+      # reached it before any traffic moves.
+      - name: the uploaded bundle carries the error-reporting decision
+        if: inputs.promote_version_id == ''
+        run: >-
+          ./infra/scripts/deploy/check-cms-bundle.sh cms/dist
+          "${{ steps.upload.outputs.sha }}" "${CMS_SENTRY_DSN}"
 
       # ---- Promotion, shared by both paths ---------------------------------
       - name: promote to 100% of traffic

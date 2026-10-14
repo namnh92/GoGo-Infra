@@ -344,6 +344,8 @@ jobs:
       # mistyped value would ship a console that reports nowhere.
       - name: a CMS build gets a Sentry DSN or an explicit off
         run: ./scripts/deploy/check-sentry-dsn.test.sh
+      - name: check-cms-bundle tests
+        run: ./scripts/deploy/check-cms-bundle.test.sh
 
       # Tenjin's client keys are per environment and look alike. The failure
       # this guards is a DEV key rendered into a store build, which attributes
