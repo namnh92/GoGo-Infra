@@ -339,6 +339,12 @@ jobs:
       - name: the mobile env renderer refuses server secrets and cross-env values
         run: python3 scripts/secrets/mobile-env.test.py
 
+      # GoGo-Infra#208, ADR-0011. deploy-cms-dev bakes CMS_SENTRY_DSN into the
+      # bundle. Only a DSN or the literal `off` may reach a build; an empty or
+      # mistyped value would ship a console that reports nowhere.
+      - name: a CMS build gets a Sentry DSN or an explicit off
+        run: ./scripts/deploy/check-sentry-dsn.test.sh
+
       # Tenjin's client keys are per environment and look alike. The failure
       # this guards is a DEV key rendered into a store build, which attributes
       # real installs to the wrong app and cannot be undone after the fact.

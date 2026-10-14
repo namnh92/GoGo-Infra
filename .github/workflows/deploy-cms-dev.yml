@@ -12,6 +12,16 @@ name: deploy-cms-dev
 # ordering and the promotion. Terraform still owns the hostname and the Access
 # policy — this workflow only uploads a script and points traffic at a version
 # (terraform/modules/cloudflare-cms-hosting/README.md).
+#
+# Error reporting (GoGo-Infra#208, ADR-0011). The build bakes in
+# VITE_SENTRY_DSN from the repository variable CMS_SENTRY_DSN (environment
+# `dev`) and VITE_RELEASE_SHA from the commit being built. The DSN lives in a
+# GitHub variable, not SSM: it is config, not a credential (it can only submit
+# events to project gogo-vn/gogo-cms), a `ci/*` parameter may never be rendered
+# into a build, and a `backend/*` one is rendered into the API's process. It is
+# required on the build path only — a DSN or the literal `off` — and never on
+# the promotion path: promoting an old version keeps that version's baked DSN,
+# so a rollback works with the variable blank.
 
 on:
   workflow_dispatch:
@@ -48,6 +58,7 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       CMS_BE_ORIGIN: ${{ vars.CMS_BE_ORIGIN }}
       CMS_SCRIPT_NAME: ${{ vars.CMS_SCRIPT_NAME }}
+      CMS_SENTRY_DSN: ${{ vars.CMS_SENTRY_DSN }}
 
     steps:
       - name: check deploy configuration
@@ -149,11 +160,23 @@ jobs:
           echo "worker name ${declared}"
 
       # ---- Normal path -----------------------------------------------------
+      # Before the build, not inside it: a refused value must stop the run
+      # before anything is uploaded, and the check script lives in this
+      # repository's checkout, not the CMS one.
+      - name: the build has an error-reporting decision
+        if: inputs.promote_version_id == ''
+        run: ./infra/scripts/deploy/check-sentry-dsn.sh CMS_SENTRY_DSN "${CMS_SENTRY_DSN}"
+
       - name: build
         if: inputs.promote_version_id == ''
         working-directory: cms
         run: |
           set -euo pipefail
+          # ADR-0011: `off` builds with reporting disabled; the SDK wrapper in
+          # GoGo-CMS treats it exactly like an empty DSN.
+          VITE_SENTRY_DSN="${CMS_SENTRY_DSN}"
+          VITE_RELEASE_SHA="$(git rev-parse HEAD)"
+          export VITE_SENTRY_DSN VITE_RELEASE_SHA
           # The quality gates live in GoGo-CMS's own CI and run on every PR and
           # push; re-running them here would double the compute without being
           # the thing that decides mergeability. What this asserts is the one

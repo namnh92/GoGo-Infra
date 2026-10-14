@@ -1,0 +1,1526 @@
+{
+  "version": 1,
+  "source": "GoGo-Infra ADR-0011 (shape: dev/handoffs/sa-shape-sentry-clients.fable.md rev 3 §4)",
+  "literal": "[redacted]",
+  "cases": [
+    {
+      "id": "C-1",
+      "surface": "text",
+      "input": "https://go-dev.gogo.id.vn/r/YDi_00PB1z4FSQZjpLbgdw",
+      "expected": "https://go-dev.gogo.id.vn/r/[redacted]"
+    },
+    {
+      "id": "C-1b.1",
+      "surface": "text",
+      "input": "https://api-dev.gogo.id.vn/v1/share-links/abc1234?x=1",
+      "expected": "https://api-dev.gogo.id.vn/v1/share-links/[redacted]?x=1"
+    },
+    {
+      "id": "C-1b.2",
+      "surface": "text",
+      "input": "/share-links/abc1234",
+      "expected": "/share-links/[redacted]"
+    },
+    {
+      "id": "C-1c.1",
+      "surface": "text",
+      "input": "https://go.gogo.id.vn%2Fl%2Fabc1234",
+      "expected": "https://go.gogo.id.vn%2Fl%2F[redacted]"
+    },
+    {
+      "id": "C-1c.2",
+      "surface": "text",
+      "input": "gogo://r%2FYDi_00PB1z4FSQZjpLbgdw",
+      "expected": "gogo://r%2F[redacted]"
+    },
+    {
+      "id": "C-2.1",
+      "surface": "text",
+      "input": "gogo-dev://invite/YDi_00PB1z4FSQZjpLbgdw",
+      "expected": "gogo-dev://invite/[redacted]"
+    },
+    {
+      "id": "C-2.2",
+      "surface": "text",
+      "input": "https://x/invite/ABC_12",
+      "expected": "https://x/invite/[redacted]"
+    },
+    {
+      "id": "C-2b.1",
+      "surface": "text",
+      "input": "gogo-dev://room/YDi_00PB1z4FSQZjpLbgdw",
+      "expected": "gogo-dev://room/[redacted]"
+    },
+    {
+      "id": "C-2b.2",
+      "surface": "text",
+      "input": "https://go-dev.gogo.id.vn/rooms/ABC_123",
+      "expected": "https://go-dev.gogo.id.vn/rooms/[redacted]"
+    },
+    {
+      "id": "C-2c.1",
+      "surface": "text",
+      "input": "gogo-dev://room/%41BC_123",
+      "expected": "gogo-dev://room/[redacted]",
+      "note": "percent-decoded form matches; the raw span is redacted"
+    },
+    {
+      "id": "C-2c.2",
+      "surface": "text",
+      "input": "https://go-dev.gogo.id.vn/r/YDi%5F00PB1z4FSQZjpLbgdw",
+      "expected": "https://go-dev.gogo.id.vn/r/[redacted]"
+    },
+    {
+      "id": "C-21.1",
+      "surface": "text",
+      "input": "https://go-dev.gogo.id.vn/room/5f1c2a3e-1234-4abc-8def-0123456789ab",
+      "expected": "https://go-dev.gogo.id.vn/room/5f1c2a3e-1234-4abc-8def-0123456789ab",
+      "note": "uuid kept"
+    },
+    {
+      "id": "C-21.2",
+      "surface": "text",
+      "input": "/v1/rooms/5f1c2a3e-1234-4abc-8def-0123456789ab/members",
+      "expected": "/v1/rooms/5f1c2a3e-1234-4abc-8def-0123456789ab/members",
+      "note": "uuid kept"
+    },
+    {
+      "id": "C-3",
+      "surface": "text",
+      "input": "https://go.gogo.id.vn/l/abc123xyz",
+      "expected": "https://go.gogo.id.vn/l/[redacted]"
+    },
+    {
+      "id": "C-4.1",
+      "surface": "text",
+      "input": "https://x/y?token=abc&page=2&limit=20",
+      "expected": "https://x/y?token=[redacted]&page=2&limit=20"
+    },
+    {
+      "id": "C-4.2",
+      "surface": "text",
+      "input": "join failed inviteCode=XYZ",
+      "expected": "join failed inviteCode=[redacted]"
+    },
+    {
+      "id": "C-4.3",
+      "surface": "text",
+      "input": "invite_code=abc&slug=s",
+      "expected": "invite_code=[redacted]&slug=[redacted]"
+    },
+    {
+      "id": "C-4.4",
+      "surface": "text",
+      "input": "{\"refreshToken\":\"abc\",\"page\":2}",
+      "expected": "{\"refreshToken\":\"[redacted]\",\"page\":2}"
+    },
+    {
+      "id": "C-4.5",
+      "surface": "text",
+      "input": "password=hunter idempotency_key=xyz guestToken=g",
+      "expected": "password=[redacted] idempotency_key=[redacted] guestToken=[redacted]"
+    },
+    {
+      "id": "C-4.7",
+      "surface": "text",
+      "input": "key=k1 signature=s1 jwt=j1 assertion=a1 email=e1",
+      "expected": "key=[redacted] signature=[redacted] jwt=[redacted] assertion=[redacted] email=[redacted]"
+    },
+    {
+      "id": "C-4.8",
+      "surface": "text",
+      "input": "accessToken=t&invite=i&code=c&idempotencyKey=k",
+      "expected": "accessToken=[redacted]&invite=[redacted]&code=[redacted]&idempotencyKey=[redacted]"
+    },
+    {
+      "id": "C-4.9",
+      "surface": "text",
+      "input": "Refresh_Token=x ACCESS_TOKEN=y InviteCode=z",
+      "expected": "Refresh_Token=[redacted] ACCESS_TOKEN=[redacted] InviteCode=[redacted]",
+      "note": "names compare case-insensitively, camelCase and snake_case alike"
+    },
+    {
+      "id": "C-4.10",
+      "surface": "text",
+      "input": "{\"signature\":\"s\",\"jwt\":\"j\",\"email\":\"e\",\"code\":\"c\"}",
+      "expected": "{\"signature\":\"[redacted]\",\"jwt\":\"[redacted]\",\"email\":\"[redacted]\",\"code\":\"[redacted]\"}"
+    },
+    {
+      "id": "C-4.6",
+      "surface": "text",
+      "input": "cursor=eyJ0aWQiOjEyMzQ1Njc4OX0",
+      "expected": "cursor=[redacted]",
+      "note": "redacted by stage 6 (generic token run), not by name: cursors are not promised kept"
+    },
+    {
+      "id": "C-5.1",
+      "surface": "text",
+      "input": "lat=10.7769&lng=106.7009",
+      "expected": "lat=[redacted]&lng=[redacted]"
+    },
+    {
+      "id": "C-5.2",
+      "surface": "text",
+      "input": "originLat=10.7769 origin_lng=106.7 start_latitude=1.5",
+      "expected": "originLat=[redacted] origin_lng=[redacted] start_latitude=[redacted]"
+    },
+    {
+      "id": "C-5.3",
+      "surface": "text",
+      "input": "{\"latitude\":10.7769,\"name\":\"cafe\"}",
+      "expected": "{\"latitude\":\"[redacted]\",\"name\":\"cafe\"}",
+      "note": "a JSON-text value is replaced by the quoted literal so the text stays valid JSON"
+    },
+    {
+      "id": "C-5.4",
+      "surface": "text",
+      "input": "lon=1.5 longitude=2.5 userLon=3 homeLatitude=4 homeLongitude=5",
+      "expected": "lon=[redacted] longitude=[redacted] userLon=[redacted] homeLatitude=[redacted] homeLongitude=[redacted]"
+    },
+    {
+      "id": "C-5.5",
+      "surface": "text",
+      "input": "pickup_lon=6 dest_latitude=7 dest_longitude=8 Origin_Lat=9",
+      "expected": "pickup_lon=[redacted] dest_latitude=[redacted] dest_longitude=[redacted] Origin_Lat=[redacted]"
+    },
+    {
+      "id": "C-6.1",
+      "surface": "text",
+      "input": "@10.7769,106.7009,17z",
+      "expected": "@[redacted],17z"
+    },
+    {
+      "id": "C-6.2",
+      "surface": "text",
+      "input": "q=10.776901%2C106.700981",
+      "expected": "q=[redacted]"
+    },
+    {
+      "id": "C-6.3",
+      "surface": "text",
+      "input": "%4010.7769%2C106.7009",
+      "expected": "%40[redacted]"
+    },
+    {
+      "id": "C-6.4",
+      "surface": "text",
+      "input": "POINT(106.7009 10.7769)",
+      "expected": "[redacted]"
+    },
+    {
+      "id": "C-6.5",
+      "surface": "text",
+      "input": "SRID=4326;POLYGON((1.123 2.123, 3.123 4.123))",
+      "expected": "[redacted]"
+    },
+    {
+      "id": "C-6.6",
+      "surface": "text",
+      "input": "!8m2!3d10.7769!4d106.7009",
+      "expected": "!8m2[redacted]"
+    },
+    {
+      "id": "C-6.7",
+      "surface": "text",
+      "input": "10.77 and 1.5,2.5 and v1.2.3,4.5.6",
+      "expected": "10.77 and 1.5,2.5 and v1.2.3,4.5.6",
+      "note": "under three decimals: kept"
+    },
+    {
+      "id": "C-13",
+      "surface": "text",
+      "input": "Request failed: GET https://api-dev.gogo.id.vn/v1/rooms?lat=10.7769&lng=106.7009 → 500",
+      "expected": "Request failed: GET https://api-dev.gogo.id.vn/v1/rooms?lat=[redacted]&lng=[redacted] → 500"
+    },
+    {
+      "id": "C-17.1",
+      "surface": "text",
+      "input": "joined with YDi_00PB1z4FSQZjpLbgdw",
+      "expected": "joined with [redacted]"
+    },
+    {
+      "id": "C-17.2",
+      "surface": "text",
+      "input": "Bearer eyJhbGciOi.eyJzdWIi.sig_123",
+      "expected": "Bearer [redacted]"
+    },
+    {
+      "id": "C-17.3",
+      "surface": "text",
+      "input": "Bearer abc",
+      "expected": "Bearer [redacted]"
+    },
+    {
+      "id": "C-17.4",
+      "surface": "text",
+      "input": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln",
+      "expected": "[redacted]"
+    },
+    {
+      "id": "C-17.5",
+      "surface": "text",
+      "input": "the quick brown fox",
+      "expected": "the quick brown fox"
+    },
+    {
+      "id": "C-17.6",
+      "surface": "text",
+      "input": "internationalization",
+      "expected": "internationalization",
+      "note": "letters only"
+    },
+    {
+      "id": "C-17b.1",
+      "surface": "text",
+      "input": "5f1c2a3e-1234-4abc-8def-0123456789ab",
+      "expected": "5f1c2a3e-1234-4abc-8def-0123456789ab"
+    },
+    {
+      "id": "C-17b.2",
+      "surface": "text",
+      "input": "req_01HZX8K2V9M4",
+      "expected": "[redacted]",
+      "note": "request ids in text are lost; x-request-id survives in request.headers (C-8)"
+    },
+    {
+      "id": "C-17b.3",
+      "surface": "text",
+      "input": "cursor=eyJ0aWQiOjF9",
+      "expected": "cursor=[redacted]"
+    },
+    {
+      "id": "C-18.1",
+      "surface": "text",
+      "input": "staff a.nguyen0612@example.com failed",
+      "expected": "staff [redacted-email] failed"
+    },
+    {
+      "id": "C-18.2",
+      "surface": "text",
+      "input": "mailto:a@b.co",
+      "expected": "mailto:[redacted-email]"
+    },
+    {
+      "id": "C-19.1",
+      "surface": "text",
+      "input": "code=ABC123",
+      "expected": "code=[redacted]"
+    },
+    {
+      "id": "C-19.2",
+      "surface": "text",
+      "input": "ABC123",
+      "expected": "[redacted]"
+    },
+    {
+      "id": "C-19.3",
+      "surface": "text",
+      "input": "x86_64",
+      "expected": "[redacted]",
+      "note": "accepted false positives of stage 6 on non-opaque text"
+    },
+    {
+      "id": "C-19.4",
+      "surface": "text",
+      "input": "sha256",
+      "expected": "[redacted]",
+      "note": "accepted false positives of stage 6 on non-opaque text"
+    },
+    {
+      "id": "C-19.5",
+      "surface": "text",
+      "input": "Error",
+      "expected": "Error"
+    },
+    {
+      "id": "C-19.6",
+      "surface": "text",
+      "input": "123456",
+      "expected": "123456"
+    },
+    {
+      "id": "C-19.7",
+      "surface": "text",
+      "input": "abcdef",
+      "expected": "abcdef"
+    },
+    {
+      "id": "C-19.8",
+      "surface": "text",
+      "input": "431b947",
+      "expected": "[redacted]",
+      "note": "accepted false positive: a short git SHA in non-opaque text"
+    },
+    {
+      "id": "C-19.9",
+      "surface": "text",
+      "input": "iPhone15",
+      "expected": "[redacted]",
+      "note": "accepted false positive"
+    },
+    {
+      "id": "C-7",
+      "surface": "deep",
+      "input": {
+        "coordinates": [
+          1,
+          2
+        ],
+        "bbox": "x",
+        "bounds": {},
+        "viewport": {},
+        "latlng": "",
+        "ll": "10.7769,106.7009",
+        "geom": "",
+        "geometry": {},
+        "point": {
+          "x": 1,
+          "y": 2
+        },
+        "origin": {
+          "lat": 1
+        },
+        "id": "keep"
+      },
+      "expected": {
+        "coordinates": "[redacted]",
+        "bbox": "[redacted]",
+        "bounds": "[redacted]",
+        "viewport": "[redacted]",
+        "latlng": "[redacted]",
+        "ll": "[redacted]",
+        "geom": "[redacted]",
+        "geometry": "[redacted]",
+        "point": "[redacted]",
+        "origin": "[redacted]",
+        "id": "keep"
+      },
+      "note": "every container key's value becomes the literal"
+    },
+    {
+      "id": "C-7b",
+      "surface": "deep",
+      "input": {
+        "point": null,
+        "bbox": null,
+        "ll": null,
+        "id": "keep"
+      },
+      "expected": {
+        "point": null,
+        "bbox": null,
+        "ll": null,
+        "id": "keep"
+      },
+      "note": "null stays null under a container key"
+    },
+    {
+      "id": "C-20",
+      "surface": "deep",
+      "input": {
+        "refreshToken": "a",
+        "nested": {
+          "accessToken": "b",
+          "invite_code": "c"
+        },
+        "list": [
+          [
+            "token",
+            "d"
+          ]
+        ]
+      },
+      "expected": {
+        "refreshToken": "[redacted]",
+        "nested": {
+          "accessToken": "[redacted]",
+          "invite_code": "[redacted]"
+        },
+        "list": [
+          [
+            "token",
+            "[redacted]"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "C-20b",
+      "surface": "deep",
+      "input": {
+        "a": [
+          "lat",
+          10.7769
+        ],
+        "b": [
+          "originLat",
+          1
+        ],
+        "c": [
+          "start_longitude",
+          2
+        ],
+        "d": [
+          "coordinates",
+          [
+            1,
+            2
+          ]
+        ],
+        "e": [
+          [
+            "lat",
+            1
+          ],
+          [
+            "page",
+            2
+          ]
+        ]
+      },
+      "expected": {
+        "a": [
+          "lat",
+          "[redacted]"
+        ],
+        "b": [
+          "originLat",
+          "[redacted]"
+        ],
+        "c": [
+          "start_longitude",
+          "[redacted]"
+        ],
+        "d": [
+          "coordinates",
+          "[redacted]"
+        ],
+        "e": [
+          [
+            "lat",
+            "[redacted]"
+          ],
+          [
+            "page",
+            2
+          ]
+        ]
+      }
+    },
+    {
+      "id": "C-22",
+      "surface": "deep",
+      "input": {
+        "extra": {
+          "url": "https://go.gogo.id.vn/r/YDi_00PB1z4FSQZjpLbgdw",
+          "note": "lat=10.7769"
+        },
+        "contexts": {
+          "custom": {
+            "email": "x@example.com"
+          },
+          "device": {
+            "model": "SM-S911B"
+          },
+          "os": {
+            "build": "22B83a1"
+          },
+          "react_native_context": {
+            "js_engine": "hermes2"
+          },
+          "app": {
+            "app_build": "build42a"
+          },
+          "browser": {
+            "version": "chrome129"
+          }
+        },
+        "tags": {
+          "token": "abc",
+          "screen": "room"
+        },
+        "exception": {
+          "values": [
+            {
+              "type": "ContractError2",
+              "value": "boom lat=10.7769",
+              "stacktrace": {
+                "frames": [
+                  {
+                    "function": "a1b2c3"
+                  }
+                ]
+              },
+              "mechanism": {
+                "type": "onerror2"
+              }
+            }
+          ]
+        },
+        "release": "max.gogo.dev@0.1.0+build42a",
+        "event_id": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+        "timestamp": "2026-10-14T05:00:00Z",
+        "dist": "42abc1",
+        "platform": "native2x",
+        "environment": "dev1x2",
+        "level": "error1",
+        "sdk": {
+          "name": "sentry.react2native",
+          "version": "v610rc1"
+        },
+        "debug_meta": {
+          "images": [
+            {
+              "uuid": "img123abc"
+            }
+          ]
+        },
+        "modules": {
+          "react2x": "19.0.0-rc2abc"
+        },
+        "breadcrumbs": [
+          {
+            "category": "navigation",
+            "timestamp": "2026-10-14T05:00:01Z",
+            "level": "info2x",
+            "data": {
+              "from": "/a",
+              "to": "/b"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "extra": {
+          "url": "https://go.gogo.id.vn/r/[redacted]",
+          "note": "lat=[redacted]"
+        },
+        "contexts": {
+          "custom": {
+            "email": "[redacted]"
+          },
+          "device": {
+            "model": "SM-S911B"
+          },
+          "os": {
+            "build": "22B83a1"
+          },
+          "react_native_context": {
+            "js_engine": "hermes2"
+          },
+          "app": {
+            "app_build": "build42a"
+          },
+          "browser": {
+            "version": "chrome129"
+          }
+        },
+        "tags": {
+          "token": "[redacted]",
+          "screen": "room"
+        },
+        "exception": {
+          "values": [
+            {
+              "type": "ContractError2",
+              "value": "boom lat=[redacted]",
+              "stacktrace": {
+                "frames": [
+                  {
+                    "function": "a1b2c3"
+                  }
+                ]
+              },
+              "mechanism": {
+                "type": "onerror2"
+              }
+            }
+          ]
+        },
+        "release": "max.gogo.dev@0.1.0+build42a",
+        "event_id": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+        "timestamp": "2026-10-14T05:00:00Z",
+        "dist": "42abc1",
+        "platform": "native2x",
+        "environment": "dev1x2",
+        "level": "error1",
+        "sdk": {
+          "name": "sentry.react2native",
+          "version": "v610rc1"
+        },
+        "debug_meta": {
+          "images": [
+            {
+              "uuid": "img123abc"
+            }
+          ]
+        },
+        "modules": {
+          "react2x": "19.0.0-rc2abc"
+        },
+        "breadcrumbs": [
+          {
+            "category": "navigation",
+            "timestamp": "2026-10-14T05:00:01Z",
+            "level": "info2x",
+            "data": {
+              "from": "/a",
+              "to": "/b"
+            }
+          }
+        ]
+      },
+      "note": "applied at the event root. Every opaque path carries a value stage 6 would redact; all of them must come back unchanged, while extra/contexts.custom/tags/exception value are redacted"
+    },
+    {
+      "id": "C-23.1",
+      "surface": "deep",
+      "construct": {
+        "kind": "cycle"
+      },
+      "expected": {
+        "self": "[redacted]"
+      },
+      "note": "cycle construct is { self: <itself> }; the repeated reference becomes the literal"
+    },
+    {
+      "id": "C-23.2",
+      "surface": "deep",
+      "construct": {
+        "kind": "nest",
+        "depth": 40,
+        "leaf": "x"
+      },
+      "expected": {
+        "a": {
+          "a": {
+            "a": {
+              "a": {
+                "a": {
+                  "a": {
+                    "a": {
+                      "a": {
+                        "a": {
+                          "a": {
+                            "a": {
+                              "a": {
+                                "a": {
+                                  "a": {
+                                    "a": {
+                                      "a": {
+                                        "a": {
+                                          "a": {
+                                            "a": {
+                                              "a": {
+                                                "a": {
+                                                  "a": {
+                                                    "a": {
+                                                      "a": {
+                                                        "a": {
+                                                          "a": {
+                                                            "a": {
+                                                              "a": {
+                                                                "a": {
+                                                                  "a": {
+                                                                    "a": {
+                                                                      "a": "[redacted]"
+                                                                    }
+                                                                  }
+                                                                }
+                                                              }
+                                                            }
+                                                          }
+                                                        }
+                                                      }
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "note": "the root is level 0; the value found at level 32 is replaced by the literal, so 32 nested `a` keys end in the literal"
+    },
+    {
+      "id": "C-8",
+      "surface": "request",
+      "input": {
+        "url": "https://cms-dev.gogo.id.vn/v1/x?token=abc",
+        "method": "POST",
+        "query_string": "token=abc&page=2",
+        "cookies": {
+          "a": "1"
+        },
+        "data": "{}",
+        "env": {
+          "A": "1"
+        },
+        "extraField": 1,
+        "headers": {
+          "Authorization": "Bearer x",
+          "Cookie": "c=1",
+          "cf-access-jwt-assertion": "j",
+          "x-gogo-csrf": "t",
+          "x-forwarded-for": "1.2.3.4",
+          "x-api-key": "k",
+          "Referer": "https://cms-dev.gogo.id.vn/a",
+          "Origin": "https://cms-dev.gogo.id.vn",
+          "Content-Type": "application/json",
+          "User-Agent": "UA",
+          "X-Request-Id": "r1",
+          "Accept-Language": "vi"
+        }
+      },
+      "expected": {
+        "url": "https://cms-dev.gogo.id.vn/v1/x?token=[redacted]",
+        "method": "POST",
+        "query_string": "token=[redacted]&page=2",
+        "headers": {
+          "Content-Type": "application/json",
+          "User-Agent": "UA",
+          "X-Request-Id": "r1",
+          "Accept-Language": "vi"
+        }
+      },
+      "note": "rebuilt from the allowlist; header names compared case-insensitively, kept as given; header values are not passed through redactText"
+    },
+    {
+      "id": "C-9.1",
+      "surface": "request",
+      "input": {
+        "url": "/a",
+        "method": "GET"
+      },
+      "expected": {
+        "url": "/a",
+        "method": "GET"
+      }
+    },
+    {
+      "id": "C-9.2",
+      "surface": "request",
+      "input": {},
+      "expected": {}
+    },
+    {
+      "id": "C-9.3",
+      "surface": "request",
+      "input": null,
+      "expected": null,
+      "note": "no request on the event: none after"
+    },
+    {
+      "id": "C-10.fetch",
+      "surface": "breadcrumb",
+      "input": {
+        "category": "fetch",
+        "type": "http",
+        "level": "info",
+        "timestamp": 1,
+        "data": {
+          "url": "https://go-dev.gogo.id.vn/r/YDi_00PB1z4FSQZjpLbgdw",
+          "method": "GET",
+          "status_code": 404,
+          "body": "x",
+          "headers": {},
+          "request_body_size": 1,
+          "response_body_size": 2,
+          "reason": "r"
+        }
+      },
+      "expected": {
+        "category": "fetch",
+        "type": "http",
+        "level": "info",
+        "timestamp": 1,
+        "data": {
+          "url": "https://go-dev.gogo.id.vn/r/[redacted]",
+          "method": "GET",
+          "status_code": 404
+        }
+      }
+    },
+    {
+      "id": "C-10.xhr",
+      "surface": "breadcrumb",
+      "input": {
+        "category": "xhr",
+        "type": "http",
+        "level": "info",
+        "timestamp": 1,
+        "data": {
+          "url": "https://go-dev.gogo.id.vn/r/YDi_00PB1z4FSQZjpLbgdw",
+          "method": "GET",
+          "status_code": 404,
+          "body": "x",
+          "headers": {},
+          "request_body_size": 1,
+          "response_body_size": 2,
+          "reason": "r"
+        }
+      },
+      "expected": {
+        "category": "xhr",
+        "type": "http",
+        "level": "info",
+        "timestamp": 1,
+        "data": {
+          "url": "https://go-dev.gogo.id.vn/r/[redacted]",
+          "method": "GET",
+          "status_code": 404
+        }
+      }
+    },
+    {
+      "id": "C-10.http",
+      "surface": "breadcrumb",
+      "input": {
+        "category": "http",
+        "type": "http",
+        "level": "info",
+        "timestamp": 1,
+        "data": {
+          "url": "https://go-dev.gogo.id.vn/r/YDi_00PB1z4FSQZjpLbgdw",
+          "method": "GET",
+          "status_code": 404,
+          "body": "x",
+          "headers": {},
+          "request_body_size": 1,
+          "response_body_size": 2,
+          "reason": "r"
+        }
+      },
+      "expected": {
+        "category": "http",
+        "type": "http",
+        "level": "info",
+        "timestamp": 1,
+        "data": {
+          "url": "https://go-dev.gogo.id.vn/r/[redacted]",
+          "method": "GET",
+          "status_code": 404
+        }
+      }
+    },
+    {
+      "id": "C-10b",
+      "surface": "breadcrumb",
+      "input": {
+        "category": "navigation",
+        "data": {
+          "from": "/r/ABC_123",
+          "to": "/room/5f1c2a3e-1234-4abc-8def-0123456789ab",
+          "extra": 1
+        }
+      },
+      "expected": {
+        "category": "navigation",
+        "data": {
+          "from": "/r/[redacted]",
+          "to": "/room/5f1c2a3e-1234-4abc-8def-0123456789ab"
+        }
+      }
+    },
+    {
+      "id": "C-11.1",
+      "surface": "breadcrumb",
+      "input": {
+        "category": "console",
+        "message": "anything",
+        "level": "log"
+      },
+      "expected": null,
+      "note": "dropped"
+    },
+    {
+      "id": "C-11.2",
+      "surface": "breadcrumb",
+      "input": {
+        "category": "custom.x",
+        "message": "anything"
+      },
+      "expected": null,
+      "note": "dropped"
+    },
+    {
+      "id": "C-11.3",
+      "surface": "breadcrumb",
+      "input": {
+        "message": "no category"
+      },
+      "expected": null,
+      "note": "dropped"
+    },
+    {
+      "id": "C-11b.1",
+      "surface": "breadcrumb",
+      "input": {
+        "category": "ui.click",
+        "message": "button.save",
+        "data": {
+          "any": "thing"
+        }
+      },
+      "expected": {
+        "category": "ui.click",
+        "message": "button.save"
+      }
+    },
+    {
+      "id": "C-11b.2",
+      "surface": "breadcrumb",
+      "input": {
+        "category": "app.lifecycle",
+        "message": "background",
+        "data": {
+          "state": "background",
+          "other": 1
+        }
+      },
+      "expected": {
+        "category": "app.lifecycle",
+        "message": "background",
+        "data": {
+          "state": "background"
+        }
+      }
+    },
+    {
+      "id": "C-11b.3",
+      "surface": "breadcrumb",
+      "input": {
+        "category": "device.orientation",
+        "data": {
+          "orientation": "portrait",
+          "x": 1
+        }
+      },
+      "expected": {
+        "category": "device.orientation",
+        "data": {
+          "orientation": "portrait"
+        }
+      }
+    },
+    {
+      "id": "C-11b.4",
+      "surface": "breadcrumb",
+      "input": {
+        "category": "touch",
+        "message": "RoomCard",
+        "data": {
+          "path": [
+            {
+              "name": "x"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "category": "touch",
+        "message": "RoomCard"
+      }
+    },
+    {
+      "id": "C-12.1",
+      "surface": "user",
+      "input": {
+        "id": "u1",
+        "email": "x@example.com",
+        "ip_address": "1.2.3.4",
+        "username": "x",
+        "segment": "s",
+        "geo": {
+          "city": "c"
+        }
+      },
+      "expected": {
+        "id": "u1"
+      }
+    },
+    {
+      "id": "C-12.2",
+      "surface": "user",
+      "input": {
+        "email": "x@example.com"
+      },
+      "expected": null,
+      "note": "no id: no user"
+    },
+    {
+      "id": "C-12.3",
+      "surface": "user",
+      "input": null,
+      "expected": null
+    },
+    {
+      "id": "C-14.1",
+      "surface": "filter",
+      "input": {
+        "name": "ApiError"
+      },
+      "expected": "drop",
+      "platforms": [
+        "mobile",
+        "cms"
+      ]
+    },
+    {
+      "id": "C-14.2",
+      "surface": "filter",
+      "input": {
+        "name": "NetworkError"
+      },
+      "expected": "drop",
+      "platforms": [
+        "mobile"
+      ]
+    },
+    {
+      "id": "C-14.3",
+      "surface": "filter",
+      "input": {
+        "name": "TimeoutError"
+      },
+      "expected": "drop",
+      "platforms": [
+        "mobile"
+      ]
+    },
+    {
+      "id": "C-14.4",
+      "surface": "filter",
+      "input": {
+        "name": "AbortError"
+      },
+      "expected": "drop",
+      "platforms": [
+        "mobile"
+      ]
+    },
+    {
+      "id": "C-14.5",
+      "surface": "filter",
+      "input": {
+        "name": "AbortError",
+        "domException": true
+      },
+      "expected": "drop",
+      "platforms": [
+        "cms"
+      ]
+    },
+    {
+      "id": "C-14.6",
+      "surface": "filter",
+      "input": {
+        "name": "TimeoutError",
+        "domException": true
+      },
+      "expected": "drop",
+      "platforms": [
+        "cms"
+      ]
+    },
+    {
+      "id": "C-14.7",
+      "surface": "filter",
+      "input": {
+        "name": "Error",
+        "message": "ApiError happened"
+      },
+      "expected": "keep",
+      "platforms": [
+        "mobile",
+        "cms"
+      ]
+    },
+    {
+      "id": "C-14.8",
+      "surface": "filter",
+      "input": {
+        "name": "TypeError"
+      },
+      "expected": "keep",
+      "platforms": [
+        "mobile",
+        "cms"
+      ]
+    },
+    {
+      "id": "C-14.9",
+      "surface": "filter",
+      "input": {
+        "name": "RangeError"
+      },
+      "expected": "keep",
+      "platforms": [
+        "mobile",
+        "cms"
+      ]
+    },
+    {
+      "id": "C-14.10",
+      "surface": "filter",
+      "input": {
+        "name": "ApiError",
+        "minifiedClass": "t"
+      },
+      "expected": "drop",
+      "platforms": [
+        "mobile",
+        "cms"
+      ]
+    },
+    {
+      "id": "C-15.1",
+      "surface": "init",
+      "input": {
+        "dsn": ""
+      },
+      "expected": {
+        "init": false,
+        "captureErrorCallsSdk": false,
+        "setSentryUserCallsSdk": false,
+        "helpersThrow": false
+      }
+    },
+    {
+      "id": "C-15.2",
+      "surface": "init",
+      "input": {
+        "dsn": "off"
+      },
+      "expected": {
+        "init": false,
+        "captureErrorCallsSdk": false,
+        "setSentryUserCallsSdk": false,
+        "helpersThrow": false
+      }
+    },
+    {
+      "id": "C-15.3",
+      "surface": "init",
+      "input": {
+        "dsn": "https://0123456789abcdef0123456789abcdef@o0.ingest.us.sentry.io/1"
+      },
+      "expected": {
+        "init": true,
+        "initCalls": 1,
+        "sendDefaultPii": false,
+        "tracesSampleRate": "absent"
+      }
+    },
+    {
+      "id": "C-15.4",
+      "surface": "init",
+      "input": {
+        "dsn": "OFF"
+      },
+      "expected": {
+        "throws": true
+      },
+      "note": "one spelling of off"
+    },
+    {
+      "id": "C-15.5",
+      "surface": "init",
+      "input": {
+        "dsn": "Off"
+      },
+      "expected": {
+        "throws": true
+      },
+      "note": "one spelling of off"
+    },
+    {
+      "id": "C-15.6",
+      "surface": "init",
+      "input": {
+        "dsn": "false"
+      },
+      "expected": {
+        "throws": true
+      },
+      "note": "one spelling of off"
+    },
+    {
+      "id": "C-16 many (",
+      "surface": "perf",
+      "construct": {
+        "kind": "repeat",
+        "unit": "(",
+        "size": 100000
+      },
+      "expected": "completes",
+      "boundMs": {
+        "ci": 1000,
+        "local": 300
+      }
+    },
+    {
+      "id": "C-16 many )",
+      "surface": "perf",
+      "construct": {
+        "kind": "repeat",
+        "unit": ")",
+        "size": 100000
+      },
+      "expected": "completes",
+      "boundMs": {
+        "ci": 1000,
+        "local": 300
+      }
+    },
+    {
+      "id": "C-16 POINT( no close",
+      "surface": "perf",
+      "construct": {
+        "kind": "repeat",
+        "unit": "1 2,",
+        "size": 100000,
+        "prefix": "POINT("
+      },
+      "expected": "completes",
+      "boundMs": {
+        "ci": 1000,
+        "local": 300
+      }
+    },
+    {
+      "id": "C-16 repeated POINT(",
+      "surface": "perf",
+      "construct": {
+        "kind": "repeat",
+        "unit": "POINT(",
+        "size": 100000
+      },
+      "expected": "completes",
+      "boundMs": {
+        "ci": 1000,
+        "local": 300
+      }
+    },
+    {
+      "id": "C-16 POINT then spaces",
+      "surface": "perf",
+      "construct": {
+        "kind": "repeat",
+        "unit": " ",
+        "size": 100000,
+        "prefix": "POINT",
+        "suffix": "x"
+      },
+      "expected": "completes",
+      "boundMs": {
+        "ci": 1000,
+        "local": 300
+      }
+    },
+    {
+      "id": "C-16 POINT( nested",
+      "surface": "perf",
+      "construct": {
+        "kind": "repeat",
+        "unit": "((a",
+        "size": 100000,
+        "prefix": "POINT("
+      },
+      "expected": "completes",
+      "boundMs": {
+        "ci": 1000,
+        "local": 300
+      }
+    },
+    {
+      "id": "C-16 SRID digits",
+      "surface": "perf",
+      "construct": {
+        "kind": "repeat",
+        "unit": "1",
+        "size": 100000,
+        "prefix": "SRID="
+      },
+      "expected": "completes",
+      "boundMs": {
+        "ci": 1000,
+        "local": 300
+      }
+    },
+    {
+      "id": "C-16 pair then spaces",
+      "surface": "perf",
+      "construct": {
+        "kind": "repeat",
+        "unit": " ",
+        "size": 100000,
+        "prefix": "1.2345",
+        "suffix": "y"
+      },
+      "expected": "completes",
+      "boundMs": {
+        "ci": 1000,
+        "local": 300
+      }
+    },
+    {
+      "id": "C-16 digit runs",
+      "surface": "perf",
+      "construct": {
+        "kind": "repeat",
+        "unit": "1.2345,",
+        "size": 100000
+      },
+      "expected": "completes",
+      "boundMs": {
+        "ci": 1000,
+        "local": 300
+      }
+    },
+    {
+      "id": "C-16 open JSON string",
+      "surface": "perf",
+      "construct": {
+        "kind": "repeat",
+        "unit": "a",
+        "size": 100000,
+        "prefix": "\"lat\":\""
+      },
+      "expected": "completes",
+      "boundMs": {
+        "ci": 1000,
+        "local": 300
+      }
+    },
+    {
+      "id": "C-16 repeated \"bounds\":",
+      "surface": "perf",
+      "construct": {
+        "kind": "repeat",
+        "unit": "\"bounds\":",
+        "size": 100000
+      },
+      "expected": "completes",
+      "boundMs": {
+        "ci": 1000,
+        "local": 300
+      }
+    },
+    {
+      "id": "C-16 repeated /r/",
+      "surface": "perf",
+      "construct": {
+        "kind": "repeat",
+        "unit": "/r/",
+        "size": 100000
+      },
+      "expected": "completes",
+      "boundMs": {
+        "ci": 1000,
+        "local": 300
+      }
+    },
+    {
+      "id": "C-16 repeated %2F",
+      "surface": "perf",
+      "construct": {
+        "kind": "repeat",
+        "unit": "%2F",
+        "size": 100000
+      },
+      "expected": "completes",
+      "boundMs": {
+        "ci": 1000,
+        "local": 300
+      }
+    },
+    {
+      "id": "C-16 repeated @",
+      "surface": "perf",
+      "construct": {
+        "kind": "repeat",
+        "unit": "@1.",
+        "size": 100000
+      },
+      "expected": "completes",
+      "boundMs": {
+        "ci": 1000,
+        "local": 300
+      }
+    },
+    {
+      "id": "C-16 eyJ run",
+      "surface": "perf",
+      "construct": {
+        "kind": "repeat",
+        "unit": "a.",
+        "size": 100000,
+        "prefix": "eyJ"
+      },
+      "expected": "completes",
+      "boundMs": {
+        "ci": 1000,
+        "local": 300
+      }
+    },
+    {
+      "id": "C-16 repeated token=",
+      "surface": "perf",
+      "construct": {
+        "kind": "repeat",
+        "unit": "token=",
+        "size": 100000
+      },
+      "expected": "completes",
+      "boundMs": {
+        "ci": 1000,
+        "local": 300
+      }
+    },
+    {
+      "id": "C-16 repeated @@@",
+      "surface": "perf",
+      "construct": {
+        "kind": "repeat",
+        "unit": "@",
+        "size": 100000
+      },
+      "expected": "completes",
+      "boundMs": {
+        "ci": 1000,
+        "local": 300
+      }
+    },
+    {
+      "id": "C-16 email run",
+      "surface": "perf",
+      "construct": {
+        "kind": "repeat",
+        "unit": "a@b.",
+        "size": 100000
+      },
+      "expected": "completes",
+      "boundMs": {
+        "ci": 1000,
+        "local": 300
+      }
+    }
+  ]
+}
