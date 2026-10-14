@@ -11,7 +11,7 @@
 # unpromoted upload changes nothing.
 #
 # Passes when some JavaScript file under <dist-dir>/assets carries the full
-# release SHA and, unless the decision is `off`, the DSN. The DSN is never
+# release SHA and the DSN — or, when the decision is `off`, no DSN at all. The DSN is never
 # printed — only its project id.
 set -uo pipefail
 
@@ -34,8 +34,16 @@ if ! grep -rqF --include='*.js' -- "$sha" "${dist}/assets"; then
 fi
 echo "bundle carries release ${sha}"
 
+# Any baked DSN, whatever its key or project.
+EMBEDDED_DSN='https?://[A-Za-z0-9]+@[A-Za-z0-9.-]+(:[0-9]+)?/[0-9]+'
+
 if [[ "$dsn" == "off" ]]; then
-  echo "error reporting off by decision"
+  # The kill switch holds only if no DSN at all reached the bundle.
+  if grep -rqE --include='*.js' -- "$EMBEDDED_DSN" "${dist}/assets"; then
+    echo "::error::the decision is off but the uploaded bundle carries a Sentry DSN" >&2
+    exit 1
+  fi
+  echo "error reporting off by decision; no DSN in the bundle"
   exit 0
 fi
 if [[ -z "$dsn" ]]; then
