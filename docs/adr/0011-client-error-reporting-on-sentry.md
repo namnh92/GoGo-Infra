@@ -68,16 +68,19 @@ attributable to a release, not readable. Uploads are phase 2, each with its own 
 (`ci/<env>/sentry/mobile-auth-token`, which the prod Terraform already grants to a mobile-release role; a
 cms-deploy-scoped token for the CMS), never the backend deploy token. Sentry additionally fetches the minified bundle from the CMS host
 (`scrapeJavaScript`, bounded to `allowedDomains`) and attaches `context_line`/`pre_context`/`post_context` to stored
-frames: bundle text, never event data, never sent by the SDK. Off at phase 2 once artifacts are uploaded.
+frames: bundle text, not event data — absent from the measured relay-r4 envelopes and attached to the CMS#238 S06
+events after successful scraping. Off at phase 2 once artifacts are uploaded.
 
 **D-6 Project settings before the first client event** (owner, console): `scrubIPAddresses` on, `storeCrashReports`
 0, `sensitiveFields` for invite/slug/token/coordinate/email names on `gogo-mobile` and `gogo-cms` (not `code`: the
-match is a substring on keys and values, so it also nulled `status_code` and `country_code` — removed 2026-10-14,
+match is a substring on keys and values, so it also scrubbed `status_code` (stored null) and `country_code` (stored
+`[Filtered]`) — removed 2026-10-14,
 GoGo-Infra#215); `allowedDomains` on `gogo-cms` limited to the CMS hosts; Advanced Data Scrubbing rule
 `[Remove] [Anything] from [$user.geo.**]` on `gogo-mobile` and `gogo-cms` (and `gogo-be`, owner 2026-10-14). These are
 a second layer only and acceptance never relies on them (D-10) — **except `user.geo`**: Sentry derives it from the
 connection IP at ingest even with IP scrubbing on, no SDK setting prevents it, so the `$user.geo.**` rule is the only
-layer and the stored-event acceptance (CMS#238 S06, Mobile#336) measures it.
+accepted layer in this design (a client-side `user.geo = {}` suppression relies on an undocumented Relay branch and was
+rejected) and the stored-event acceptance (CMS#238 S06, Mobile#336) measures it.
 
 **D-7 Seer.** No client data reaches Seer — automatically or by manual invocation — until a privacy review and the
 Sentry DPA are recorded as a dated owner decision on GoGo-Infra#208. Seer switches are organisation-wide with
