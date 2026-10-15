@@ -198,8 +198,13 @@ The owner accepted the D-7 privacy addendum for Discord before any action was en
 6181943660). It records which fields leave Sentry, that GoGo has no DPA with Discord, that messages stay
 in the channel indefinitely, and that the Resolve / Archive / Assign buttons act on Sentry.
 
-Discord integration id `541041`, server `iLy` (guild `1426054818279067693`), installed by the owner. Each
-action sends only the tags `environment` and `release`.
+Discord integration id `541041`, server `iLy` (guild `1426054818279067693`), installed by the owner. Sentry's
+Discord message layout is fixed; the action takes only `data.tags`. Tags sent (D-7 addendum 2, #208 comment
+6181998277): gogo-be `environment,release,level,handled,transaction` · gogo-cms
+`environment,release,level,handled,browser.name,transaction` · gogo-mobile
+`environment,release,level,handled,os.name,device.family` · crash-free 6168773 `environment,release`. Stack
+traces and screen names are not in the message. Follow-ups: relay with stack trace GoGo-Infra#221 (SA shape
+first); screen tags GoGo-CMS#241 and GoGo-MobileApp#341.
 
 | Workflow | Fires on | Discord channel |
 | --- | --- | --- |
@@ -211,7 +216,8 @@ action sends only the tags `environment` and `release`.
 
 The workflows were changed in the owner's signed-in tab with `PUT /api/0/organizations/gogo-vn/workflows/<id>/`,
 sending the `X-CSRFToken` header from the session cookie. Each was read back with `GET` (2026-10-15T01:02Z).
-A test notification (`POST …/test-fire-actions/`) went to each channel, and the owner saw all three arrive.
+Test notifications (`POST …/test-fire-actions/`) went to each channel twice, at 01:02:40Z and again at 01:06:20Z with the
+final tags. The owner saw both rounds arrive in all three channels.
 Every new issue on DEV, probe and test issues included, posts to its channel. To mute a channel, change
 the workflow; disabling the integration silences all three projects at once.
 
