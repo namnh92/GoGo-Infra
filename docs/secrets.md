@@ -322,7 +322,8 @@ logs.
 A row the manifest marks `infra_readable: true` needs the flag, and only such a row accepts it:
 
 ```bash
-printf '%s' '["staff@example.com"]' | ./scripts/secrets/put.sh dev cms/access-staff-emails --infra-readable
+# `[]` on DEV: staff do not sign in through Access (owner decision 2026-10-08).
+printf '%s' '[]' | ./scripts/secrets/put.sh dev cms/access-staff-emails --infra-readable
 ./scripts/secrets/put.sh dev cms/super-admin-email --infra-readable   # prompts
 ```
 
@@ -612,9 +613,10 @@ For this parameter, absent means the API default, which is `true`. If a throttle
 an existing `false` were rendered as absent, the password door would re-open without any message.
 Any other error aborts the deploy, and the previous revision keeps running (GoGo-Infra#187).
 
-**What it does not protect against.** An outage at Access or its identity provider makes
-`cms-<env>` unreachable whatever this switch says. Re-opening the password door restores API and
-script access, not the browser console.
+**What it does not protect against.** An outage at Access or its identity provider closes the
+SSO path (`/sso`, `/v1/cms/auth/access-exchange`), and with it the `super_admin`'s only door,
+whatever this switch says. Since GoGo-BE#687 rev 6 the rest of `cms-<env>` is public (Infra#202),
+so staff keep signing in with their password in the browser while this switch is `true`.
 
 ## `super_admin` through Access only, other roles by password
 
@@ -636,12 +638,12 @@ and the CMS build.
 | --- | --- | --- | --- |
 | R1a-0 | Freeze, then apply `module.boundary` from the GoGo-Infra#194 branch in the bootstrap session ("Changing the boundary", above). Freeze = from before that apply until R1a merges: no merge to `develop` that triggers `terraform-apply-<env>` (`terraform/**`, `config/*.tfvars`, `config/well-known/**`, `workers/share-link/**`) and no manual dispatch of `terraform-apply-dev` or `terraform-apply-prod` | **owner** | Drain check prints `[]`: `gh run list --repo namnh92/GoGo-Infra --workflow terraform-apply-dev.yml --limit 200 --json status,databaseId,headSha --jq '[.[] \| select(.status != "completed")]'` — every state but `completed` (`queued`, `in_progress`, `waiting`, `requested`, `pending`) counts as not done; `plan (dev)` on the PR shows no `module.boundary` change; R1a merges next, before any other apply-triggering merge or dispatch |
 | R1a | Merge GoGo-Infra#194 (manifest rows, `put.sh --infra-readable`, IAM) → `terraform-apply-dev` | standing | `validate.sh dev` (bootstrap session) reports both rows MISSING and the retired `cms/seed-admin-*` UNDECLARED. **`deploy-dev` fails from here until R1b** |
-| R1b | `put.sh dev cms/super-admin-email --infra-readable` = the address on today's allow list; `put.sh dev cms/access-staff-emails --infra-readable` = `["<staff…>"]` or `[]`; `delete.sh dev cms/seed-admin-email`; `delete.sh dev cms/seed-admin-password` | **owner** | `validate.sh dev --strict` → `METADATA READY`, no tag finding; `deploy-dev` green |
+| R1b | `put.sh dev cms/super-admin-email --infra-readable` = the address on today's allow list; `put.sh dev cms/access-staff-emails --infra-readable` = `[]` (a staff list was allowed when R1b ran; `[]` since the owner decision of 2026-10-08 (the address change of 2026-10-14 added the old address briefly and ended on `[]` again, SSM v5)); `delete.sh dev cms/seed-admin-email`; `delete.sh dev cms/seed-admin-password` | **owner** | `validate.sh dev --strict` → `METADATA READY`, no tag finding; `deploy-dev` green |
 | R2 | Infra-2 (Access policy from SSM) merged → apply | standing | plan shows no allow-list change; Access still 302 |
 | R3 | BE-b (row follows `CMS_SUPER_ADMIN_EMAIL`) merged → `deploy-dev` | standing | one `super_admin` row with the SSM address; password hash untouched |
 | R4 | BE-a + CMS-1 → deploy both; owner: fresh SSO session → `GET /v1/cms/auth/admins` 200 → `POST …/super-admin/confirm-sso` 201 | standing + owner | audit `admin.sso_confirmed` with the current address |
 | R5 | `put.sh dev cms/super-admin-sso-only true` → `deploy-dev` (the sync erases the hash: the gate is met) | **owner** | super admin password login 403 `SUPER_ADMIN_SSO_ONLY`; hash and `must_change_password_at` NULL |
-| R6–R8 | Address-change rehearsal, BE-d (rev 6: no assertion on the password door — supersedes BE-c), CMS-3, Infra-3 (Access on `/sso` only), BE-c2 | per GoGo-BE#687 | per GoGo-BE#687 |
+| R6–R8 | Address-change rehearsal, BE-d (rev 6: no assertion on the password door — supersedes BE-c), CMS-3, Infra-3 (Access on the two SSO paths only: `/sso` and `/v1/cms/auth/access-exchange`), BE-c2 | per GoGo-BE#687 | per GoGo-BE#687 |
 
 Every SSM write and delete above needs its own order from the owner, every time.
 
