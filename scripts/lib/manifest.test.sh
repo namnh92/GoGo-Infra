@@ -28,7 +28,8 @@ READER="${DIR}/manifest.py"
 failures=0
 
 ok() { printf '  ok    %s\n' "$1"; }
-bad() { 
+bad() { printf '  FAIL  %s\n        %s\n' "$1" "$2"; failures=$((failures + 1)); }
+
 # --- the ci namespace never reaches a runtime environment -------------------
 #
 # INF-171. A pipeline credential in the API's process environment would hand an
@@ -89,8 +90,6 @@ if [[ -z "$short" ]]; then
 else
   bad "a row emitted the wrong number of columns" "$short"
 fi
-
-printf '  FAIL  %s\n        %s\n' "$1" "$2"; failures=$((failures + 1)); }
 
 # --- the default namespace is backend, and only backend --------------------
 strays="$(python3 "$READER" dev | awk -F'\t' '$5 != "backend" { print $1 " (" $5 ")" }')"

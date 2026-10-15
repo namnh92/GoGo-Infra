@@ -323,6 +323,11 @@ jobs:
       # value-carrying variable is ever added back.
       - name: the worker secret never leaves the pipe
         run: ./scripts/secrets/put-worker-secret.test.sh
+      # GoGo-Infra#222. The mobile upload token reaches the release build's
+      # process environment and nothing else: not stdout, not an argument list,
+      # and never an empty value handed on as if it were "no token".
+      - name: exec-with.sh hands one parameter to one command
+        run: ./scripts/secrets/exec-with.test.sh
 
       # NTF-BE-008. The identity signing key is the one credential here that is
       # neither a token nor a string: it is a PEM, and the runtime env renderers

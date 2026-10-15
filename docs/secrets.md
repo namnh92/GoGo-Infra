@@ -35,7 +35,21 @@ caller that predates the field keeps exactly the scope it was written with.
 ├── ssh-private-key               the host key is pinned in config/known_hosts.<env>
 ├── access-client-id              Cloudflare Access service token, id half
 └── access-client-secret          …and its secret half
+
+/gogo/ci/<env>/sentry/
+└── mobile-auth-token             Sentry org auth token: source maps + dSYMs for gogo-mobile
 ```
+
+`sentry/mobile-auth-token` has no workflow yet (GoGo-Infra#222, ADR-0011 D-5 phase 2): the mobile
+release build runs on a workstation, from the operator session, through
+`scripts/secrets/exec-with.sh <env> sentry/mobile-auth-token -- <command>` — the value goes into
+that command's environment and nowhere else. A mobile build job gets its own role when it exists.
+
+Rotating it, per environment (each has its own token): create a new organization token in Sentry
+(`gogo-mobile-upload-<env>`) → `put.sh <env> sentry/mobile-auth-token` → run one release build
+through `exec-with.sh` and confirm the upload lines in its log → revoke the old token in Sentry →
+add a row to the rotation register below. Revoking first leaves every release build failing at
+the upload step until the new value is written.
 
 Every one of those is declared in `config/secrets.manifest.yml` under `namespace: ci`,
 `consumer: pipeline`, with the consumer that reads it, the minimum permission it needs and
@@ -44,10 +58,14 @@ credentials existed that no validation checked, no rotation covered, and whose p
 only be recovered by reading every workflow. Declaring them is what makes
 `validate.sh --strict` able to say an environment is ready.
 
-A `ci` row is never rendered into a runtime or build environment. `render-env.sh` asks for
-`--namespace backend --consumer runtime` and `mobile-env.py` for `--namespace mobile`; neither
-can be handed a pipeline credential, and `scripts/lib/manifest.test.sh` pins that. A token that
-can deploy the API has no business in the API's own process environment.
+A `ci` row is never bulk-rendered into an env file. `render-env.sh` and `pull.sh` ask for
+`--namespace backend --consumer runtime` and `mobile-env.py` for `--namespace mobile`; none of
+them can be handed a pipeline credential, and `scripts/lib/manifest.test.sh` pins that. A token
+that can deploy the API has no business in the API's own process environment. The one reader
+outside CI is `scripts/secrets/exec-with.sh` (GoGo-Infra#222): it fetches **one** declared row and
+`exec`s **one** command with that value in its environment — nothing written, nothing printed,
+nothing left behind when the command exits. That is how the mobile release build gets
+`SENTRY_AUTH_TOKEN` on the owner's workstation while no release job exists.
 
 Two dimensions, both required:
 

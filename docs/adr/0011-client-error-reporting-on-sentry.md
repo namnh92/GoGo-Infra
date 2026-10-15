@@ -71,6 +71,29 @@ cms-deploy-scoped token for the CMS), never the backend deploy token. Sentry add
 frames: bundle text, not event data — absent from the measured relay-r4 envelopes and attached to the CMS#238 S06
 events after successful scraping. Off at phase 2 once artifacts are uploaded.
 
+**D-5 phase 2, Mobile — amended 2026-10-15** (GoGo-MobileApp#340, GoGo-Infra#222; SA shape
+`dev/handoffs/sa-shape-mobile-340-sentry-uploads.fable.md` rev 1, owner answers Q1–Q5 in that file).
+- **What is uploaded:** JavaScript source maps (Hermes) on both platforms and iOS dSYMs, from the Release build itself
+  (`@sentry/react-native/expo` config plugin + `getSentryExpoConfig` for Debug IDs; see GoGo-MobileApp ADR 0010).
+  **ProGuard/R8 mapping is not applicable** while `android.enableMinifyInReleaseBuilds` is off (the Expo default):
+  Java frames are already readable. Turning minify on is its own issue and brings the mapping upload with it. Android
+  NDK symbols stay out of scope.
+- **Lane:** no Fastlane or CI build exists, so the build runs on the owner's workstation through
+  `scripts/secrets/exec-with.sh <env> sentry/mobile-auth-token -- <GoGo-MobileApp>/scripts/release-build.sh …`, which
+  hands the token to that process's environment only. **No dev IAM role** is created: the dev Terraform gives a mobile
+  build job its own role when that job exists (owner, Q1: "until Fastlane is adopted"). Prod keeps the
+  `mobile-release` OIDC role Terraform already declares.
+- **Token:** `ci/<env>/sentry/mobile-auth-token`, a Sentry organization auth token. Its scope is fixed by Sentry
+  (Source Map Upload, Release Creation, Code Mappings) and organization-wide; one token per environment (owner
+  2026-10-15) limits revocation, not privilege. Not the `backend` stats token (GoGo-Infra#212): that is a read-only
+  integration, cannot upload, and renders into the API's environment.
+- **Failure policy, two states:** token present → an upload failure fails the build (`SENTRY_ALLOW_FAILURE` is never
+  set); token absent → the wrapper sets `SENTRY_DISABLE_AUTO_UPLOAD=true` and the build ships unsymbolicated with a
+  warning. The token is never written to `.env*`, `sentry.properties` or `.env.sentry-build-plugin`.
+- **Code mapping** for `gogo-mobile` is set after the first symbolicated event, from the observed frame path.
+- Source code now reaches Sentry inside source maps (`sourcesContent`); covered by the 2026-10-14 privacy review and
+  DPA, which already include repository content through the GitHub App (ADR-0012a D-3).
+
 **D-6 Project settings before the first client event** (owner, console): `scrubIPAddresses` on, `storeCrashReports`
 0, `sensitiveFields` for invite/slug/token/coordinate/email names on `gogo-mobile` and `gogo-cms` (not `code`: the
 match is a substring on keys and values, so it also scrubbed `status_code` (stored null) and `country_code` (stored
