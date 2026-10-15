@@ -64,10 +64,10 @@ Two things follow that are easy to get backwards:
 ## DEV host is a workstation
 
 Recorded fact, not a decision (GoGo-Infra#148, proposal 5). DEV BE runs on the owner's MacBook
-(`192.168.68.68`, `DEPLOY_PATH=/Users/maxnguyen/gogo-deploy/GoGo-BE`), with every container —
-`api`, `worker`, `alloy` and `cloudflared` — under Docker Desktop. ADR-0007 §"What changed" item 2
-assumed "a separate LAN machine", which is what kept ADR-0004's *DEV is not your workstation*
-satisfied; this host does not satisfy it. Per the principle above, the difference is written down
+(`192.168.68.68`, `DEPLOY_PATH=/Users/maxnguyen/gogo-deploy/GoGo-BE`), with the DEV compose
+project (`gogo-dev`: `api`, `worker`, `alloy`, `cloudflared`, as running on 2026-10-15) under Docker
+Desktop. ADR-0007 §Consequences item 2 relies on "a separate LAN machine" to keep ADR-0004's
+*DEV is not your workstation* satisfied; this host does not satisfy it. Per the principle above, the difference is written down
 here instead of left silent; whether to keep it is an owner decision.
 
 **Docker Desktop is a single point of failure for all of DEV.** When it stops or restarts, the
@@ -75,7 +75,7 @@ whole stack exits at once (2026-09-06: `api` 137, the rest 0), and both tunnels 
 because `cloudflared` is one of those containers: `api-dev.gogo.id.vn` returns 530 (Cloudflare
 1033) **and** `ssh-dev.gogo.id.vn` is gone, so `deploy-dev` cannot reach the host to repair it.
 Recovery is `restart: unless-stopped` once Docker Desktop is back, or someone at the machine.
-The same applies to the machine sleeping, rebooting or leaving the LAN.
+The same applies to the machine sleeping or rebooting.
 
 ## DEV data is shared, seeded, and disposable
 
