@@ -89,26 +89,48 @@ else
   bad "the command's exit status is returned" "status=${status}"
 fi
 
-# 3. Refusals: each must stop before the command runs.
+# 3. Refusals: each must stop before the command runs, and for its own reason —
+# a nonzero exit from some unrelated error would pass a test that only checked
+# the status.
 refuses() {
-  local name="$1"
-  shift
+  local name="$1" expected="$2"
+  shift 2
   run "$@"
   local status=$?
-  if [[ $status -ne 0 ]] && ! grep -q "^child:" "${SANDBOX}/out"; then
+  if [[ $status -ne 0 ]] && ! grep -q "^child:" "${SANDBOX}/out" && grep -qE -- "$expected" "${SANDBOX}/out"; then
     ok "$name"
   else
-    bad "$name" "status=${status}: $(cat "${SANDBOX}/out")"
+    bad "$name" "status=${status}, expected /${expected}/: $(cat "${SANDBOX}/out")"
   fi
 }
 
-refuses "no -- separator" dev sentry/mobile-auth-token child
-refuses "no command after --" dev sentry/mobile-auth-token --
-refuses "an undeclared path" dev sentry/not-declared -- child
-refuses "the ci pseudo-environment" ci sentry/mobile-auth-token -- child
-refuses "prod without typed confirmation" prod sentry/mobile-auth-token -- child
-STUB_GET_FAIL=1 refuses "a failed read does not run the command with an empty value" dev sentry/mobile-auth-token -- child
-STUB_VALUE='' refuses "an empty parameter does not run the command" dev sentry/mobile-auth-token -- child
+refuses "no -- separator" "usage: exec-with.sh" dev sentry/mobile-auth-token child extra
+refuses "no command after --" "usage: exec-with.sh" dev sentry/mobile-auth-token --
+refuses "an undeclared path" "is not declared" dev sentry/not-declared -- child
+refuses "a row with no env_var" "declares no env_var" dev terraform/read/r2-state-secret-access-key -- child
+refuses "the ci pseudo-environment" "'ci' is not a runtime environment" ci sentry/mobile-auth-token -- child
+refuses "prod without typed confirmation" "aborted|PRODUCTION" prod sentry/mobile-auth-token -- child
+STUB_GET_FAIL=1 refuses "a failed read does not run the command with an empty value" "could not read /gogo/ci/dev/sentry/mobile-auth-token" dev sentry/mobile-auth-token -- child
+STUB_VALUE='' refuses "an empty parameter does not run the command" "is empty" dev sentry/mobile-auth-token -- child
+
+: >"$CALLS"
+run dev terraform/read/r2-state-secret-access-key -- child
+if grep -q "get-parameter" "$CALLS"; then
+  bad "a row with no env_var never reaches SSM" "$(cat "$CALLS")"
+else
+  ok "a row with no env_var never reaches SSM"
+fi
+
+# 4. Tracing. `bash -x` would print the export, value included.
+: >"$CALLS"
+PATH="${SANDBOX}:${PATH}" AWS_PROFILE=stub bash -x "$SCRIPT" dev sentry/mobile-auth-token -- child >"${SANDBOX}/out" 2>&1 </dev/null
+status=$?
+if [[ $status -ne 0 ]] && grep -q "shell tracing enabled" "${SANDBOX}/out" && ! grep -qF "$VALUE" "${SANDBOX}/out" \
+  && ! grep -q "get-parameter" "$CALLS" && ! grep -q "^child:" "${SANDBOX}/out"; then
+  ok "shell tracing is refused before the value is read"
+else
+  bad "shell tracing is refused before the value is read" "status=${status}: $(grep -c . "${SANDBOX}/out") line(s), value present: $(grep -cF "$VALUE" "${SANDBOX}/out")"
+fi
 
 : >"$CALLS"
 run dev sentry/not-declared -- child

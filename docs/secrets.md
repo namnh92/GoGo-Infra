@@ -45,6 +45,12 @@ release build runs on a workstation, from the operator session, through
 `scripts/secrets/exec-with.sh <env> sentry/mobile-auth-token -- <command>` — the value goes into
 that command's environment and nowhere else. A mobile build job gets its own role when it exists.
 
+Rotating it, per environment (each has its own token): create a new organization token in Sentry
+(`gogo-mobile-upload-<env>`) → `put.sh <env> sentry/mobile-auth-token` → run one release build
+through `exec-with.sh` and confirm the upload lines in its log → revoke the old token in Sentry →
+add a row to the rotation register below. Revoking first leaves every release build failing at
+the upload step until the new value is written.
+
 Every one of those is declared in `config/secrets.manifest.yml` under `namespace: ci`,
 `consumer: pipeline`, with the consumer that reads it, the minimum permission it needs and
 where an operator creates it. They were undeclared until INF-171, which meant eleven

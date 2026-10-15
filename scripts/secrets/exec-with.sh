@@ -19,6 +19,13 @@
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
+# Tracing prints every expansion — the fetched value included — into whatever
+# captures this shell, which for a build is a log file kept as evidence.
+# Refuse rather than leak (same rule as put-identity-key.sh).
+case "$-" in
+  *x*) die "refusing to run with shell tracing enabled — 'set +x', then re-run." ;;
+esac
+
 usage="usage: exec-with.sh <env> <path> -- <command> [args...]"
 
 ENVIRONMENT="${1:-}"
@@ -39,8 +46,18 @@ row="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace all --consumer all 
 
 ENV_VAR="$(cut -f2 <<<"$row")"
 PARAM_NAMESPACE="$(cut -f5 <<<"$row")"
-[[ -n "$ENV_VAR" ]] || die "${PARAM_PATH} declares no env_var, so there is no name to hand it to the command under"
+# The reader prints `-` for a row without env_var (terraform state keys, which
+# are written to a profile file, not exported). Checked before any confirmation
+# or SSM read: a secret fetched for a name that cannot be exported is a secret
+# fetched for nothing.
+[[ "$ENV_VAR" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] \
+  || die "${PARAM_PATH} declares no env_var, so there is no name to hand it to the command under"
 
+# confirm_prod reads the answer from stdin; with no terminal that read fails
+# and `set -e` would end the script without a word. Say why instead.
+if [[ "$ENVIRONMENT" == "prod" && "${GOGO_ASSUME_YES:-}" != "1" && ! -t 0 ]]; then
+  die "prod needs typed confirmation on a terminal (or GOGO_ASSUME_YES=1) — aborted"
+fi
 confirm_prod "$ENVIRONMENT" "hand ${PARAM_PATH} to a command"
 require_aws
 
