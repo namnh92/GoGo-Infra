@@ -91,8 +91,11 @@ require_commit() {
 
 deployed="$(read_remote "the last verified revision" \
   "{ if [ -s .deployed-revision ]; then cat .deployed-revision; else echo __NONE__; fi; }")"
+# `-q --verify`: on a clone with no commit yet, a plain `git rev-parse HEAD`
+# prints `HEAD` to stdout before failing, so the read came back as
+# `HEAD__NO_HEAD__` and the first-deploy branch never ran (GoGo-Infra#205).
 head="$(read_remote "the checked-out revision" \
-  "{ git rev-parse HEAD 2>/dev/null || echo __NO_HEAD__; }")"
+  "{ git rev-parse -q --verify HEAD 2>/dev/null || echo __NO_HEAD__; }")"
 
 previous=""
 if [[ "$deployed" != "__NONE__" ]]; then

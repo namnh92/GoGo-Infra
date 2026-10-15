@@ -360,6 +360,23 @@ else
   pass "the revision read no longer swallows a failure with '|| true'"
 fi
 
+# GoGo-Infra#205: the `nohead` fake above answers with the sentinel itself, so
+# it never saw what git prints on a clone with no commit. Here the read runs
+# against a real unborn clone; the tunnel drops at the fetch, after the branch
+# has been chosen.
+git_q init "${HOST_SB}/unborn"
+out="$(DROP_ON="git fetch" PATH="${HOST_SB}/bin:${PATH}" \
+  DEPLOY_HOST=fake.invalid DEPLOY_USER=deploy DEPLOY_PATH="${HOST_SB}/unborn" \
+  KNOWN_HOSTS_FILE=/dev/null SSH_KEY_FILE=/dev/null REMOTE_ENV_FILE=.env.dev \
+  COMPOSE_EDGE=docker/docker-compose.edge-tunnel.yml \
+  bash "$DEPLOY" "$REV_B" /dev/null 2>&1)"
+if [[ "$out" == *"first deploy to this host"* && ! -e "${HOST_SB}/unborn/.previous-revision" \
+  && ! -e "${HOST_SB}/unborn/.deployed-revision" ]]; then
+  pass "#205: a real clone with no commit takes the first-deploy branch and writes no marker"
+else
+  fail "#205: a real clone with no commit did not take the first-deploy branch: $(tr '\n' '|' <<<"$out")"
+fi
+
 # --- GoGo-BE#408: a changed config.alloy recreates Alloy, and only then -------
 #
 # Compose cannot see a bind-mounted file change, so the scripts have to. Same
