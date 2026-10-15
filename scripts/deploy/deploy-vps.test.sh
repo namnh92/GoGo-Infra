@@ -354,7 +354,7 @@ fi
 
 # And the source-level guard: the construct that caused this must not come back
 # on the revision read.
-if grep -nE 'git rev-parse HEAD.*\|\|[[:space:]]*true' "$DEPLOY"; then
+if grep -nE 'git rev-parse.*HEAD.*\|\|[[:space:]]*true' "$DEPLOY"; then
   fail "the revision read no longer swallows a failure with '|| true'"
 else
   pass "the revision read no longer swallows a failure with '|| true'"
@@ -362,19 +362,47 @@ fi
 
 # GoGo-Infra#205: the `nohead` fake above answers with the sentinel itself, so
 # it never saw what git prints on a clone with no commit. Here the read runs
-# against a real unborn clone; the tunnel drops at the fetch, after the branch
-# has been chosen.
+# against real repositories; the tunnel drops at the fetch (`%q` escapes the
+# space in `git fetch`, so the hook matches `fetch`), after the branch is chosen.
+real_head_run() {
+  DROP_ON=fetch PATH="${HOST_SB}/bin:${PATH}" \
+    DEPLOY_HOST=fake.invalid DEPLOY_USER=deploy DEPLOY_PATH="$1" \
+    KNOWN_HOSTS_FILE=/dev/null SSH_KEY_FILE=/dev/null REMOTE_ENV_FILE=.env.dev \
+    COMPOSE_EDGE=docker/docker-compose.edge-tunnel.yml \
+    bash "$DEPLOY" "$REV_B" /dev/null 2>&1
+}
+no_markers() { [[ ! -e "$1/.previous-revision" && ! -e "$1/.deployed-revision" ]]; }
+
 git_q init "${HOST_SB}/unborn"
-out="$(DROP_ON="git fetch" PATH="${HOST_SB}/bin:${PATH}" \
-  DEPLOY_HOST=fake.invalid DEPLOY_USER=deploy DEPLOY_PATH="${HOST_SB}/unborn" \
-  KNOWN_HOSTS_FILE=/dev/null SSH_KEY_FILE=/dev/null REMOTE_ENV_FILE=.env.dev \
-  COMPOSE_EDGE=docker/docker-compose.edge-tunnel.yml \
-  bash "$DEPLOY" "$REV_B" /dev/null 2>&1)"
-if [[ "$out" == *"first deploy to this host"* && ! -e "${HOST_SB}/unborn/.previous-revision" \
-  && ! -e "${HOST_SB}/unborn/.deployed-revision" ]]; then
+out="$(real_head_run "${HOST_SB}/unborn")"
+if [[ "$out" == *"first deploy to this host"* && "$out" == *"Broken pipe"* ]] \
+  && no_markers "${HOST_SB}/unborn"; then
   pass "#205: a real clone with no commit takes the first-deploy branch and writes no marker"
 else
   fail "#205: a real clone with no commit did not take the first-deploy branch: $(tr '\n' '|' <<<"$out")"
+fi
+
+# F-01 on PR #226: a branch ref that exists but names no object is a broken
+# checkout, not a first deploy — `--verify` is silent here too.
+git_q init "${HOST_SB}/dangling"
+printf '%040d\n' 1 >"${HOST_SB}/dangling/.git/refs/heads/develop"
+out="$(real_head_run "${HOST_SB}/dangling")"
+if [[ "$out" == *"could not read the checked-out revision"* && "$out" != *"first deploy"* ]] \
+  && no_markers "${HOST_SB}/dangling"; then
+  pass "#205: a HEAD that names a missing commit is refused, not taken as a first deploy"
+else
+  fail "#205: a HEAD that names a missing commit was not refused: $(tr '\n' '|' <<<"$out")"
+fi
+
+# The same through a packed ref: no loose file, still not unborn.
+git_q init "${HOST_SB}/packed"
+printf '%040d refs/heads/develop\n' 1 >"${HOST_SB}/packed/.git/packed-refs"
+out="$(real_head_run "${HOST_SB}/packed")"
+if [[ "$out" == *"could not read the checked-out revision"* && "$out" != *"first deploy"* ]] \
+  && no_markers "${HOST_SB}/packed"; then
+  pass "#205: a packed branch ref that names a missing commit is refused too"
+else
+  fail "#205: a packed branch ref that names a missing commit was not refused: $(tr '\n' '|' <<<"$out")"
 fi
 
 # --- GoGo-BE#408: a changed config.alloy recreates Alloy, and only then -------
