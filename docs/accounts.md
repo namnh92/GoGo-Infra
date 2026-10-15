@@ -190,6 +190,37 @@ monthly plan + Seer contributors + PAYG budget ≤ $150, from the run-rate measu
 Center (GoGo-BE#695 manual items, #696 usage collector). Adjustment path, owner's choice: lower PAYG;
 fewer Seer contributors or Seer off; a lower plan tier at renewal (ADR-0012a D-4).
 
+### Sentry — alert notifications go to Discord (GoGo-Infra#219)
+
+Owner decision 2026-10-15: issue and monitor alerts for all three projects go to Discord, one channel per
+project, every environment, at most one notification per issue every 30 minutes. They no longer go by email.
+The owner accepted the D-7 privacy addendum for Discord before any action was enabled (#208 comment
+6181943660). It records which fields leave Sentry, that GoGo has no DPA with Discord, that messages stay
+in the channel indefinitely, and that the Resolve / Archive / Assign buttons act on Sentry.
+
+Discord integration id `541041`, server `iLy` (guild `1426054818279067693`), installed by the owner. Sentry's
+Discord message layout is fixed; the action takes only `data.tags`. Tags sent (D-7 addendum 2, #208 comment
+6181998277): gogo-be `environment,release,level,handled,transaction` · gogo-cms
+`environment,release,level,handled,browser.name,transaction` · gogo-mobile
+`environment,release,level,handled,os.name,device.family` · crash-free 6168773 `environment,release`. Stack
+traces and screen names are not in the message. Follow-ups: relay with stack trace GoGo-Infra#221 (SA shape
+first); screen tags GoGo-CMS#241 and GoGo-MobileApp#341.
+
+| Workflow | Fires on | Discord channel |
+| --- | --- | --- |
+| `6114982` gogo-be | detectors 10538089 (issue stream) + 10634455 (metric: > 1 error / 1 h): new issue, new or escalated high priority, regression, reappeared | BE `1560084655900852314` |
+| `6164951` gogo-cms | detector 10634573: same five triggers | CMS `1560084705733517312` |
+| `6164950` gogo-mobile | detector 10634571: same five triggers | Mobile `1560084749786157116` |
+| `6168773` gogo-mobile crash-free | detector 10641964 (crash_free_rate < 99.5 %, **disabled**; set `environment:prod` and enable when the first prod event exists, #208 comment 6181046009) | Mobile |
+| `6114926` Seer PR ready | unchanged: **email** to issue owners (owner's choice) | — |
+
+The workflows were changed in the owner's signed-in tab with `PUT /api/0/organizations/gogo-vn/workflows/<id>/`,
+sending the `X-CSRFToken` header from the session cookie. Each was read back with `GET` (2026-10-15T01:02Z).
+Test notifications (`POST …/test-fire-actions/`) went to each channel twice, at 01:02:40Z and again at 01:06:20Z with the
+final tags. The owner saw both rounds arrive in all three channels.
+Every new issue on DEV, probe and test issues included, posts to its channel. To mute a channel, change
+the workflow; disabling the integration silences all three projects at once.
+
 ### Which Google Cloud project owns a DEV credential
 
 **Recorded 01/09/2026.** All three DEV server keys live in **project number
