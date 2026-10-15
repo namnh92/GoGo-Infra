@@ -35,7 +35,15 @@ caller that predates the field keeps exactly the scope it was written with.
 ├── ssh-private-key               the host key is pinned in config/known_hosts.<env>
 ├── access-client-id              Cloudflare Access service token, id half
 └── access-client-secret          …and its secret half
+
+/gogo/ci/<env>/sentry/
+└── mobile-auth-token             Sentry org auth token: source maps + dSYMs for gogo-mobile
 ```
+
+`sentry/mobile-auth-token` has no workflow yet (GoGo-Infra#222, ADR-0011 D-5 phase 2): the mobile
+release build runs on a workstation, from the operator session, through
+`scripts/secrets/exec-with.sh <env> sentry/mobile-auth-token -- <command>` — the value goes into
+that command's environment and nowhere else. A mobile build job gets its own role when it exists.
 
 Every one of those is declared in `config/secrets.manifest.yml` under `namespace: ci`,
 `consumer: pipeline`, with the consumer that reads it, the minimum permission it needs and
