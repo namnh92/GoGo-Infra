@@ -621,9 +621,13 @@ script access, not the browser console.
 GoGo-BE ADR-0034 as amended for GoGo-BE#687 (owner decisions O-1…O-12, 2026-10-06). There is
 **exactly one** `super_admin`. Its address lives in SSM (`cms/super-admin-email`) and nowhere else;
 every deploy syncs the admin row to it. It signs in through Cloudflare Access only, and once its SSO
-door is proven its password hash is erased. `editor`, `moderator` and `ops_admin` keep two doors:
-Access SSO, or a password the super admin issued plus the matching Access assertion. Both lists come
-from SSM and are applied by Terraform (`cms/access-staff-emails`, previous section).
+door is proven its password hash is erased. `editor`, `moderator` and `ops_admin` sign in with
+email + a password the super admin issued, and **no** Access assertion (GoGo-BE#687 rev 6, owner
+decision 2026-10-08): `cms-<env>` is public, and the Access application protects only `/sso` and
+`/v1/cms/auth/access-exchange`. Cloudflare Access (SSO) is for the `super_admin` only (owner decision
+2026-10-08, `execution-policy.md` §8): the organisation has only the Cloudflare login method, so staff
+could not pass Access anyway, and `cms/access-staff-emails` is `[]` on DEV. The list stays in the
+manifest and the policy (previous section) but staff do not need to be on it.
 
 DEV is shared between sessions. Before and after every deploy, record the running GoGo-BE revision
 and the CMS build.
@@ -637,7 +641,7 @@ and the CMS build.
 | R3 | BE-b (row follows `CMS_SUPER_ADMIN_EMAIL`) merged → `deploy-dev` | standing | one `super_admin` row with the SSM address; password hash untouched |
 | R4 | BE-a + CMS-1 → deploy both; owner: fresh SSO session → `GET /v1/cms/auth/admins` 200 → `POST …/super-admin/confirm-sso` 201 | standing + owner | audit `admin.sso_confirmed` with the current address |
 | R5 | `put.sh dev cms/super-admin-sso-only true` → `deploy-dev` (the sync erases the hash: the gate is met) | **owner** | super admin password login 403 `SUPER_ADMIN_SSO_ONLY`; hash and `must_change_password_at` NULL |
-| R6–R8 | Address-change rehearsal, BE-c (assertion on the password door), CMS-2, BE-c2 | per GoGo-BE#687 | per GoGo-BE#687 |
+| R6–R8 | Address-change rehearsal, BE-d (rev 6: no assertion on the password door — supersedes BE-c), CMS-3, Infra-3 (Access on `/sso` only), BE-c2 | per GoGo-BE#687 | per GoGo-BE#687 |
 
 Every SSM write and delete above needs its own order from the owner, every time.
 
@@ -672,14 +676,15 @@ hash is erased it stays NULL: the API refuses `reset-password`, `change-password
 the switch back to `false` restores nothing, because there is no password to log in with. Every
 recovery is Access SSO plus SSM → `terraform-apply-<env>` → `deploy-dev` (the table above). An Access
 or identity-provider outage therefore blocks the super admin's console and API access until it ends;
-staff password sign-in also needs the Access assertion once BE-c is on the environment.
+staff password sign-in does not depend on Access and keeps working.
 
-**Lock a staff member.** Suspend the admin row through the CMS (immediate: every door closes,
-sessions are revoked). Then remove the address from `cms/access-staff-emails` and apply, which closes
-the edge. Suspension alone is sufficient; the list change is hygiene.
+**Lock a staff member.** Suspend the admin row through the CMS (immediate: the password door closes,
+sessions are revoked). That is sufficient: Access does not gate staff. If the address was ever added
+to `cms/access-staff-emails`, remove it and apply as hygiene.
 
-**Add a staff member.** Add the address to `cms/access-staff-emails` → apply → create the CMS row in
-the console with a temporary password (changed at first sign-in). GoGo-BE never writes to Cloudflare.
+**Add a staff member.** Create the CMS row in the console with a temporary password (changed at first
+sign-in). No Access list change: staff do not sign in through Access (owner decision 2026-10-08).
+GoGo-BE never writes to Cloudflare.
 
 **Compatibility while `cms/super-admin-sso-only` is `true`.** Each of these floors, once crossed,
 rolls back the decision. Record it as a rollback.
