@@ -58,10 +58,14 @@ credentials existed that no validation checked, no rotation covered, and whose p
 only be recovered by reading every workflow. Declaring them is what makes
 `validate.sh --strict` able to say an environment is ready.
 
-A `ci` row is never rendered into a runtime or build environment. `render-env.sh` asks for
-`--namespace backend --consumer runtime` and `mobile-env.py` for `--namespace mobile`; neither
-can be handed a pipeline credential, and `scripts/lib/manifest.test.sh` pins that. A token that
-can deploy the API has no business in the API's own process environment.
+A `ci` row is never bulk-rendered into an env file. `render-env.sh` and `pull.sh` ask for
+`--namespace backend --consumer runtime` and `mobile-env.py` for `--namespace mobile`; none of
+them can be handed a pipeline credential, and `scripts/lib/manifest.test.sh` pins that. A token
+that can deploy the API has no business in the API's own process environment. The one reader
+outside CI is `scripts/secrets/exec-with.sh` (GoGo-Infra#222): it fetches **one** declared row and
+`exec`s **one** command with that value in its environment — nothing written, nothing printed,
+nothing left behind when the command exits. That is how the mobile release build gets
+`SENTRY_AUTH_TOKEN` on the owner's workstation while no release job exists.
 
 Two dimensions, both required:
 
