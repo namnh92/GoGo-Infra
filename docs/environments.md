@@ -11,7 +11,7 @@ Three logical environments exist from the start, even though only two are enable
 | SSM prefix | `/gogo/dev/backend/` | `/gogo/staging/backend/` | `/gogo/prod/backend/` |
 | Terraform state key | `dev/terraform.tfstate` | `staging/terraform.tfstate` | `prod/terraform.tfstate` |
 | Deploy | `deploy-dev.yml`, over Cloudflare Access SSH | on demand | `deploy-production.yml`, approval required |
-| Host | dedicated machine on the local LAN, `192.168.68.68` — **not** a workstation | — | own host, not yet provisioned |
+| Host | the owner's MacBook on the local LAN, `192.168.68.68`, stack on Docker Desktop — see [DEV host](#dev-host-is-a-workstation) | — | own host, not yet provisioned |
 | Metrics | self-hosted Prometheus + Grafana on `192.168.68.168` | — | undecided (ADR-0006 §D4) |
 
 ## Naming
@@ -60,6 +60,22 @@ Two things follow that are easy to get backwards:
   is DEV state with a backup mechanism, and losing it is not normal operation.
   That is not in tension with the section below — application data in Neon is
   seeded and disposable; the infrastructure that runs and watches it is not.
+
+## DEV host is a workstation
+
+Recorded fact, not a decision (GoGo-Infra#148, proposal 5). DEV BE runs on the owner's MacBook
+(`192.168.68.68`, `DEPLOY_PATH=/Users/maxnguyen/gogo-deploy/GoGo-BE`), with every container —
+`api`, `worker`, `alloy` and `cloudflared` — under Docker Desktop. ADR-0007 §"What changed" item 2
+assumed "a separate LAN machine", which is what kept ADR-0004's *DEV is not your workstation*
+satisfied; this host does not satisfy it. Per the principle above, the difference is written down
+here instead of left silent; whether to keep it is an owner decision.
+
+**Docker Desktop is a single point of failure for all of DEV.** When it stops or restarts, the
+whole stack exits at once (2026-09-06: `api` 137, the rest 0), and both tunnels go with it,
+because `cloudflared` is one of those containers: `api-dev.gogo.id.vn` returns 530 (Cloudflare
+1033) **and** `ssh-dev.gogo.id.vn` is gone, so `deploy-dev` cannot reach the host to repair it.
+Recovery is `restart: unless-stopped` once Docker Desktop is back, or someone at the machine.
+The same applies to the machine sleeping, rebooting or leaving the LAN.
 
 ## DEV data is shared, seeded, and disposable
 
