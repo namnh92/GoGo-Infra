@@ -202,7 +202,13 @@ occurrence. A crash report captured in an earlier run is written with that run's
 rewritten by the seed; the relay run checks it (launch 3 delivers launch 2's crash with launch 2's crash-time screen,
 not `/`). Attribution inside a run is each client's ADR (Mobile ADR 0010): an error the app reports itself carries the
 screen read from the navigation container's state at capture — event-local, so a throw while a new screen renders or
-mounts names that screen — while a native crash, which cannot run JS, carries the last scope write.
+mounts names that screen — while a native crash, which cannot run JS, carries the last scope write, as does an error
+the SDK catches itself (unhandled error or rejection). That leaves one in-run cell the scope write does not promise,
+and the relay run measures it too — owner decision 2026-10-16, in session (review-state GoGo-MobileApp-349): in the
+AC, not a stated limit. The cell: a warm navigation to a new screen; an unhandled promise rejection raised inside that
+screen's own mount commit (render / layout effect / `componentDidMount`), captured by the SDK's rejection handler
+rather than the error boundary; **expected `screen` = that screen's template**, per D-7 addition 3 and the F-04
+ruling. The previous screen is a FAIL — a finding for the SA role, not an accepted limit and not a script defect.
 
 ## Alternatives rejected
 
