@@ -1,6 +1,6 @@
 # ADR 0011 — Client error reporting on Sentry
 
-**Status:** accepted — 2026-10-14
+**Status:** accepted — 2026-10-14; D-2 and D-9 amended 2026-10-16 (GoGo-Infra#229, oracle v2)
 **Issue:** GoGo-Infra#208; consumers GoGo-MobileApp#336, GoGo-CMS#238, GoGo-WebApp#44 (blocked: no app yet)
 **Requirement authority:** owner decisions 2026-10-08 (Sentry for crash reporting, Crashlytics dropped) and
 2026-10-14 (plan Business + Seer AI; projects `gogo-mobile`, `gogo-cms` created; SA shape first). SA shape
@@ -32,13 +32,21 @@ Three constraints shape the answer:
 view hierarchy; `sendDefaultPii: false`. Each of those is a separate decision with its own privacy review.
 
 **D-2 One policy, written twice, one oracle.** Each client implements `src/shared/observability/sentry.ts` and runs
-every case of [`0011/redaction-cases.v1.json`](0011/redaction-cases.v1.json) (this directory) in a table-driven spec.
-Clients vendor the file verbatim and pin it by version and sha256 in their own ADR; a client review checks the
-digest. A case a client cannot pass is a change to this ADR, not a local exception. Version 1:
+every case of the current oracle in this directory in a table-driven spec. Clients vendor the file verbatim and pin
+it by version and sha256 in their own ADR; a client review checks the digest. A case a client cannot pass is a change
+to this ADR, not a local exception. A published version is never edited: a new case is a new version, so a vendored
+file that says `v1` is always byte-identical to the `v1` here.
 
 ```
-sha256  decf6c4336269b086b209a4d27a9c36ca2c392b307c9d76e4b24883a4f4ef6a0  0011/redaction-cases.v1.json
+sha256  decf6c4336269b086b209a4d27a9c36ca2c392b307c9d76e4b24883a4f4ef6a0  0011/redaction-cases.v1.json  (superseded)
+sha256  c9f6c9ca06040858721a7665eb996f2173e345f337cce55078b5c472f7abc9d1  0011/redaction-cases.v2.json  (current)
 ```
+
+[`v2`](0011/redaction-cases.v2.json) (2026-10-16, GoGo-Infra#229) is every `v1` case unchanged plus C-24: the
+`screen` tag (GoGo-MobileApp#341, CMS `route` in GoGo-CMS#241) carries a route template, which keeps its placeholder
+segments (D-9) and loses a credential put there by mistake. GoGo-MobileApp moves to `v2` with #341; GoGo-CMS stays on
+`v1` until GoGo-CMS#241 (`v1` and `v2` differ only by C-24 and the D-9 placeholder rule, which no `v1` case
+exercises).
 
 **D-3 Init contract.** DSN from the build environment; `''` or the literal `off` → the SDK is not initialised and
 every helper is a no-op. `environment` ∈ `dev | staging | prod` (BE's vocabulary; Mobile flavour `stag` → `staging`,
@@ -120,7 +128,8 @@ on a stored event (a `geo` left null or empty by the D-6 rule is not a value).
 set); everything else does not exist after `beforeSend`. Breadcrumb categories kept: `fetch`, `xhr`, `http`,
 `navigation`, `ui.click`, `app.lifecycle`, `device.orientation`, `touch`; every other category, including `console`,
 is dropped. Text passes through one redactor with a fixed rule order (named parameters, credential path segments
-including their percent-decoded form, coordinate shapes, `Bearer`/JWT, emails, then any `[A-Za-z0-9_-]` run of six or
+including their percent-decoded form — except a route-template placeholder, `[name]` or `:name` with `name` =
+`[A-Za-z][A-Za-z0-9]*`, which no invite code, slug or room code can be (v2, C-24) — coordinate shapes, `Bearer`/JWT, emails, then any `[A-Za-z0-9_-]` run of six or
 more characters containing a letter and a digit that is not a uuid). Opaque paths are copied untouched, the complete
 set: `event_id`, `timestamp`, `release`, `dist`, `sdk`, `platform`, `environment`, `level`,
 `exception.values[].stacktrace`, `exception.values[].type`, `exception.values[].mechanism`, `contexts.device`,
