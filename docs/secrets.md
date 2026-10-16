@@ -536,12 +536,19 @@ value.
 
 Cloudflare Access tells GoGo-BE who is knocking once the backend knows which audience to trust.
 The allow list itself comes from SSM (GoGo-Infra#199, GoGo-BE#687): `cms/super-admin-email` and
-`cms/access-staff-emails`, applied by Terraform to **one** admission policy — one-time PIN in dev;
-staging and production must set `cms_require_mfa = true` (the module refuses otherwise), which needs
-an MFA-capable identity provider first, because a PIN does not satisfy Cloudflare's `mfa`. There is
-no organisation-membership policy any more: a second `include` that ignores the list is a way in
-the list does not control (GoGo-BE#687 D-8; the GitHub identity provider was declined in
-GoGo-Infra#67). When an identity provider is added, it becomes a `require` rule on that policy.
+`cms/access-staff-emails`, applied by Terraform to **one** admission policy. Terraform sets no
+identity provider, so the Access page offers whatever the organisation has configured — today only
+the **Cloudflare** method (sign in as a member of the Cloudflare account), in every environment.
+No one-time PIN is configured. That is why `cms/access-staff-emails` is normally `[]`: a staff
+mailbox on the list cannot pass the Access page unless it is also an account member, and staff do
+not need SSO (owner decision 2026-10-08, `execution-policy.md` §8). The super admin's mailbox must
+be an account member. Staging and production must set `cms_require_mfa = true` (the module refuses
+otherwise); whether the account-member method satisfies Cloudflare's `mfa` rule has not been
+verified — confirm it, or add an MFA-capable identity provider, before the first staging apply.
+There is no organisation-membership policy any more: a second `include` that
+ignores the list is a way in the list does not control (GoGo-BE#687 D-8; the GitHub identity
+provider was declined in GoGo-Infra#67). When an identity provider is added, it becomes a
+`require` rule on that policy.
 
 **1. Write the list** (bootstrap session): `put.sh <env> cms/super-admin-email --infra-readable`,
 `put.sh <env> cms/access-staff-emails --infra-readable` (a JSON array, `[]` allowed), then
