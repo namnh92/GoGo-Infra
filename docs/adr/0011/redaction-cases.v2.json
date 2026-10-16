@@ -1680,7 +1680,37 @@
           "screen": "/r/[redacted]"
         }
       },
-      "note": "only the exact placeholder shape is exempt: [A-Za-z][A-Za-z0-9]* inside the brackets"
+      "note": "only the exact placeholder shape is exempt: letters only inside the brackets"
+    },
+    {
+      "id": "C-24.9d",
+      "surface": "deep",
+      "input": {
+        "tags": {
+          "screen": "/r/%5BinviteCode%5D"
+        }
+      },
+      "expected": {
+        "tags": {
+          "screen": "/r/[redacted]"
+        }
+      },
+      "note": "judged on the raw segment: an encoded placeholder is not exempt"
+    },
+    {
+      "id": "C-24.9e",
+      "surface": "deep",
+      "input": {
+        "tags": {
+          "screen": "/r/[invite2Code]"
+        }
+      },
+      "expected": {
+        "tags": {
+          "screen": "/r/[redacted]"
+        }
+      },
+      "note": "a digit in the name is not a placeholder (stage 6 would rewrite it anyway)"
     },
     {
       "id": "C-24.10a",
@@ -1725,6 +1755,21 @@
         }
       },
       "note": "v1 redacted this to /share-links/[redacted] (stage 2)"
+    },
+    {
+      "id": "C-24.10d",
+      "surface": "deep",
+      "input": {
+        "tags": {
+          "screen": "/share-links/:dataset2Id"
+        }
+      },
+      "expected": {
+        "tags": {
+          "screen": "/share-links/[redacted]"
+        }
+      },
+      "note": "a digit in the name is not a placeholder"
     },
     {
       "id": "C-24.11",

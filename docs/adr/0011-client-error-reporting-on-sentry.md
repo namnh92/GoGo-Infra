@@ -32,21 +32,23 @@ Three constraints shape the answer:
 view hierarchy; `sendDefaultPii: false`. Each of those is a separate decision with its own privacy review.
 
 **D-2 One policy, written twice, one oracle.** Each client implements `src/shared/observability/sentry.ts` and runs
-every case of the current oracle in this directory in a table-driven spec. Clients vendor the file verbatim and pin
-it by version and sha256 in their own ADR; a client review checks the digest. A case a client cannot pass is a change
+every case of the oracle version its own ADR pins, from this directory, in a table-driven spec. Clients vendor the file
+verbatim and pin it by version and sha256 in their own ADR; a client review checks the digest. A client that adopts the
+oracle or re-vendors takes the current version. A case a client cannot pass is a change
 to this ADR, not a local exception. A published version is never edited: a new case is a new version, so a vendored
 file that says `v1` is always byte-identical to the `v1` here.
 
 ```
 sha256  decf6c4336269b086b209a4d27a9c36ca2c392b307c9d76e4b24883a4f4ef6a0  0011/redaction-cases.v1.json  (superseded)
-sha256  c9f6c9ca06040858721a7665eb996f2173e345f337cce55078b5c472f7abc9d1  0011/redaction-cases.v2.json  (current)
+sha256  6cf5c1487985428e9bc7cbbc4fb07eaa4456fc624eda1b05ee507f77847e8d37  0011/redaction-cases.v2.json  (current)
 ```
 
 [`v2`](0011/redaction-cases.v2.json) (2026-10-16, GoGo-Infra#229) is every `v1` case unchanged plus C-24: the
 Mobile `screen` tag (GoGo-MobileApp#341) carries an expo-router route template, which keeps its placeholder segments
 (D-9) and loses a credential put there by mistake; the `:name` rows cover React Router templates too. GoGo-MobileApp
-moves to `v2` with #341. GoGo-CMS stays on `v1` (its `route` tag, GoGo-CMS#241, was built on `v1`) until it
-re-vendors; `v1` and `v2` differ only by C-24 and the D-9 placeholder rule, which no `v1` case exercises.
+moves to `v2` with #341. GoGo-CMS stays on `v1` for now — a stated transition, not an exception: its `route` tag
+(GoGo-CMS#241) was built on `v1`, and it moves to `v2` when it next re-vendors. `v1` and `v2` differ only by C-24 and
+the D-9 placeholder rule, which no `v1` case exercises.
 
 **D-3 Init contract.** DSN from the build environment; `''` or the literal `off` → the SDK is not initialised and
 every helper is a no-op. `environment` ∈ `dev | staging | prod` (BE's vocabulary; Mobile flavour `stag` → `staging`,
@@ -128,8 +130,9 @@ on a stored event (a `geo` left null or empty by the D-6 rule is not a value).
 set); everything else does not exist after `beforeSend`. Breadcrumb categories kept: `fetch`, `xhr`, `http`,
 `navigation`, `ui.click`, `app.lifecycle`, `device.orientation`, `touch`; every other category, including `console`,
 is dropped. Text passes through one redactor with a fixed rule order (named parameters, credential path segments
-including their percent-decoded form — except a route-template placeholder, `[name]` or `:name` with `name` =
-`[A-Za-z][A-Za-z0-9]*`, which no invite code, slug or room code can be (v2, C-24) — coordinate shapes, `Bearer`/JWT, emails, then any `[A-Za-z0-9_-]` run of six or
+including their percent-decoded form — except a route-template placeholder: the whole raw, undecoded segment is
+exactly `[name]` or `:name` with `name` = `[A-Za-z]+`, which no invite code, slug or room code can be and which no
+later stage rewrites (v2, C-24) — coordinate shapes, `Bearer`/JWT, emails, then any `[A-Za-z0-9_-]` run of six or
 more characters containing a letter and a digit that is not a uuid). Opaque paths are copied untouched, the complete
 set: `event_id`, `timestamp`, `release`, `dist`, `sdk`, `platform`, `environment`, `level`,
 `exception.values[].stacktrace`, `exception.values[].type`, `exception.values[].mechanism`, `contexts.device`,
