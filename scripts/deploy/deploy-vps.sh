@@ -95,15 +95,21 @@ deployed="$(read_remote "the last verified revision" \
 # failing on a clone with no commit, so the read came back `HEAD__NO_HEAD__` and
 # the first-deploy branch never ran. `-q --verify` is silent instead — but a
 # silent failure must not mean "first deploy" either: the sentinel is printed
-# only when HEAD names a branch that does not exist yet (unborn: no loose ref,
-# no packed ref). Any other failure exits non-zero and the deploy refuses — a
-# HEAD naming a commit the object store lacks included (`^{commit}` checks it).
+# only when HEAD names a branch (`refs/heads/*`) that git says does not exist.
+# Every step asks git and treats a non-zero exit as a read error, never as
+# absence: `symbolic-ref` fails on a detached HEAD or an unreadable ref store,
+# `for-each-ref` fails when `packed-refs` cannot be read and prints nothing
+# only when the branch is truly unborn. A branch that exists but names a commit
+# the object store lacks (`^{commit}` failed, the ref read did not) is a broken
+# checkout and refuses too. Testing paths with `[ -e ]`/`grep -s` would read a
+# permission error as "no such ref" — PR #226 F-01.
 # shellcheck disable=SC2016 # expanded on the host, not here
 head="$(read_remote "the checked-out revision" \
   '{ if h=$(git rev-parse -q --verify "HEAD^{commit}"); then echo "$h";
-     elif r=$(git symbolic-ref -q HEAD) && [ ! -e "$(git rev-parse --git-path "$r")" ] \
-       && ! grep -qs " $r\$" "$(git rev-parse --git-path packed-refs)"; then echo __NO_HEAD__;
-     else exit 1; fi; }')"
+     else r=$(git symbolic-ref -q HEAD) || exit 1;
+       case "$r" in refs/heads/*) ;; *) exit 1 ;; esac;
+       o=$(git for-each-ref --format="%(objectname)" "$r") || exit 1;
+       if [ -z "$o" ]; then echo __NO_HEAD__; else exit 1; fi; fi; }')"
 
 previous=""
 if [[ "$deployed" != "__NONE__" ]]; then

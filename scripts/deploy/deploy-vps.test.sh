@@ -405,6 +405,48 @@ else
   fail "#205: a packed branch ref that names a missing commit was not refused: $(tr '\n' '|' <<<"$out")"
 fi
 
+# PR #226 F-01: a ref store that cannot be read is an error, not an unborn
+# branch. Permission bits do nothing for root, so these two cases need a
+# non-root runner (CI's is); as root they are reported, not faked.
+refused_not_first() {
+  [[ "$1" == *"could not read the checked-out revision"* && "$1" != *"first deploy"* ]]
+}
+if [[ "$(id -u)" -eq 0 ]]; then
+  echo "SKIP #205 F-01: running as root, permission denied cannot be staged"
+else
+  git_q init "${HOST_SB}/nopacked"
+  printf '%040d refs/heads/develop\n' 1 >"${HOST_SB}/nopacked/.git/packed-refs"
+  chmod 000 "${HOST_SB}/nopacked/.git/packed-refs"
+  out="$(real_head_run "${HOST_SB}/nopacked")"
+  chmod 644 "${HOST_SB}/nopacked/.git/packed-refs"
+  if refused_not_first "$out" && no_markers "${HOST_SB}/nopacked"; then
+    pass "#205 F-01: an unreadable packed-refs is refused, not read as an unborn branch"
+  else
+    fail "#205 F-01: an unreadable packed-refs was not refused: $(tr '\n' '|' <<<"$out")"
+  fi
+
+  git_q init "${HOST_SB}/noloose"
+  chmod 000 "${HOST_SB}/noloose/.git/refs/heads"
+  out="$(real_head_run "${HOST_SB}/noloose")"
+  chmod 755 "${HOST_SB}/noloose/.git/refs/heads"
+  if refused_not_first "$out" && no_markers "${HOST_SB}/noloose"; then
+    pass "#205 F-01: an unreadable loose-ref directory is refused, not read as an unborn branch"
+  else
+    fail "#205 F-01: an unreadable loose-ref directory was not refused: $(tr '\n' '|' <<<"$out")"
+  fi
+fi
+
+# PR #226 F-01: HEAD may be symbolic without naming a branch. A first deploy
+# checks out a branch; anything else unborn is a checkout nobody set up.
+git_q init "${HOST_SB}/tagged"
+git_q -C "${HOST_SB}/tagged" symbolic-ref HEAD refs/tags/v1
+out="$(real_head_run "${HOST_SB}/tagged")"
+if refused_not_first "$out" && no_markers "${HOST_SB}/tagged"; then
+  pass "#205 F-01: a symbolic HEAD outside refs/heads is refused, not taken as a first deploy"
+else
+  fail "#205 F-01: a symbolic HEAD outside refs/heads was not refused: $(tr '\n' '|' <<<"$out")"
+fi
+
 # --- GoGo-BE#408: a changed config.alloy recreates Alloy, and only then -------
 #
 # Compose cannot see a bind-mounted file change, so the scripts have to. Same
