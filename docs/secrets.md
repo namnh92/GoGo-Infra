@@ -322,7 +322,8 @@ logs.
 A row the manifest marks `infra_readable: true` needs the flag, and only such a row accepts it:
 
 ```bash
-printf '%s' '["staff@example.com"]' | ./scripts/secrets/put.sh dev cms/access-staff-emails --infra-readable
+# `[]` on DEV: staff do not sign in through Access (owner decision 2026-10-08).
+printf '%s' '[]' | ./scripts/secrets/put.sh dev cms/access-staff-emails --infra-readable
 ./scripts/secrets/put.sh dev cms/super-admin-email --infra-readable   # prompts
 ```
 
@@ -535,12 +536,19 @@ value.
 
 Cloudflare Access tells GoGo-BE who is knocking once the backend knows which audience to trust.
 The allow list itself comes from SSM (GoGo-Infra#199, GoGo-BE#687): `cms/super-admin-email` and
-`cms/access-staff-emails`, applied by Terraform to **one** admission policy — one-time PIN in dev;
-staging and production must set `cms_require_mfa = true` (the module refuses otherwise), which needs
-an MFA-capable identity provider first, because a PIN does not satisfy Cloudflare's `mfa`. There is
-no organisation-membership policy any more: a second `include` that ignores the list is a way in
-the list does not control (GoGo-BE#687 D-8; the GitHub identity provider was declined in
-GoGo-Infra#67). When an identity provider is added, it becomes a `require` rule on that policy.
+`cms/access-staff-emails`, applied by Terraform to **one** admission policy. Terraform sets no
+identity provider, so the Access page offers whatever the organisation has configured — today only
+the **Cloudflare** method (sign in as a member of the Cloudflare account), in every environment.
+No one-time PIN is configured. That is why `cms/access-staff-emails` is normally `[]`: a staff
+mailbox on the list cannot pass the Access page unless it is also an account member, and staff do
+not need SSO (owner decision 2026-10-08, `execution-policy.md` §8). The super admin's mailbox must
+be an account member. Staging and production must set `cms_require_mfa = true` (the module refuses
+otherwise); whether the account-member method satisfies Cloudflare's `mfa` rule has not been
+verified — confirm it, or add an MFA-capable identity provider, before the first staging apply.
+There is no organisation-membership policy any more: a second `include` that
+ignores the list is a way in the list does not control (GoGo-BE#687 D-8; the GitHub identity
+provider was declined in GoGo-Infra#67). When an identity provider is added, it becomes a
+`require` rule on that policy.
 
 **1. Write the list** (bootstrap session): `put.sh <env> cms/super-admin-email --infra-readable`,
 `put.sh <env> cms/access-staff-emails --infra-readable` (a JSON array, `[]` allowed), then
@@ -612,18 +620,23 @@ For this parameter, absent means the API default, which is `true`. If a throttle
 an existing `false` were rendered as absent, the password door would re-open without any message.
 Any other error aborts the deploy, and the previous revision keeps running (GoGo-Infra#187).
 
-**What it does not protect against.** An outage at Access or its identity provider makes
-`cms-<env>` unreachable whatever this switch says. Re-opening the password door restores API and
-script access, not the browser console.
+**What it does not protect against.** An outage at Access or its identity provider closes the
+SSO path (`/sso`, `/v1/cms/auth/access-exchange`), and with it the `super_admin`'s only door,
+whatever this switch says. Since GoGo-BE#687 rev 6 the rest of `cms-<env>` is public (Infra#202),
+so staff keep signing in with their password in the browser while this switch is `true`.
 
 ## `super_admin` through Access only, other roles by password
 
 GoGo-BE ADR-0034 as amended for GoGo-BE#687 (owner decisions O-1…O-12, 2026-10-06). There is
 **exactly one** `super_admin`. Its address lives in SSM (`cms/super-admin-email`) and nowhere else;
 every deploy syncs the admin row to it. It signs in through Cloudflare Access only, and once its SSO
-door is proven its password hash is erased. `editor`, `moderator` and `ops_admin` keep two doors:
-Access SSO, or a password the super admin issued plus the matching Access assertion. Both lists come
-from SSM and are applied by Terraform (`cms/access-staff-emails`, previous section).
+door is proven its password hash is erased. `editor`, `moderator` and `ops_admin` sign in with
+email + a password the super admin issued, and **no** Access assertion (GoGo-BE#687 rev 6, owner
+decision 2026-10-08): `cms-<env>` is public, and the Access application protects only `/sso` and
+`/v1/cms/auth/access-exchange`. Cloudflare Access (SSO) is for the `super_admin` only (owner decision
+2026-10-08, `execution-policy.md` §8): the organisation has only the Cloudflare login method, so staff
+could not pass Access anyway, and `cms/access-staff-emails` is `[]` on DEV. The list stays in the
+manifest and the policy (previous section) but staff do not need to be on it.
 
 DEV is shared between sessions. Before and after every deploy, record the running GoGo-BE revision
 and the CMS build.
@@ -632,12 +645,12 @@ and the CMS build.
 | --- | --- | --- | --- |
 | R1a-0 | Freeze, then apply `module.boundary` from the GoGo-Infra#194 branch in the bootstrap session ("Changing the boundary", above). Freeze = from before that apply until R1a merges: no merge to `develop` that triggers `terraform-apply-<env>` (`terraform/**`, `config/*.tfvars`, `config/well-known/**`, `workers/share-link/**`) and no manual dispatch of `terraform-apply-dev` or `terraform-apply-prod` | **owner** | Drain check prints `[]`: `gh run list --repo namnh92/GoGo-Infra --workflow terraform-apply-dev.yml --limit 200 --json status,databaseId,headSha --jq '[.[] \| select(.status != "completed")]'` — every state but `completed` (`queued`, `in_progress`, `waiting`, `requested`, `pending`) counts as not done; `plan (dev)` on the PR shows no `module.boundary` change; R1a merges next, before any other apply-triggering merge or dispatch |
 | R1a | Merge GoGo-Infra#194 (manifest rows, `put.sh --infra-readable`, IAM) → `terraform-apply-dev` | standing | `validate.sh dev` (bootstrap session) reports both rows MISSING and the retired `cms/seed-admin-*` UNDECLARED. **`deploy-dev` fails from here until R1b** |
-| R1b | `put.sh dev cms/super-admin-email --infra-readable` = the address on today's allow list; `put.sh dev cms/access-staff-emails --infra-readable` = `["<staff…>"]` or `[]`; `delete.sh dev cms/seed-admin-email`; `delete.sh dev cms/seed-admin-password` | **owner** | `validate.sh dev --strict` → `METADATA READY`, no tag finding; `deploy-dev` green |
+| R1b | `put.sh dev cms/super-admin-email --infra-readable` = the address on today's allow list; `put.sh dev cms/access-staff-emails --infra-readable` = `[]` (a staff list was allowed when R1b ran; `[]` since the owner decision of 2026-10-08 (the address change of 2026-10-14 added the old address briefly and ended on `[]` again, SSM v5)); `delete.sh dev cms/seed-admin-email`; `delete.sh dev cms/seed-admin-password` | **owner** | `validate.sh dev --strict` → `METADATA READY`, no tag finding; `deploy-dev` green |
 | R2 | Infra-2 (Access policy from SSM) merged → apply | standing | plan shows no allow-list change; Access still 302 |
 | R3 | BE-b (row follows `CMS_SUPER_ADMIN_EMAIL`) merged → `deploy-dev` | standing | one `super_admin` row with the SSM address; password hash untouched |
 | R4 | BE-a + CMS-1 → deploy both; owner: fresh SSO session → `GET /v1/cms/auth/admins` 200 → `POST …/super-admin/confirm-sso` 201 | standing + owner | audit `admin.sso_confirmed` with the current address |
 | R5 | `put.sh dev cms/super-admin-sso-only true` → `deploy-dev` (the sync erases the hash: the gate is met) | **owner** | super admin password login 403 `SUPER_ADMIN_SSO_ONLY`; hash and `must_change_password_at` NULL |
-| R6–R8 | Address-change rehearsal, BE-c (assertion on the password door), CMS-2, BE-c2 | per GoGo-BE#687 | per GoGo-BE#687 |
+| R6–R8 | Address-change rehearsal, BE-d (rev 6: no assertion on the password door — supersedes BE-c), CMS-3, Infra-3 (Access on the two SSO paths only: `/sso` and `/v1/cms/auth/access-exchange`), BE-c2 | per GoGo-BE#687 | per GoGo-BE#687 |
 
 Every SSM write and delete above needs its own order from the owner, every time.
 
@@ -672,14 +685,15 @@ hash is erased it stays NULL: the API refuses `reset-password`, `change-password
 the switch back to `false` restores nothing, because there is no password to log in with. Every
 recovery is Access SSO plus SSM → `terraform-apply-<env>` → `deploy-dev` (the table above). An Access
 or identity-provider outage therefore blocks the super admin's console and API access until it ends;
-staff password sign-in also needs the Access assertion once BE-c is on the environment.
+staff password sign-in does not depend on Access and keeps working.
 
-**Lock a staff member.** Suspend the admin row through the CMS (immediate: every door closes,
-sessions are revoked). Then remove the address from `cms/access-staff-emails` and apply, which closes
-the edge. Suspension alone is sufficient; the list change is hygiene.
+**Lock a staff member.** Suspend the admin row through the CMS (immediate: the password door closes,
+sessions are revoked). That is sufficient: Access does not gate staff. If the address was ever added
+to `cms/access-staff-emails`, remove it and apply as hygiene.
 
-**Add a staff member.** Add the address to `cms/access-staff-emails` → apply → create the CMS row in
-the console with a temporary password (changed at first sign-in). GoGo-BE never writes to Cloudflare.
+**Add a staff member.** Create the CMS row in the console with a temporary password (changed at first
+sign-in). No Access list change: staff do not sign in through Access (owner decision 2026-10-08).
+GoGo-BE never writes to Cloudflare.
 
 **Compatibility while `cms/super-admin-sso-only` is `true`.** Each of these floors, once crossed,
 rolls back the decision. Record it as a rollback.
