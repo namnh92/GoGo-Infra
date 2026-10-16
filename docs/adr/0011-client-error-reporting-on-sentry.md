@@ -1,6 +1,7 @@
 # ADR 0011 — Client error reporting on Sentry
 
-**Status:** accepted — 2026-10-14; D-2 and D-9 amended 2026-10-16 (GoGo-Infra#229, oracle v2)
+**Status:** accepted — 2026-10-14; D-2 and D-9 amended, D-12 added 2026-10-16 (GoGo-Infra#229, oracle v2; Astra
+A-F-01/A-F-03 on PR #230)
 **Issue:** GoGo-Infra#208; consumers GoGo-MobileApp#336, GoGo-CMS#238, GoGo-WebApp#44 (blocked: no app yet)
 **Requirement authority:** owner decisions 2026-10-08 (Sentry for crash reporting, Crashlytics dropped) and
 2026-10-14 (plan Business + Seer AI; projects `gogo-mobile`, `gogo-cms` created; SA shape first). SA shape
@@ -40,15 +41,16 @@ file that says `v1` is always byte-identical to the `v1` here.
 
 ```
 sha256  decf6c4336269b086b209a4d27a9c36ca2c392b307c9d76e4b24883a4f4ef6a0  0011/redaction-cases.v1.json  (superseded)
-sha256  6cf5c1487985428e9bc7cbbc4fb07eaa4456fc624eda1b05ee507f77847e8d37  0011/redaction-cases.v2.json  (current)
+sha256  5869939957e5f68280974f9d34fb8896d4df117873b84a3b19bf2e3edb7c213e  0011/redaction-cases.v2.json  (current)
 ```
 
-[`v2`](0011/redaction-cases.v2.json) (2026-10-16, GoGo-Infra#229) is every `v1` case unchanged plus C-24: the
-Mobile `screen` tag (GoGo-MobileApp#341) carries an expo-router route template, which keeps its placeholder segments
-(D-9) and loses a credential put there by mistake; the `:name` rows cover React Router templates too. GoGo-MobileApp
-moves to `v2` with #341. GoGo-CMS stays on `v1` for now — a stated transition, not an exception: its `route` tag
-(GoGo-CMS#241) was built on `v1`, and it moves to `v2` when it next re-vendors. `v1` and `v2` differ only by C-24 and
-the D-9 placeholder rule, which no `v1` case exercises.
+[`v2`](0011/redaction-cases.v2.json) (2026-10-16, GoGo-Infra#229) is every `v1` case unchanged plus C-24
+(C-24.1…C-24.13): the Mobile `screen` tag (GoGo-MobileApp#341) carries an expo-router route template, which keeps its
+placeholder segments (D-9) and loses a credential put there by mistake; the `:name` rows cover React Router templates
+too; C-24.13 is the admitted sentinel `unknown` (D-12). GoGo-MobileApp moves to `v2` with #341. GoGo-CMS stays on `v1`
+for now — a stated transition, not an exception: its `route` tag (GoGo-CMS#241) was built on `v1`, and it moves to `v2`
+when it next re-vendors — GoGo-CMS#243 after this PR merges — implementing D-12 for `route` in that same change. `v1`
+and `v2` differ only by C-24 and the D-9 placeholder rule, which no `v1` case exercises.
 
 **D-3 Init contract.** DSN from the build environment; `''` or the literal `off` → the SDK is not initialised and
 every helper is a no-op. `environment` ∈ `dev | staging | prod` (BE's vocabulary; Mobile flavour `stag` → `staging`,
@@ -152,6 +154,47 @@ native crash on both platforms. Real-DSN events come after, and only once D-6 an
 
 **D-11 Two kill switches.** Disabling a project's client key in Sentry stops *storage* (clients keep sending).
 Rebuilding with the DSN set to `off` stops *transmission*. Neither needs a code change.
+
+**D-12 Screen and route tags: admission is membership, not shape** (2026-10-16, GoGo-Infra#229; Mobile `screen`,
+GoGo-MobileApp#341; CMS `route`, GoGo-CMS#241). The value a client puts in `tags.screen` / `tags.route` is one of the
+route templates that client **declares**, or the sentinel `unknown` — nothing else leaves a device. The declared list
+is generated from the route tree (Mobile: the file names under `src/app/` as `useSegments()` names them,
+`screen-templates.ts`; CMS: its router's path patterns) and pinned by a test that fails when list and tree differ, so a
+new route is declared in the change that adds it. Admission is enforced **at the reporting boundary** — the one module
+that calls the SDK (`setSentryScreen` in Mobile's `sentry.ts`; the CMS equivalent), before the SDK syncs the scope to
+native — whatever the caller passed: a view or a hook is a caller, not the gate. The redactor and a shape rule are not
+admission: the redactor keeps a raw uuid by design (C-21; C-24.12 stays as a generic-redactor case) and a regex accepts
+a letters-only slug such as `/places/alice`; neither establishes where a value came from, membership does. A rejected
+value is sent as `unknown`, never the input. Each client runs this table, by these ids, in its spec:
+
+| ID | Input | Rejected because |
+| --- | --- | --- |
+| A-1 | `/room/YDi_00PB1z4FSQZjpLbgdw/preference` | a pathname with a room code |
+| A-2 | `/r/YDi_00PB1z4FSQZjpLbgdw` | a pathname with an invite code |
+| A-3 | `/places/5f1c2a3e-1234-4abc-8def-0123456789ab` | a uuid — the redactor keeps it |
+| A-4 | `/places/alice` | a letters-only slug — the redactor and a shape rule keep it |
+| A-5 | `/room/[roomId]?tab=1` | a query |
+| A-6 | `/room/[roomId]#top` | a fragment |
+| A-7 | `room/[roomId]` | no leading slash |
+| A-8 | `/room/[roomId]/` | trailing slash |
+| A-9 | (empty string) | empty |
+| A-10 | `/room/[roomId]/preference/extra` | a template plus a segment — what a `?screen=` query appends on expo-router |
+| A-11 | `/ROOM/[roomId]` | case differs from the declared name |
+
+`unknown` is the admitted sentinel (D-7 record addition 4 on GoGo-Infra#208, 2026-10-16, replacing addition 3's "omit
+the tag"): the native SDKs cannot remove a tag — `undefined` reaches native as the string `"undefined"` — and keeping
+the previous value would name the wrong screen. Oracle C-24.13 pins that the redactor keeps the sentinel. The complete
+value set that leaves a device is therefore the declared list plus `unknown`; Discord carries it unchanged through
+`data.tags`.
+
+*Launch.* The client seeds the launch template (`/`) at initialization, before anything renders (Mobile: `initSentry`),
+so an event before the first navigation effect carries `/` rather than nothing — or, on iOS, the previous run's value:
+the native scope outlives the process (GoGo-MobileApp#336 relay, launch 2 carried a launch-1 tag). What remains is the
+window between the native SDK starting and the seed reaching the native scope; an iOS native crash there may still
+carry the previous run's screen. That window is **not accepted by this ADR** — it is an owner question on
+GoGo-MobileApp PR #349. A crash report captured in an earlier run is written with that run's scope at crash time and is
+not rewritten by the seed; the relay run checks it (launch 3 delivers launch 2's crash with launch 2's screen, not `/`).
+Attribution limits inside a run (first render, mount phase) belong to each client's ADR (Mobile ADR 0010).
 
 ## Alternatives rejected
 

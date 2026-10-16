@@ -1799,6 +1799,21 @@
         }
       },
       "note": "a uuid is kept (C-21): only the template rule, not the redactor, keeps a raw uuid out of the tag"
+    },
+    {
+      "id": "C-24.13",
+      "surface": "deep",
+      "input": {
+        "tags": {
+          "screen": "unknown"
+        }
+      },
+      "expected": {
+        "tags": {
+          "screen": "unknown"
+        }
+      },
+      "note": "the admitted sentinel (ADR-0011 D-12, D-7 record addition 4): a value that is not a declared template is sent as `unknown`, which the redactor keeps"
     }
   ]
 }
