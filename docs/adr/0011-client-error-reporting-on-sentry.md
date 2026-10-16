@@ -43,10 +43,10 @@ sha256  c9f6c9ca06040858721a7665eb996f2173e345f337cce55078b5c472f7abc9d1  0011/r
 ```
 
 [`v2`](0011/redaction-cases.v2.json) (2026-10-16, GoGo-Infra#229) is every `v1` case unchanged plus C-24: the
-`screen` tag (GoGo-MobileApp#341, CMS `route` in GoGo-CMS#241) carries a route template, which keeps its placeholder
-segments (D-9) and loses a credential put there by mistake. GoGo-MobileApp moves to `v2` with #341; GoGo-CMS stays on
-`v1` until GoGo-CMS#241 (`v1` and `v2` differ only by C-24 and the D-9 placeholder rule, which no `v1` case
-exercises).
+Mobile `screen` tag (GoGo-MobileApp#341) carries an expo-router route template, which keeps its placeholder segments
+(D-9) and loses a credential put there by mistake; the `:name` rows cover React Router templates too. GoGo-MobileApp
+moves to `v2` with #341. GoGo-CMS stays on `v1` (its `route` tag, GoGo-CMS#241, was built on `v1`) until it
+re-vendors; `v1` and `v2` differ only by C-24 and the D-9 placeholder rule, which no `v1` case exercises.
 
 **D-3 Init contract.** DSN from the build environment; `''` or the literal `off` → the SDK is not initialised and
 every helper is a no-op. `environment` ∈ `dev | staging | prod` (BE's vocabulary; Mobile flavour `stag` → `staging`,
