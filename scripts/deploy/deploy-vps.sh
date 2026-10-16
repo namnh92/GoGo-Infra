@@ -91,8 +91,25 @@ require_commit() {
 
 deployed="$(read_remote "the last verified revision" \
   "{ if [ -s .deployed-revision ]; then cat .deployed-revision; else echo __NONE__; fi; }")"
+# GoGo-Infra#205: a plain `git rev-parse HEAD` prints `HEAD` to stdout before
+# failing on a clone with no commit, so the read came back `HEAD__NO_HEAD__` and
+# the first-deploy branch never ran. `-q --verify` is silent instead — but a
+# silent failure must not mean "first deploy" either: the sentinel is printed
+# only when HEAD names a branch (`refs/heads/*`) that git says does not exist.
+# Every step asks git and treats a non-zero exit as a read error, never as
+# absence: `symbolic-ref` fails on a detached HEAD or an unreadable ref store,
+# `for-each-ref` fails when `packed-refs` cannot be read and prints nothing
+# only when the branch is truly unborn. A branch that exists but names a commit
+# the object store lacks (`^{commit}` failed, the ref read did not) is a broken
+# checkout and refuses too. Testing paths with `[ -e ]`/`grep -s` would read a
+# permission error as "no such ref" — PR #226 F-01.
+# shellcheck disable=SC2016 # expanded on the host, not here
 head="$(read_remote "the checked-out revision" \
-  "{ git rev-parse HEAD 2>/dev/null || echo __NO_HEAD__; }")"
+  '{ if h=$(git rev-parse -q --verify "HEAD^{commit}"); then echo "$h";
+     else r=$(git symbolic-ref -q HEAD) || exit 1;
+       case "$r" in refs/heads/*) ;; *) exit 1 ;; esac;
+       o=$(git for-each-ref --format="%(objectname)" "$r") || exit 1;
+       if [ -z "$o" ]; then echo __NO_HEAD__; else exit 1; fi; fi; }')"
 
 previous=""
 if [[ "$deployed" != "__NONE__" ]]; then

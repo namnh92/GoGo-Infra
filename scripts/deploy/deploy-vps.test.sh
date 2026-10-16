@@ -354,10 +354,97 @@ fi
 
 # And the source-level guard: the construct that caused this must not come back
 # on the revision read.
-if grep -nE 'git rev-parse HEAD.*\|\|[[:space:]]*true' "$DEPLOY"; then
+if grep -nE 'git rev-parse.*HEAD.*\|\|[[:space:]]*true' "$DEPLOY"; then
   fail "the revision read no longer swallows a failure with '|| true'"
 else
   pass "the revision read no longer swallows a failure with '|| true'"
+fi
+
+# GoGo-Infra#205: the `nohead` fake above answers with the sentinel itself, so
+# it never saw what git prints on a clone with no commit. Here the read runs
+# against real repositories; the tunnel drops at the fetch (`%q` escapes the
+# space in `git fetch`, so the hook matches `fetch`), after the branch is chosen.
+real_head_run() {
+  DROP_ON=fetch PATH="${HOST_SB}/bin:${PATH}" \
+    DEPLOY_HOST=fake.invalid DEPLOY_USER=deploy DEPLOY_PATH="$1" \
+    KNOWN_HOSTS_FILE=/dev/null SSH_KEY_FILE=/dev/null REMOTE_ENV_FILE=.env.dev \
+    COMPOSE_EDGE=docker/docker-compose.edge-tunnel.yml \
+    bash "$DEPLOY" "$REV_B" /dev/null 2>&1
+}
+no_markers() { [[ ! -e "$1/.previous-revision" && ! -e "$1/.deployed-revision" ]]; }
+
+git_q init "${HOST_SB}/unborn"
+out="$(real_head_run "${HOST_SB}/unborn")"
+if [[ "$out" == *"first deploy to this host"* && "$out" == *"Broken pipe"* ]] \
+  && no_markers "${HOST_SB}/unborn"; then
+  pass "#205: a real clone with no commit takes the first-deploy branch and writes no marker"
+else
+  fail "#205: a real clone with no commit did not take the first-deploy branch: $(tr '\n' '|' <<<"$out")"
+fi
+
+# F-01 on PR #226: a branch ref that exists but names no object is a broken
+# checkout, not a first deploy — `--verify` is silent here too.
+git_q init "${HOST_SB}/dangling"
+printf '%040d\n' 1 >"${HOST_SB}/dangling/.git/refs/heads/develop"
+out="$(real_head_run "${HOST_SB}/dangling")"
+if [[ "$out" == *"could not read the checked-out revision"* && "$out" != *"first deploy"* ]] \
+  && no_markers "${HOST_SB}/dangling"; then
+  pass "#205: a HEAD that names a missing commit is refused, not taken as a first deploy"
+else
+  fail "#205: a HEAD that names a missing commit was not refused: $(tr '\n' '|' <<<"$out")"
+fi
+
+# The same through a packed ref: no loose file, still not unborn.
+git_q init "${HOST_SB}/packed"
+printf '%040d refs/heads/develop\n' 1 >"${HOST_SB}/packed/.git/packed-refs"
+out="$(real_head_run "${HOST_SB}/packed")"
+if [[ "$out" == *"could not read the checked-out revision"* && "$out" != *"first deploy"* ]] \
+  && no_markers "${HOST_SB}/packed"; then
+  pass "#205: a packed branch ref that names a missing commit is refused too"
+else
+  fail "#205: a packed branch ref that names a missing commit was not refused: $(tr '\n' '|' <<<"$out")"
+fi
+
+# PR #226 F-01: a ref store that cannot be read is an error, not an unborn
+# branch. Permission bits do nothing for root, so these two cases need a
+# non-root runner (CI's is); as root they are reported, not faked.
+refused_not_first() {
+  [[ "$1" == *"could not read the checked-out revision"* && "$1" != *"first deploy"* ]]
+}
+if [[ "$(id -u)" -eq 0 ]]; then
+  echo "SKIP #205 F-01: running as root, permission denied cannot be staged"
+else
+  git_q init "${HOST_SB}/nopacked"
+  printf '%040d refs/heads/develop\n' 1 >"${HOST_SB}/nopacked/.git/packed-refs"
+  chmod 000 "${HOST_SB}/nopacked/.git/packed-refs"
+  out="$(real_head_run "${HOST_SB}/nopacked")"
+  chmod 644 "${HOST_SB}/nopacked/.git/packed-refs"
+  if refused_not_first "$out" && no_markers "${HOST_SB}/nopacked"; then
+    pass "#205 F-01: an unreadable packed-refs is refused, not read as an unborn branch"
+  else
+    fail "#205 F-01: an unreadable packed-refs was not refused: $(tr '\n' '|' <<<"$out")"
+  fi
+
+  git_q init "${HOST_SB}/noloose"
+  chmod 000 "${HOST_SB}/noloose/.git/refs/heads"
+  out="$(real_head_run "${HOST_SB}/noloose")"
+  chmod 755 "${HOST_SB}/noloose/.git/refs/heads"
+  if refused_not_first "$out" && no_markers "${HOST_SB}/noloose"; then
+    pass "#205 F-01: an unreadable loose-ref directory is refused, not read as an unborn branch"
+  else
+    fail "#205 F-01: an unreadable loose-ref directory was not refused: $(tr '\n' '|' <<<"$out")"
+  fi
+fi
+
+# PR #226 F-01: HEAD may be symbolic without naming a branch. A first deploy
+# checks out a branch; anything else unborn is a checkout nobody set up.
+git_q init "${HOST_SB}/tagged"
+git_q -C "${HOST_SB}/tagged" symbolic-ref HEAD refs/tags/v1
+out="$(real_head_run "${HOST_SB}/tagged")"
+if refused_not_first "$out" && no_markers "${HOST_SB}/tagged"; then
+  pass "#205 F-01: a symbolic HEAD outside refs/heads is refused, not taken as a first deploy"
+else
+  fail "#205 F-01: a symbolic HEAD outside refs/heads was not refused: $(tr '\n' '|' <<<"$out")"
 fi
 
 # --- GoGo-BE#408: a changed config.alloy recreates Alloy, and only then -------
