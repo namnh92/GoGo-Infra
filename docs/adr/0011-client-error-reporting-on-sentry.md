@@ -1,7 +1,8 @@
 # ADR 0011 — Client error reporting on Sentry
 
 **Status:** accepted — 2026-10-14; D-2 and D-9 amended, D-12 added 2026-10-16 (GoGo-Infra#229, oracle v2; Astra
-A-F-01/A-F-03 on PR #230)
+A-F-01/A-F-03/F-03/F-04 on PR #230). Owner decision 2026-10-16 on the native launch window (D-12 *Launch*): not
+accepted, measured on the relay device run, merge of PR #230 and GoGo-MobileApp PR #349 held until then.
 **Issue:** GoGo-Infra#208; consumers GoGo-MobileApp#336, GoGo-CMS#238, GoGo-WebApp#44 (blocked: no app yet)
 **Requirement authority:** owner decisions 2026-10-08 (Sentry for crash reporting, Crashlytics dropped) and
 2026-10-14 (plan Business + Seer AI; projects `gogo-mobile`, `gogo-cms` created; SA shape first). SA shape
@@ -161,11 +162,13 @@ route templates that client **declares**, or the sentinel `unknown` — nothing 
 is generated from the route tree (Mobile: the file names under `src/app/` as `useSegments()` names them,
 `screen-templates.ts`; CMS: its router's path patterns) and pinned by a test that fails when list and tree differ, so a
 new route is declared in the change that adds it. Admission is enforced **at the reporting boundary** — the one module
-that calls the SDK (`setSentryScreen` in Mobile's `sentry.ts`; the CMS equivalent), before the SDK syncs the scope to
-native — whatever the caller passed: a view or a hook is a caller, not the gate. The redactor and a shape rule are not
-admission: the redactor keeps a raw uuid by design (C-21; C-24.12 stays as a generic-redactor case) and a regex accepts
-a letters-only slug such as `/places/alice`; neither establishes where a value came from, membership does. A rejected
-value is sent as `unknown`, never the input. Each client runs this table, by these ids, in its spec:
+that calls the SDK (Mobile: `admitScreen` in `sentry.ts`, applied to the scope write `setSentryScreen` and to the screen
+read at capture in `captureError`; the CMS equivalent), before the SDK syncs the scope to native or sends the event —
+whatever the caller passed or a reader returned: a view, a hook or a navigation-state reader is a caller, not the gate.
+The redactor and a shape rule are not admission: the redactor keeps a raw uuid by design (C-21; C-24.12 stays as a
+generic-redactor case) and a regex accepts a letters-only slug such as `/places/alice`; neither establishes where a
+value came from, membership does. A rejected value is sent as `unknown`, never the input. Each client runs this table,
+by these ids, in its spec:
 
 | ID | Input | Rejected because |
 | --- | --- | --- |
@@ -191,10 +194,15 @@ value set that leaves a device is therefore the declared list plus `unknown`; Di
 so an event before the first navigation effect carries `/` rather than nothing — or, on iOS, the previous run's value:
 the native scope outlives the process (GoGo-MobileApp#336 relay, launch 2 carried a launch-1 tag). What remains is the
 window between the native SDK starting and the seed reaching the native scope; an iOS native crash there may still
-carry the previous run's screen. That window is **not accepted by this ADR** — it is an owner question on
-GoGo-MobileApp PR #349. A crash report captured in an earlier run is written with that run's scope at crash time and is
-not rewritten by the seed; the relay run checks it (launch 3 delivers launch 2's crash with launch 2's screen, not `/`).
-Attribution limits inside a run (first render, mount phase) belong to each client's ADR (Mobile ADR 0010).
+carry the previous run's screen. That window is **not accepted** — owner decision 2026-10-16 on Astra F-03 (PR #230),
+recorded in `execution-policy.md` §8: no dated exception, no native patch. It is measured on the relay device run — an
+iOS native crash raised in the interval between the native SDK starting and the `/` seed reaching the native scope —
+and **the merge of GoGo-Infra PR #230 and GoGo-MobileApp PR #349 waits for that measurement**. Android has no measured
+occurrence. A crash report captured in an earlier run is written with that run's scope at crash time and is not
+rewritten by the seed; the relay run checks it (launch 3 delivers launch 2's crash with launch 2's crash-time screen,
+not `/`). Attribution inside a run is each client's ADR (Mobile ADR 0010): an error the app reports itself carries the
+screen read from the navigation container's state at capture — event-local, so a throw while a new screen renders or
+mounts names that screen — while a native crash, which cannot run JS, carries the last scope write.
 
 ## Alternatives rejected
 
