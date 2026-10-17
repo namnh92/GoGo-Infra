@@ -190,6 +190,35 @@ monthly plan + Seer contributors + PAYG budget ≤ $150, from the run-rate measu
 Center (GoGo-BE#695 manual items, #696 usage collector). Adjustment path, owner's choice: lower PAYG;
 fewer Seer contributors or Seer off; a lower plan tier at renewal (ADR-0012a D-4).
 
+### Store accounts and signing material (GoGo-Infra#231)
+
+Paired with the Fastlane lanes, GoGo-MobileApp#350 (iOS) and #351 (Android). The credentials live in
+SSM under `/gogo/ci/prod/store/…` — `prod` only, because there is one signing identity for the app
+that ships — and are read only by `scripts/secrets/exec-with.sh` on the owner's workstation. The
+runbook, including what is unrecoverable, is in
+[secrets.md → Store signing material](secrets.md#store-signing-material-gogo-infra231).
+
+| What | Account | Created where | Kill switch | SSM row |
+| --- | --- | --- | --- | --- |
+| App Store Connect API key (role App Manager) | Apple Developer Program — owner's Apple account | App Store Connect → Users and Access → Integrations → App Store Connect API | Revoke the key there; uploads stop, the published app is untouched | `store/apple-asc-key` + `store/apple-asc-key-id` + `store/apple-asc-issuer-id` |
+| Android release keystore | GoGo's own — not an account | `keytool` on the owner's machine, once | none — see below | `store/android-keystore` + `…-keystore-password` + `…-key-alias` + `…-key-password` |
+| Play Developer API service account (release management on the GoGo app only) | Google Cloud project + Play Console, owner's account | Google Cloud IAM, then invited in Play Console → Users and permissions | Delete the key in Google Cloud IAM, or remove the account's Play permission | `store/play-service-account` |
+
+The keystore has **no kill switch and no rotation**: it is the signature every installed Android copy
+checks an update against, so revoking it would end updates for those installs and replacing it makes
+a different app as far as Play is concerned. The SSM row is a working copy; the owner's own off-machine
+backup is the backup. The Apple key and the Play key are both replaceable — create the new one, ship
+one build with it, then revoke or delete the old.
+
+Not stored: an Apple team id (an App Store Connect API key authenticates without one and fastlane
+reads the team from it), and no Apple ID password or session cookie anywhere — the API key exists so
+neither is needed.
+
+Values are written by the owner (`put.sh prod store/…`), as with every other credential here; the
+assistant supplies the command, never the value. As of 2026-10-17 none of the eight rows has a value
+yet: `validate.sh prod --strict --include-planned` reports `store_release_ios` and
+`store_release_android` as planned and names the missing rows.
+
 ### Sentry — alert notifications go to Discord (GoGo-Infra#219)
 
 Owner decision 2026-10-15: issue and monitor alerts for all three projects go to Discord, one channel per

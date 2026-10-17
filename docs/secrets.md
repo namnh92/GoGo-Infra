@@ -337,6 +337,100 @@ the runtime renderers emit one line per variable, so it has to be encoded before
 `./scripts/secrets/put-identity-key.sh <pem> <env>` validates the curve, encodes it, and
 verifies the round trip by fingerprint — see [onesignal-identity-key.md](onesignal-identity-key.md).
 
+## Store signing material (GoGo-Infra#231)
+
+The app's signing credentials live under `ci`, in **`prod` only**: there is one signing identity
+for the app that ships, and a dev or staging build is not signed for the store. `ci` keeps them out
+of every runtime environment — `render-env.sh` renders `backend`/`runtime` rows, `mobile-env.py`
+renders `mobile` rows, and `manifest.test.sh` pins that no `store/*` row appears in either set.
+Nothing reads them but the lane the owner runs:
+
+```bash
+# iOS — TestFlight (GoGo-MobileApp#350)
+./scripts/secrets/exec-with.sh prod \
+  store/apple-asc-key store/apple-asc-key-id store/apple-asc-issuer-id -- \
+  fastlane ios beta
+
+# Android — Play internal track (GoGo-MobileApp#351)
+./scripts/secrets/exec-with.sh prod \
+  store/android-keystore store/android-keystore-password \
+  store/android-key-alias store/android-key-password store/play-service-account -- \
+  fastlane android internal
+```
+
+`exec-with.sh` takes a set because a lane needs all of them and nothing less: every row is resolved
+before any value is read, so a typo stops the lane instead of starting it half-credentialled, and
+`prod` asks for typed confirmation once for the whole set. The values are exported into that one
+process and `exec` replaces the shell, so nothing outlives the lane — no `export` in your shell, no
+`.env`, nothing written into `android/` or `ios/`.
+
+**Two of these are not recoverable by rotation.** Treat them differently from every other row here:
+
+| | Lost | Leaked |
+| --- | --- | --- |
+| `store/android-keystore` (+ its two passwords) | Every installed Android copy checks an update against this signature. Without it there is no way to ship an update to those installs short of a Play App Signing key reset. | Anyone can sign an artifact that Android accepts as ours. |
+| `store/apple-asc-key` | Create another key in App Store Connect; nothing is lost. | Anyone can upload builds as us until the key is revoked. |
+| `store/play-service-account` | Create another key for the same service account. | Anyone can publish to our Play tracks until the key is deleted in Google Cloud IAM. |
+
+So: the SSM row is a working copy, not the backup. The keystore must also exist in the owner's own
+backup, off this machine and off this repository.
+
+### Creating and storing them
+
+The owner creates every value; nothing here generates one.
+
+1. **App Store Connect API key** — App Store Connect → Users and Access → Integrations → App Store
+   Connect API → generate a key with role *App Manager*. The `.p8` downloads **once**. Then, with the
+   file contents on stdin:
+
+   ```bash
+   ./scripts/secrets/put.sh prod store/apple-asc-key < AuthKey_XXXXXXXXXX.p8
+   ./scripts/secrets/put.sh prod store/apple-asc-key-id      # prompts: the 10-character key id
+   ./scripts/secrets/put.sh prod store/apple-asc-issuer-id   # prompts: the issuer UUID
+   ```
+
+2. **Android release keystore** — generated once, then never again for this app:
+
+   ```bash
+   keytool -genkeypair -v -keystore gogo-release.jks -alias gogo \
+     -keyalg RSA -keysize 4096 -validity 10000
+   base64 -i gogo-release.jks | ./scripts/secrets/put.sh prod store/android-keystore
+   ./scripts/secrets/put.sh prod store/android-keystore-password
+   ./scripts/secrets/put.sh prod store/android-key-alias        # `gogo` above
+   ./scripts/secrets/put.sh prod store/android-key-password
+   ```
+
+   Back up `gogo-release.jks` and its passwords outside this machine **before** deleting the local
+   file.
+
+3. **Play service account** — Google Cloud → IAM → service account, then Play Console → Users and
+   permissions → invite it with *release management* on the GoGo app only. Download the JSON key:
+
+   ```bash
+   ./scripts/secrets/put.sh prod store/play-service-account < play-sa.json
+   ```
+
+Readiness reports them as a group: `validate.sh prod --strict --include-planned` lists the
+`store_release_ios` and `store_release_android` capabilities and names whichever rows are missing.
+
+### Rotating and revoking
+
+- **Apple key:** create the new key, store it, upload one build with it, then revoke the old key in
+  App Store Connect. Revoking is also the kill switch — it stops uploads without touching the app.
+- **Play service account key:** create a new key, store it, upload once, then delete the old key in
+  Google Cloud IAM. Removing the account's Play permission is the kill switch.
+- **Keystore:** not rotated. A new keystore is a new app signature, which Play treats as a different
+  app. Only the passwords can change (`keytool -storepasswd`, `keytool -keypasswd`), and the
+  keystore row must be re-uploaded afterwards because the file changes.
+
+### Who may read them
+
+No GoGo role is granted these paths. They are read by the owner's own session (`gogo-bootstrap`
+through SSO), which is the identity that wrote them; the permissions boundary allows a role's read
+ceiling to name `/gogo/ci/<env>/…`, but no role names `store/*` and none should — the lanes run on a
+workstation, not in CI. When a release job does arrive, give it a role whose ceiling names exactly
+the rows that lane needs, never the `ci` tree.
+
 ## Why Terraform does not manage values
 
 ```hcl

@@ -51,6 +51,17 @@ exit "${CHILD_EXIT:-0}"
 CHILD
 chmod +x "${SANDBOX}/child"
 
+# A second child for the multi-parameter case (GoGo-Infra#231): proves each
+# variable of a set arrived, again without printing any of them.
+cat >"${SANDBOX}/lane" <<'LANE'
+#!/usr/bin/env bash
+for v in ASC_KEY_CONTENT ASC_KEY_ID ASC_ISSUER_ID; do
+  if [[ "${!v:-}" == "$STUB_VALUE" ]]; then echo "lane: $v present"; else echo "lane: $v absent"; fi
+done
+exit "${CHILD_EXIT:-0}"
+LANE
+chmod +x "${SANDBOX}/lane"
+
 run() {
   : >"$CALLS"
   PATH="${SANDBOX}:${PATH}" AWS_PROFILE=stub "$SCRIPT" "$@" >"${SANDBOX}/out" 2>&1 </dev/null
@@ -104,14 +115,51 @@ refuses() {
   fi
 }
 
+# 3b. A set of parameters (GoGo-Infra#231): a store lane needs all of them, and
+# nesting one invocation per value would confirm prod once per credential.
+: >"$CALLS"
+GOGO_ASSUME_YES=1 run prod store/apple-asc-key store/apple-asc-key-id store/apple-asc-issuer-id -- lane
+status=$?
+if [[ $status -eq 0 ]] && [[ "$(grep -c 'present$' "${SANDBOX}/out")" == 3 ]]; then
+  ok "a set of parameters all reach the command under their own env_var"
+else
+  bad "a set of parameters all reach the command under their own env_var" "status=${status}: $(cat "${SANDBOX}/out")"
+fi
+if [[ "$(grep -c 'get-parameter' "$CALLS")" == 3 ]] \
+  && grep -q "/gogo/ci/prod/store/apple-asc-key\b" "$CALLS" \
+  && grep -q "/gogo/ci/prod/store/apple-asc-issuer-id" "$CALLS"; then
+  ok "each path in the set is read once, under its own namespace"
+else
+  bad "each path in the set is read once, under its own namespace" "$(cat "$CALLS")"
+fi
+if grep -qF "$VALUE" "${SANDBOX}/out" || grep -qF "$VALUE" "$CALLS"; then
+  bad "no value of the set is printed or passed as an argument" "found in output or aws argv"
+else
+  ok "no value of the set is printed or passed as an argument"
+fi
+
 refuses "no -- separator" "usage: exec-with.sh" dev sentry/mobile-auth-token child extra
 refuses "no command after --" "usage: exec-with.sh" dev sentry/mobile-auth-token --
 refuses "an undeclared path" "is not declared" dev sentry/not-declared -- child
 refuses "a row with no env_var" "declares no env_var" dev terraform/read/r2-state-secret-access-key -- child
 refuses "the ci pseudo-environment" "'ci' is not a runtime environment" ci sentry/mobile-auth-token -- child
 refuses "prod without typed confirmation" "aborted|PRODUCTION" prod sentry/mobile-auth-token -- child
+GOGO_ASSUME_YES=1 refuses "the same path twice" "is named twice" prod store/apple-asc-key store/apple-asc-key -- lane
+GOGO_ASSUME_YES=1 refuses "a set with one undeclared path" "is not declared" prod store/apple-asc-key store/not-declared -- lane
+# No test for two different paths sharing an env_var: no two rows in the
+# manifest do, which is the point of the check — it exists so that a future row
+# copied from a neighbour cannot silently shadow it, and the manifest is the
+# only input, so there is nothing to feed it here without faking the reader.
 STUB_GET_FAIL=1 refuses "a failed read does not run the command with an empty value" "could not read /gogo/ci/dev/sentry/mobile-auth-token" dev sentry/mobile-auth-token -- child
 STUB_VALUE='' refuses "an empty parameter does not run the command" "is empty" dev sentry/mobile-auth-token -- child
+
+: >"$CALLS"
+GOGO_ASSUME_YES=1 run prod store/apple-asc-key store/not-declared -- lane
+if grep -q "get-parameter" "$CALLS"; then
+  bad "an unresolvable member of a set stops before any value is fetched" "$(cat "$CALLS")"
+else
+  ok "an unresolvable member of a set stops before any value is fetched"
+fi
 
 : >"$CALLS"
 run dev terraform/read/r2-state-secret-access-key -- child

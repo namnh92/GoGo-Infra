@@ -59,6 +59,55 @@ else
 fi
 
 # The default output must stay backend-only now that a third namespace exists.
+# --- store signing material (GoGo-Infra#231) --------------------------------
+#
+# The keystore and the App Store Connect key are the two credentials whose loss
+# or leak is not recoverable by rotation: one is the identity every installed
+# Android copy checks an update against, the other uploads builds as us. They
+# are `ci` rows for the same reason as the Sentry upload token, and this pins
+# that the reason holds — nothing renders them anywhere.
+
+store_rows="$(python3 "$READER" prod --namespace ci --consumer pipeline | awk -F'\t' '$1 ~ /^store\// { print $1 }')"
+if [[ "$(echo "$store_rows" | grep -c .)" == 8 ]]; then
+  ok "the eight store signing rows are declared under ci"
+else
+  bad "store signing rows missing or extra" "$store_rows"
+fi
+
+store_runtime="$(comm -12 \
+  <(echo "$store_rows" | sort) \
+  <(python3 "$READER" prod --namespace backend --consumer runtime | cut -f1 | sort))"
+if [[ -z "$store_runtime" ]]; then
+  ok "no store signing row is rendered into a runtime environment"
+else
+  bad "store signing material would be rendered into the API environment" "$store_runtime"
+fi
+
+store_mobile="$(comm -12 \
+  <(echo "$store_rows" | sort) \
+  <(python3 "$READER" prod --namespace mobile --consumer all | cut -f1 | sort))"
+if [[ -z "$store_mobile" ]]; then
+  ok "no store signing row reaches the mobile build set"
+else
+  bad "store signing material would be baked into a mobile binary" "$store_mobile"
+fi
+
+# Readiness has to be able to say they are missing, which is what `planned`
+# buys: a capability nobody declared cannot be reported as not ready.
+store_caps="$(python3 "$READER" prod --capabilities --include-planned | awk -F'\t' '$1 ~ /^store_release_/ { print $1 "\t" $3 }')"
+if [[ "$(echo "$store_caps" | grep -c 'planned')" == 2 ]]; then
+  ok "both store release capabilities are planned for prod"
+else
+  bad "store release capabilities are not planned for prod" "$store_caps"
+fi
+
+store_caps_dev="$(python3 "$READER" dev --capabilities --include-planned | awk -F'\t' '$1 ~ /^store_release_/ { print }')"
+if [[ -z "$store_caps_dev" ]]; then
+  ok "neither store release capability claims dev — one signing identity, prod only"
+else
+  bad "a store release capability appears in dev" "$store_caps_dev"
+fi
+
 ci_in_default="$(python3 "$READER" dev | awk -F'\t' '$5 == "ci" { print $1 }')"
 if [[ -z "$ci_in_default" ]]; then
   ok "default output still excludes ci"
