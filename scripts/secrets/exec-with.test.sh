@@ -32,6 +32,10 @@ cat >"${SANDBOX}/aws" <<'STUB'
 #!/usr/bin/env bash
 [[ -n "${CALLS:-}" ]] || { echo "stub: CALLS unset" >&2; exit 97; }
 echo "aws $*" >>"$CALLS"
+# GoGo-Infra#231, Sol F-01: a later fetch must not inherit an earlier secret.
+for v in SENTRY_AUTH_TOKEN ASC_KEY_CONTENT ASC_KEY_ID ASC_ISSUER_ID; do
+  [[ -n "${!v:-}" ]] && echo "aws-inherited $v" >>"$CALLS"
+done
 case "$1 $2" in
   "sts get-caller-identity") echo '{}' ;;
   "ssm get-parameter")
@@ -50,6 +54,17 @@ echo "child: args=$*"
 exit "${CHILD_EXIT:-0}"
 CHILD
 chmod +x "${SANDBOX}/child"
+
+# A second child for the multi-parameter case (GoGo-Infra#231): proves each
+# variable of a set arrived, again without printing any of them.
+cat >"${SANDBOX}/lane" <<'LANE'
+#!/usr/bin/env bash
+for v in ASC_KEY_CONTENT ASC_KEY_ID ASC_ISSUER_ID; do
+  if [[ "${!v:-}" == "$STUB_VALUE" ]]; then echo "lane: $v present"; else echo "lane: $v absent"; fi
+done
+exit "${CHILD_EXIT:-0}"
+LANE
+chmod +x "${SANDBOX}/lane"
 
 run() {
   : >"$CALLS"
@@ -104,14 +119,55 @@ refuses() {
   fi
 }
 
+# 3b. A set of parameters (GoGo-Infra#231): a store lane needs all of them, and
+# nesting one invocation per value would confirm prod once per credential.
+: >"$CALLS"
+GOGO_ASSUME_YES=1 run prod store/apple-asc-key store/apple-asc-key-id store/apple-asc-issuer-id -- lane
+status=$?
+if [[ $status -eq 0 ]] && [[ "$(grep -c 'present$' "${SANDBOX}/out")" == 3 ]]; then
+  ok "a set of parameters all reach the command under their own env_var"
+else
+  bad "a set of parameters all reach the command under their own env_var" "status=${status}: $(cat "${SANDBOX}/out")"
+fi
+if [[ "$(grep -c 'get-parameter' "$CALLS")" == 3 ]] \
+  && grep -q "/gogo/ci/prod/store/apple-asc-key\b" "$CALLS" \
+  && grep -q "/gogo/ci/prod/store/apple-asc-issuer-id" "$CALLS"; then
+  ok "each path in the set is read once, under its own namespace"
+else
+  bad "each path in the set is read once, under its own namespace" "$(cat "$CALLS")"
+fi
+if grep -qF "$VALUE" "${SANDBOX}/out" || grep -qF "$VALUE" "$CALLS"; then
+  bad "no value of the set is printed or passed as an argument" "found in output or aws argv"
+else
+  ok "no value of the set is printed or passed as an argument"
+fi
+if grep -q "^aws-inherited" "$CALLS"; then
+  bad "no fetch inherits a credential already fetched" "$(grep '^aws-inherited' "$CALLS")"
+else
+  ok "no fetch inherits a credential already fetched"
+fi
+
 refuses "no -- separator" "usage: exec-with.sh" dev sentry/mobile-auth-token child extra
 refuses "no command after --" "usage: exec-with.sh" dev sentry/mobile-auth-token --
 refuses "an undeclared path" "is not declared" dev sentry/not-declared -- child
 refuses "a row with no env_var" "declares no env_var" dev terraform/read/r2-state-secret-access-key -- child
 refuses "the ci pseudo-environment" "'ci' is not a runtime environment" ci sentry/mobile-auth-token -- child
-refuses "prod without typed confirmation" "aborted|PRODUCTION" prod sentry/mobile-auth-token -- child
+GOGO_ASSUME_YES=1 refuses "the same path twice" "is named twice" prod store/apple-asc-key store/apple-asc-key -- lane
+GOGO_ASSUME_YES=1 refuses "a set with one undeclared path" "is not declared" prod store/apple-asc-key store/not-declared -- lane
+# No test for two different paths sharing an env_var: no two rows in the
+# manifest do, which is the point of the check — it exists so that a future row
+# copied from a neighbour cannot silently shadow it, and the manifest is the
+# only input, so there is nothing to feed it here without faking the reader.
 STUB_GET_FAIL=1 refuses "a failed read does not run the command with an empty value" "could not read /gogo/ci/dev/sentry/mobile-auth-token" dev sentry/mobile-auth-token -- child
 STUB_VALUE='' refuses "an empty parameter does not run the command" "is empty" dev sentry/mobile-auth-token -- child
+
+: >"$CALLS"
+GOGO_ASSUME_YES=1 run prod store/apple-asc-key store/not-declared -- lane
+if grep -q "get-parameter" "$CALLS"; then
+  bad "an unresolvable member of a set stops before any value is fetched" "$(cat "$CALLS")"
+else
+  ok "an unresolvable member of a set stops before any value is fetched"
+fi
 
 : >"$CALLS"
 run dev terraform/read/r2-state-secret-access-key -- child
@@ -119,6 +175,60 @@ if grep -q "get-parameter" "$CALLS"; then
   bad "a row with no env_var never reaches SSM" "$(cat "$CALLS")"
 else
   ok "a row with no env_var never reaches SSM"
+fi
+
+# 3c. The prod confirmation (GoGo-Infra#231, Sol F-02). It is read from the
+# controlling terminal, never from stdin — stdin is the command's — and a
+# session with no terminal is refused with a message, before any `aws` call.
+# Run through scripts/lib/tty-harness.py, which makes the terminal per case:
+# a test that ran the script directly would inherit the suite's own terminal
+# (blocking on the developer's keyboard) or none (CI), and pass or hang by
+# luck. Four cells: terminal answers `prod`; terminal answers wrong; no
+# terminal; no terminal with GOGO_ASSUME_YES=1.
+HARNESS="${DIR}/../lib/tty-harness.py"
+
+with_tty() { # with_tty <answer> <args...> — stdin stays /dev/null, the terminal types <answer>
+  local answer="$1"
+  shift
+  : >"$CALLS"
+  PATH="${SANDBOX}:${PATH}" AWS_PROFILE=stub python3 "$HARNESS" answer "$answer" -- "$SCRIPT" "$@" >"${SANDBOX}/out" 2>&1 </dev/null
+}
+without_tty() { # without_tty <args...> — a session with no controlling terminal at all
+  : >"$CALLS"
+  PATH="${SANDBOX}:${PATH}" AWS_PROFILE=stub python3 "$HARNESS" no-tty -- "$SCRIPT" "$@" >"${SANDBOX}/out" 2>&1 </dev/null
+}
+
+with_tty prod prod store/apple-asc-key store/apple-asc-key-id store/apple-asc-issuer-id -- lane
+status=$?
+if [[ $status -eq 0 ]] && [[ "$(grep -c 'present$' "${SANDBOX}/out")" == 3 ]] && grep -q "PRODUCTION" "${SANDBOX}/out"; then
+  ok "a prod lane with redirected stdin takes its confirmation from the terminal"
+else
+  bad "a prod lane with redirected stdin takes its confirmation from the terminal" "status=${status}: $(cat "${SANDBOX}/out")"
+fi
+
+with_tty no prod store/apple-asc-key store/apple-asc-key-id store/apple-asc-issuer-id -- lane
+status=$?
+if [[ $status -ne 0 ]] && grep -q "aborted" "${SANDBOX}/out" && ! grep -q "^lane:" "${SANDBOX}/out" && [[ ! -s "$CALLS" ]]; then
+  ok "a wrong answer on the terminal aborts before any aws call"
+else
+  bad "a wrong answer on the terminal aborts before any aws call" "status=${status}, calls: $(tr '\n' ';' <"$CALLS"); out: $(cat "${SANDBOX}/out")"
+fi
+
+without_tty prod sentry/mobile-auth-token -- child
+status=$?
+if [[ $status -ne 0 ]] && grep -q "needs typed confirmation on a terminal" "${SANDBOX}/out" \
+  && ! grep -q "^child:" "${SANDBOX}/out" && [[ ! -s "$CALLS" ]]; then
+  ok "prod with no terminal is refused with a message, before any aws call"
+else
+  bad "prod with no terminal is refused with a message, before any aws call" "status=${status}, calls: $(tr '\n' ';' <"$CALLS"); out: $(cat "${SANDBOX}/out")"
+fi
+
+GOGO_ASSUME_YES=1 without_tty prod store/apple-asc-key store/apple-asc-key-id store/apple-asc-issuer-id -- lane
+status=$?
+if [[ $status -eq 0 ]] && [[ "$(grep -c 'present$' "${SANDBOX}/out")" == 3 ]]; then
+  ok "GOGO_ASSUME_YES=1 runs a prod lane with no terminal at all"
+else
+  bad "GOGO_ASSUME_YES=1 runs a prod lane with no terminal at all" "status=${status}: $(cat "${SANDBOX}/out")"
 fi
 
 # 4. Tracing. `bash -x` would print the export, value included.

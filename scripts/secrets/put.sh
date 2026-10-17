@@ -85,7 +85,8 @@ if [[ -z "$PARAM_TYPE" && "$ENVIRONMENT" != "ci" ]]; then
   fi
 fi
 
-# Every local refusal comes before require_aws: a malformed request should say
+# Every local refusal comes before require_aws (which sits below the value
+# read, so that the size guard is local too): a malformed request should say
 # what is wrong with it, not that the SSO session expired (review F-05).
 PARAM_TYPE="${PARAM_TYPE:-SecureString}"
 
@@ -100,8 +101,9 @@ if [[ "$INFRA_READABLE" == "yes" && "$PARAM_TYPE" != "String" ]]; then
   die "--infra-readable refuses ${PARAM_TYPE}: only a String may be readable by Terraform"
 fi
 
-require_aws
-
+# Before the value is read: the prompt names the environment and the path, so
+# a call aimed at the wrong one is stopped before a secret has been typed into
+# it. The answer comes from the terminal, not from stdin (common.sh).
 confirm_prod "$ENVIRONMENT" "write ${PARAM_PATH}"
 
 # The manifest decides which namespace this path lives in, not the caller.
@@ -122,6 +124,25 @@ else
 fi
 
 [[ -n "$value" ]] || die "empty value refused"
+
+# Standard-tier parameters hold 4 KiB, and the request below pins that tier. An
+# oversize value otherwise fails inside `aws` with a message about the API, not
+# about the file the operator just piped in — and the base64 of a release
+# keystore sits close enough to the ceiling to matter (GoGo-Infra#231, Sol F-04).
+value_bytes="$(printf '%s' "$value" | wc -c | tr -d ' ')"
+if (( value_bytes > 4096 )); then
+  die "value is ${value_bytes} bytes; a Standard-tier parameter holds 4096.
+       Shrink it (an RSA-2048 keystore instead of 4096) or move this row to the
+       Advanced tier deliberately — it is billed per parameter per month."
+fi
+
+# Only now the network. The size guard needs the value, so authenticating
+# before it would spend an STS round trip on a file that was never going to fit
+# (Sol F-04, round 2). The price is that an expired session is reported after
+# the value was typed, and the operator types it again; nothing leaks in
+# between — `value` is a shell variable, not exported, so the `aws sts` child
+# never holds it.
+require_aws
 
 # The value goes to the CLI in a file, not in an argument.
 #
