@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHmac } from 'node:crypto'
 import { afterEach, beforeEach, describe, it } from 'node:test'
-import worker from '../src/index.js'
+import worker, { buildEmbed, fitTotal, scrub, stackBlock } from '../src/index.js'
 
 /**
  * GoGo-Infra#221 — the relay's behaviour with Discord faked at `fetch` and
@@ -673,14 +673,22 @@ describe('every scrub shape, through every permitted field (F-13)', () => {
     { name: 'phone', raw: '0912345678', gone: '0912345678', standalone: true },
   ]
 
-  const postedBodyRaw = async (eventOverrides) => {
+  const postedBodyRaw = async (eventOverrides, rule) => {
     discordAnswering(savedMessage)
-    const res = await call(eventAlertBody({ event: eventOverrides }), {})
+    const res = await call(eventAlertBody({ event: eventOverrides, rule }), {})
     assert.equal(res.status, 200)
     return discordCalls[0].init.body
   }
 
   for (const s of SENTINELS) {
+    it(`${s.name} is scrubbed out of the triggered rule`, async () => {
+      // `data.triggered_rule` is the one permitted field outside `event`; the
+      // confirm round found it carried no sentinel, so removing its scrub
+      // changed nothing in this suite (Sol F-13).
+      const raw = await postedBodyRaw({}, `rule ${s.raw}`)
+      assert.ok(!raw.includes(s.gone), `${s.name} survived in the rule`)
+    })
+
     it(`${s.name} is scrubbed out of title, culprit, exception value and type`, async () => {
       const raw = await postedBodyRaw({
         title: `t ${s.raw}`,
@@ -734,7 +742,9 @@ describe('every scrub shape, through every permitted field (F-13)', () => {
           ['screen', `/s/${s.raw}`],
           ['route', `/r2/${s.raw}`],
           ['handled', `h ${s.raw}`],
-          ['level', 'error'],
+          // the `level` tag is scrubbed text like any other tag — it was a
+          // constant here, so its scrub was the one this table did not pin
+          ['level', `error ${s.raw}`],
         ],
       })
       assert.ok(!raw.includes(s.gone), `${s.name} survived in a tag or release`)
@@ -929,36 +939,69 @@ describe('Discord limits are met by shortening, not by silence (F-07, F-14)', ()
     assert.match(lines[0], /:107:5/)
   })
 
-  it('an impossible stack says how many frames it dropped', async () => {
-    const embed = await postedEmbed({
-      exception: {
-        values: [
-          {
-            type: 'E',
-            value: 'v',
-            stacktrace: {
-              frames: Array.from({ length: 8 }, (_, i) => ({
-                // every character survives the scrub and nothing can be cut
-                // below the floor: forces the omission path
-                filename: `${'w'.repeat(400)}.ts`,
-                function: 'g'.repeat(400),
-                lineno: 1,
-                colno: i,
-                in_app: true,
-              })),
-            },
+  // The worst frames an event can carry: every character survives the scrub
+  // and nothing can be cut below the floor.
+  const worstFrames = () => ({
+    exception: {
+      values: [
+        {
+          type: 'E',
+          value: 'v',
+          stacktrace: {
+            frames: Array.from({ length: 8 }, (_, i) => ({
+              filename: `${'w'.repeat(400)}.ts`,
+              function: 'g'.repeat(400),
+              lineno: 1,
+              colno: i,
+              in_app: true,
+            })),
           },
-        ],
-      },
-    })
-    const stack = embed.fields.find((f) => f.name === 'Stack').value
-    assert.ok(stack.length <= 1024)
-    if (stack.split('\n').slice(1, -1).length < 8) {
-      assert.match(stack, /older frame\(s\) omitted/)
-    }
+        },
+      ],
+    },
   })
 
-  it('a near-6000 embed is shrunk by the relay, and the fields keep their caps', async () => {
+  it('eight frames always fit 1024 by shortening alone — the omission path is unreachable through an event', async () => {
+    // Eight 120-character lines fence to 975, so the ladder ends there. The
+    // earlier assertion sat inside `if (lines < 8)` and never ran (Sol F-14).
+    const embed = await postedEmbed(worstFrames())
+    const stack = embed.fields.find((f) => f.name === 'Stack').value
+    assert.ok(stack.length <= 1024)
+    assert.equal(stack.split('\n').slice(1, -1).length, 8)
+    assert.ok(!stack.includes('omitted'))
+  })
+
+  it('when the shortest eight lines do not fit, the block drops from the oldest end and says how many (direct, limit injected)', () => {
+    // Unreachable at 1024 (above), so the limit is injected: eight 40-char
+    // lines fence to 335, which 300 refuses.
+    const block = stackBlock(worstFrames(), 300)
+    assert.ok(block.length <= 300, `block is ${block.length}`)
+    const lines = block.split('\n').slice(1, -1)
+    const marker = lines.at(-1).match(/^… (\d+) older frame\(s\) omitted$/)
+    assert.ok(marker, 'the block must say how many frames it dropped')
+    assert.equal(lines.length - 1 + Number(marker[1]), 8, 'shown + omitted must account for every frame')
+    assert.ok(lines.length - 1 >= 1)
+  })
+
+  it('the 6000 total is enforced by shrinking the description to exactly the limit (direct, limit injected)', () => {
+    // Through buildEmbed the component caps sum to ~3100, so no event reaches
+    // this branch; the limiter is tested on a synthetic embed instead (Sol F-14).
+    const embed = {
+      title: 'T'.repeat(256),
+      description: 'D'.repeat(4096),
+      fields: Array.from({ length: 5 }, (_, i) => ({ name: `F${i}`, value: 'v'.repeat(1024), inline: true })),
+      footer: { text: 'issue 1 · event ' + 'e'.repeat(32) },
+    }
+    const before = 256 + 4096 + 5 * (2 + 1024) + embed.footer.text.length
+    fitTotal(embed)
+    const total = embed.title.length + embed.description.length + embed.footer.text.length + embed.fields.reduce((n, f) => n + f.name.length + f.value.length, 0)
+    assert.ok(before > 6000)
+    assert.equal(total, 6000)
+    assert.match(embed.description, /^D+…$/)
+    assert.equal(embed.fields[0].value.length, 1024, 'fields are not what shrinks')
+  })
+
+  it('a maximal event stays under 6000 on the component caps alone, each field within its cap', async () => {
     const letters = (n) => 'z'.repeat(n)
     const embed = await postedEmbed({
       title: letters(400),
@@ -990,6 +1033,182 @@ describe('Discord limits are met by shortening, not by silence (F-07, F-14)', ()
       (embed.footer?.text.length ?? 0) +
       embed.fields.reduce((n, f) => n + f.name.length + f.value.length, 0)
     assert.ok(total <= 6000, `embed total ${total}`)
+  })
+})
+
+/* ───────── regressions from Sol's confirm round on PR #233 (F-18, F-02, F-06, F-19) ───────── */
+
+describe('the scrub cut never publishes a fragment (F-18)', () => {
+  // Ten token runs collapse to `[token]`, which shrinks the string enough for
+  // whatever straddled character 400 to sit inside the 200-char title cap.
+  const tokens = Array.from({ length: 10 }, (_, i) => `t${i}_aaaaaaaaaaaaaaaaaaaaaaaa`).join(' ')
+  const straddling = (secret) => `${tokens} ${'x'.repeat(400 - tokens.length - 11)}${secret}`
+
+  it('an email straddling the cut is dropped whole, not kept as `alice.smit`', () => {
+    const out = scrub(straddling('alice.smith@gmail.com'))
+    assert.ok(!out.includes('alice'), out)
+    assert.ok(!out.includes('gmail'))
+    assert.match(out, /…$/, 'a cut is visible')
+  })
+
+  it('a JWT straddling the cut is dropped whole', () => {
+    const out = scrub(straddling('eyJhbGciOi.eyJzdWIi.SflKxwRJ'))
+    assert.ok(!out.includes('eyJ'), out)
+  })
+
+  it('a coordinate pair straddling the cut is dropped whole — a comma joins the run to the cut', () => {
+    const value = `${'w '.repeat(190)}10.762622, 106.660172 then more`
+    assert.ok(value.indexOf('10.762622') < 400 && value.indexOf('106.660172') + 10 > 400, 'the pair must straddle 400')
+    const out = scrub(value)
+    assert.ok(!out.includes('10.762622'), out)
+    assert.ok(!out.includes('106.6'))
+  })
+
+  it('a token run straddling the cut leaves no prefix shorter than the token rule', () => {
+    const out = scrub(straddling('Ab12Cd34Ef56Gh78Ij90Kl12Mn34'))
+    assert.ok(!out.includes('Ab12'), out)
+  })
+
+  it('a value under the cap is not cut and carries no `…`', () => {
+    const value = `${'word '.repeat(76)}owner@gogo.id.vn`
+    assert.ok(value.length <= 400)
+    assert.equal(scrub(value), `${'word '.repeat(76)}[email]`)
+  })
+
+  it('a value over the cap with no whitespace becomes `…`, never a prefix (accepted, shape rev 2.2)', () => {
+    assert.equal(scrub('a'.repeat(401)), '…')
+  })
+
+  it('the comma-joined boundary is linear on a hostile slice', () => {
+    const started = Date.now()
+    scrub(`${'a,'.repeat(199)}a X${'z'.repeat(10)}`)
+    assert.ok(Date.now() - started < 200)
+  })
+
+  it('through the relay: the straddling email is in no field of the Discord body', async () => {
+    discordAnswering(savedMessage)
+    const secret = 'alice.smith@gmail.com'
+    await call(eventAlertBody({ event: { title: straddling(secret), culprit: straddling(secret) } }), {})
+    const raw = discordCalls[0].init.body
+    assert.ok(!raw.includes('alice'), 'a fragment of the email left')
+  })
+})
+
+describe("a frame's basename survives three long segments (F-02, confirm round)", () => {
+  const postedStack = async (filename) => {
+    discordAnswering(savedMessage)
+    await call(
+      eventAlertBody({
+        event: {
+          exception: {
+            values: [{ type: 'E', value: 'v', stacktrace: { frames: [{ filename, function: 'f', lineno: 1, colno: 1, in_app: true }] } }],
+          },
+        },
+      }),
+      {},
+    )
+    return JSON.parse(discordCalls[0].init.body).embeds[0].fields.find((f) => f.name === 'Stack').value
+  }
+
+  it('three segments over 400 characters keep castVote.ts', async () => {
+    const stack = await postedStack(`${'q'.repeat(300)}/${'r'.repeat(300)}/castVote.ts`)
+    assert.match(stack, /castVote\.ts:1:1/)
+    assert.ok(!stack.includes('rrrrrrrrrr'), 'an over-long segment is dropped whole, not cut')
+  })
+
+  it('an over-long segment shows as `…` and its neighbours stay', async () => {
+    const stack = await postedStack(`src/components/${'b'.repeat(300)}.ts`)
+    assert.match(stack, /src\/components\/…:1:1/)
+  })
+
+  it('a path under the caps is unchanged', async () => {
+    const stack = await postedStack('app/room/vote.ts')
+    assert.match(stack, /app\/room\/vote\.ts:1:1/)
+  })
+
+  it('the credential-path rule still sees `/r/<value>` across segments', async () => {
+    // Three segments, marker in the middle: a per-segment scrub would see
+    // `AbCdEfGhIj` alone (ten letters, no rule) and publish it.
+    const stack = await postedStack('src/r/AbCdEfGhIj')
+    assert.ok(!stack.includes('AbCdEfGhIj'))
+    assert.match(stack, /src\/r\/\[redacted\]:1:1/)
+  })
+})
+
+describe('the Tags field is fitted by whole lines (F-06, confirm round)', () => {
+  it('ten URL tags over 1024 leave every wrapper balanced and say how many lines were omitted', async () => {
+    const url = `https://example.com/${'a'.repeat(80)}`
+    const path = `https://example.com/${'a/'.repeat(40)}`
+    const tags = [
+      ...['environment', 'release', 'level', 'handled', 'browser.name', 'os.name', 'device.family'].map((k) => [k, url]),
+      ['transaction', path],
+      ['screen', path],
+      ['route', path],
+    ]
+    discordAnswering(savedMessage)
+    await call(eventAlertBody({ event: { tags } }), {})
+    const value = JSON.parse(discordCalls[0].init.body).embeds[0].fields.find((f) => f.name === 'Tags').value
+    assert.ok(value.length <= 1024, `Tags is ${value.length}`)
+    const opens = (value.match(/</g) ?? []).length
+    const closes = (value.match(/>/g) ?? []).length
+    assert.equal(opens, closes, 'an unclosed < would make the URL live again')
+    assert.match(value, /\n… \d+ tag\(s\) omitted$/)
+    const shown = value.split('\n').length - 1
+    assert.equal(shown + Number(value.match(/… (\d+) tag/)[1]), 10)
+  })
+
+  it('tags that fit are joined untouched, with no marker', async () => {
+    discordAnswering(savedMessage)
+    await call(eventAlertBody({ event: { tags: [['environment', 'dev'], ['handled', 'no']] } }), {})
+    const value = JSON.parse(discordCalls[0].init.body).embeds[0].fields.find((f) => f.name === 'Tags').value
+    assert.equal(value, 'environment=dev\nhandled=no')
+  })
+})
+
+describe('a wrapper is what wrapUrls inserted, not any `<` (F-19)', () => {
+  const postedEmbed = async (eventOverrides) => {
+    discordAnswering(savedMessage)
+    await call(eventAlertBody({ event: eventOverrides }), {})
+    return JSON.parse(discordCalls[0].init.body).embeds[0]
+  }
+
+  it('a bare `<` in text is text: `count < limit for room` leaves whole', async () => {
+    const embed = await postedEmbed({ culprit: 'count < limit for room' })
+    assert.equal(embed.description.split('\n')[0], 'count < limit for room')
+  })
+
+  it('a URL-only value over its cap leaves as `…`, visible and not unfurlable', async () => {
+    const embed = await postedEmbed({ culprit: `see https://example.com/${'a'.repeat(300)}` })
+    assert.equal(embed.description.split('\n')[0], 'see …')
+  })
+
+  it('a cap that crosses a wrapper drops that wrapper and keeps the `…`', async () => {
+    const embed = await postedEmbed({ culprit: `${'x'.repeat(170)} https://example.com/${'y'.repeat(200)}` })
+    const line = embed.description.split('\n')[0]
+    assert.match(line, /^x{170} …$/)
+    assert.ok(line.length <= 200)
+  })
+
+  it('a URL that fits is wrapped and a `<` after it is still text', async () => {
+    const embed = await postedEmbed({ culprit: 'see https://example.com/a then a < b' })
+    assert.equal(embed.description.split('\n')[0], 'see <https://example.com/a> then a < b')
+  })
+
+  it('a cut that lands after a bare `<` repairs nothing: the text stays up to the cut', async () => {
+    // Inferring the wrapper from the last `<` would drop everything from the
+    // bare one even though the real wrapper before it is closed.
+    const embed = await postedEmbed({ culprit: `see https://example.com/a then a < ${'b'.repeat(200)}` })
+    const line = embed.description.split('\n')[0]
+    assert.match(line, /^see <https:\/\/example\.com\/a> then a < b+…$/)
+    assert.equal(line.length, 200)
+  })
+
+  it('no control character reaches the Discord body — the wrapper sentinels never leak', async () => {
+    discordAnswering(savedMessage)
+    const hostile = `a${String.fromCharCode(1)}b https://example.com/${'c'.repeat(300)} ${String.fromCharCode(2)}d`
+    await call(eventAlertBody({ event: { title: hostile, culprit: hostile, tags: [['os.name', hostile]] } }), {})
+    assert.ok(!/[\u0000-\u001f]/.test(JSON.parse(discordCalls[0].init.body).embeds[0].title))
+    assert.ok(!/\\u00[01][0-9a-f]/i.test(discordCalls[0].init.body), 'a control character was serialised into the body')
   })
 })
 

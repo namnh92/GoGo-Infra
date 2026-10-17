@@ -69,6 +69,20 @@ const RETRY_LINE_MS = 850
 /** Frames shown: the newest N of the thrown exception, newest first. */
 const MAX_FRAMES = 8
 
+/** Discord's embed limits, enforced here (shape D-6) — a field value, the whole embed. */
+const FIELD_VALUE_MAX = 1024
+const EMBED_TOTAL_MAX = 6000
+
+/**
+ * A frame path segment longer than the file column (120) can never be shown
+ * whole, and cutting inside it before the scrub is the F-18 hole again — so an
+ * over-long segment is dropped as a unit and shows as `…`. Three segments of
+ * ≤ 120 joined are ≤ 362 < SCRUB_INPUT_CAP, so scrub() never slices a path
+ * and the basename, the part that locates the defect, always survives (Sol
+ * F-02 confirm round: three segments over 400 characters lost it).
+ */
+const FILE_SEGMENT_CAP = 120
+
 /** Embed colour by level — the one place these literals are allowed. */
 const LEVEL_COLOUR = {
   fatal: 0xd84f4a, // coral
@@ -130,10 +144,27 @@ function normalizeResource(header) {
  * Every relayed field is capped at 300 characters or fewer, so scrubbing more
  * than this is wasted work on a surface an attacker controls: a signed body may
  * be up to 1 MiB, and an unbounded alternation over it is where a Worker's CPU
- * budget goes (Sol F-05). Cut first, then scrub, then cap — the cut sits above
- * every field cap, so nothing a cap would have kept is lost here.
+ * budget goes (Sol F-05). Cut first, then scrub, then cap.
+ *
+ * The cut is a slice, and a slice keeps a prefix: an email, token or
+ * coordinate pair straddling character 400 survived as a fragment no rule
+ * matches, and once earlier runs had collapsed to labels that fragment sat
+ * inside the field cap and was published (Sol F-18). So the cut moves back to
+ * a boundary no rule spans: whitespace — except that a run joined to the cut
+ * by a comma goes with it, because a coordinate pair is `lat, lng`. Nothing
+ * partial survives; the remainder shows as `…` (shape D-6, a visible cut).
+ * Accepted consequence: a whitespace-free value over 400 characters becomes
+ * `…`, not a 400-character prefix.
  */
 const SCRUB_INPUT_CAP = 400
+// Disjoint classes (`[^\s,]`, `\s`, `,`), so the parse is unique and linear;
+// `\S+` inside the starred group would be exponential on `a,a,a,…,a X`.
+const RE_TRAILING_UNIT = /(?:[^\s,]+\s*,\s*)*[^\s,]*$/
+
+/** The first SCRUB_INPUT_CAP characters, cut back to a run boundary, marked. */
+function cutAtRunBoundary(s) {
+  return `${s.slice(0, SCRUB_INPUT_CAP).replace(RE_TRAILING_UNIT, '').trimEnd()}…`
+}
 
 // Bounded quantifiers, for the same reason. An unbounded local part followed by
 // a single `@` and no dot is the classic quadratic case.
@@ -172,7 +203,8 @@ export function firstLine(value) {
  * as `[token]`; every other rule and the caps still apply to it).
  */
 export function scrub(value, { keepLongRuns = false } = {}) {
-  let s = String(value).normalize('NFC').replace(RE_CONTROL, '').slice(0, SCRUB_INPUT_CAP)
+  const whole = String(value).normalize('NFC').replace(RE_CONTROL, '')
+  let s = whole.length > SCRUB_INPUT_CAP ? cutAtRunBoundary(whole) : whole
   s = s.replace(RE_EMAIL, '[email]')
   s = s.replace(RE_JWT, '[token]')
   if (!keepLongRuns) {
@@ -221,9 +253,17 @@ export function escapeMarkdown(s) {
 /**
  * Any URL that survived the scrub renders inert: `<…>` suppresses Discord's
  * preview. Case-insensitive — `HTTPS://` is a URL to Discord too (Sol F-06).
+ *
+ * The wrapper is inserted as a control-character pair and turned into `<…>`
+ * only in capWrapped(): scrub() removed every control character before this
+ * point, so the pair cannot collide with the text. Inferring a wrapper from a
+ * bare `<` did — `count < limit for room` read as a truncated URL and lost
+ * its suffix when nothing had been cut, without the `…` a cut owes (Sol F-19).
  */
+const WRAP_OPEN = '\u0001'
+const WRAP_CLOSE = '\u0002'
 function wrapUrls(s) {
-  return s.replace(/https?:\/\/[^\s<>]+/gi, '<$&>')
+  return s.replace(/https?:\/\/[^\s<>]+/gi, `${WRAP_OPEN}$&${WRAP_CLOSE}`)
 }
 
 function truncate(s, max) {
@@ -232,16 +272,18 @@ function truncate(s, max) {
 
 /**
  * A cap applied after wrapping can cut the closing `>` off, which turns an
- * inert URL back into a link Discord unfurls (Sol F-06). So: wrap, cap, and if
- * the cap left an unclosed wrapper, drop that fragment rather than ship half a
- * delimiter.
+ * inert URL back into a link Discord unfurls (Sol F-06). So: wrap, cap, and
+ * only if the cap crossed a wrapper this function inserted, drop that one
+ * wrapper and keep the `…`. A URL-only value over its cap therefore leaves as
+ * `…` — visible, and nothing Discord can unfurl.
  */
 function capWrapped(s, max) {
-  const cut = truncate(s, max)
-  if (cut.lastIndexOf('<') > cut.lastIndexOf('>')) {
-    return truncate(cut.slice(0, cut.lastIndexOf('<')), max)
+  let cut = truncate(s, max)
+  if (s.length > max) {
+    const open = cut.lastIndexOf(WRAP_OPEN)
+    if (open > cut.lastIndexOf(WRAP_CLOSE)) cut = `${cut.slice(0, open)}…`
   }
-  return cut
+  return cut.replace(/\u0001/g, '<').replace(/\u0002/g, '>')
 }
 
 /** A typed string read: anything but a string becomes the fallback (F-07). */
@@ -299,11 +341,18 @@ function frameLine(frame) {
   // published the user's home path and cut the file name off, which is the
   // opposite of both intents. And the scheme match was case-sensitive, so
   // `HTTPS://internal.host/src/app.js` kept its host.
-  let file = str(f.filename)
+  const segments = str(f.filename)
     .replace(/[?#].*$/, '')
     .replace(/^(?:file|https?):\/\/[^/]*/i, '')
-  file = scrub(file.split('/').filter(Boolean).slice(-3).join('/'))
-  // Left-truncate: the basename is the part that locates the defect.
+    .split('/')
+    .filter(Boolean)
+    .slice(-3)
+    .map((seg) => (seg.length > FILE_SEGMENT_CAP ? '…' : seg))
+  // Scrubbed as one string: the credential-path rule needs `/r/<value>` across
+  // two segments, so a per-segment scrub would miss it.
+  let file = scrub(segments.join('/'))
+  // Left-truncate — after the scrub, so this cut can only split a label or a
+  // run no rule matched; the basename is the part that locates the defect.
   if (file.length > 120) file = `…${file.slice(-119)}`
   const fn = truncate(scrub(str(f.function, '?')), 80)
   const line = Number.isInteger(f.lineno) ? `:${f.lineno}` : ''
@@ -321,8 +370,13 @@ function frameLine(frame) {
  * shortened from the left, so the file name and line survive. Only if the
  * eight shortest possible lines still do not fit does it drop from the oldest
  * end, and then it says so in the block.
+ *
+ * At Discord's 1024 that never happens: eight 120-character lines fence to
+ * 975, so the ladder ends at 120 and the omission path is unreachable through
+ * buildEmbed(). It exists for a MAX_FRAMES or limit change, and `limit` is a
+ * parameter so the test can reach it directly (Sol F-14).
  */
-function stackBlock(event) {
+export function stackBlock(event, limit = FIELD_VALUE_MAX) {
   const values = Array.isArray(event.exception?.values) ? event.exception.values : []
   const thrown = values.length ? values[values.length - 1] : null
   const frames = Array.isArray(thrown?.stacktrace?.frames) ? thrown.stacktrace.frames : []
@@ -335,7 +389,7 @@ function stackBlock(event) {
   for (const per of [200, 150, 120, 96, 72, 56, 40]) {
     const lines = newest.map((f) => shorten(frameLine(f), per))
     const block = fence(lines)
-    if (block.length <= 1024) return block
+    if (block.length <= limit) return block
   }
 
   // Nothing fits at the floor: drop from the oldest end, visibly.
@@ -344,11 +398,44 @@ function stackBlock(event) {
     const dropped = newest.length - lines.length + 1
     const marked = [...lines.slice(0, -1), `… ${dropped} older frame(s) omitted`]
     const block = fence(marked)
-    if (block.length <= 1024) return block
+    if (block.length <= limit) return block
     lines.pop()
   }
   const only = fence([shorten(frameLine(newest[0]), 40), `… ${newest.length - 1} older frame(s) omitted`])
-  return only.length <= 1024 ? only : null
+  return only.length <= limit ? only : null
+}
+
+/**
+ * The Tags value is a join of lines each already capped without breaking a
+ * wrapper; the generic field cap cut through one anyway, in the join (Sol
+ * F-06). So the field is fitted by whole lines and says how many it left out.
+ * One line is at most 134 characters, so at least one always fits.
+ */
+function joinTagLines(lines, limit = FIELD_VALUE_MAX) {
+  for (let kept = lines.length; kept >= 0; kept -= 1) {
+    const shown = kept === lines.length ? lines : [...lines.slice(0, kept), `… ${lines.length - kept} tag(s) omitted`]
+    const value = shown.join('\n')
+    if (value.length <= limit) return value
+  }
+  return ''
+}
+
+/**
+ * Discord's 6000-character total is ours to enforce, not Discord's to reject:
+ * shrink the description first, it is the only free-text block. Through
+ * buildEmbed() the component caps sum to about 3100, so this is a guard that
+ * no event reaches; `max` is a parameter so the test can (Sol F-14).
+ */
+export function fitTotal(embed, max = EMBED_TOTAL_MAX) {
+  const total = () =>
+    (embed.title?.length ?? 0) +
+    (embed.description?.length ?? 0) +
+    (embed.footer?.text.length ?? 0) +
+    embed.fields.reduce((n, f) => n + f.name.length + f.value.length, 0)
+  if (total() > max) {
+    embed.description = truncate(embed.description, Math.max(1, embed.description.length - (total() - max)))
+  }
+  return embed
 }
 
 /** The thrown exception's type and first-line value, or the log message. */
@@ -387,13 +474,15 @@ export function buildEmbed(event, triggeredRule, projectLabel) {
     footer: null,
     url: sentryUrl(event),
   }
+  // The generic cap is the D-6 belt; every value below is already within it
+  // by construction (Tags by whole lines, Stack by its ladder).
   const field = (name, value, inline = true) => {
-    if (value) embed.fields.push({ name, value: truncate(value, 1024), inline })
+    if (value) embed.fields.push({ name, value: truncate(value, FIELD_VALUE_MAX), inline })
   }
   field('Environment', text(event.environment, 64))
   field('Release', text(event.release, 100, { keepLongRuns: true }))
   field('Rule', text(triggeredRule, 100))
-  field('Tags', allowedTags(event.tags).join('\n'))
+  field('Tags', joinTagLines(allowedTags(event.tags)))
   const stack = stackBlock(event)
   field('Stack', stack, false)
 
@@ -404,16 +493,7 @@ export function buildEmbed(event, triggeredRule, projectLabel) {
   if (!embed.url) delete embed.url
   if (!embed.footer) delete embed.footer
 
-  // Discord's 6000-character total is ours to enforce, not Discord's to
-  // reject: shrink the description first, it is the only free-text block.
-  const total = () =>
-    (embed.title?.length ?? 0) +
-    (embed.description?.length ?? 0) +
-    (embed.footer?.text.length ?? 0) +
-    embed.fields.reduce((n, f) => n + f.name.length + f.value.length, 0)
-  if (total() > 6000) {
-    embed.description = truncate(embed.description, Math.max(1, embed.description.length - (total() - 6000)))
-  }
+  fitTotal(embed)
   return { issueId, eventId, embed }
 }
 

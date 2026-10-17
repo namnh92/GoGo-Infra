@@ -1,7 +1,9 @@
 # ADR 0013 — The Sentry → Discord alert relay runs on a Cloudflare Worker
 
 **Status:** proposed — 2026-10-17 (SA shape: Fable, `dev/handoffs/sa-shape-infra-221-sentry-discord-relay.fable.md`
-rev 2.1; Astra round 1 `changes-required` F-01…F-21, all dispositioned in §7 of that file; confirm round pending)
+rev 2.2; Astra round 1 `changes-required` F-01…F-21, all dispositioned in §7 of that file; confirm round pending;
+rev 2.2 answers Sol's confirm round on PR #233 — the scrub cut, frame segments, URL wrappers and the Tags field,
+recorded under D-5/D-6 below)
 **Issue:** GoGo-Infra#221 (context #219, #208)
 **Requirement authority:** owner decisions 2026-10-15 (#219: alerts go to Discord, one channel per project, every
 environment, one notification per issue per 30 min) and 2026-10-17 (this issue: scope, native action removed after
@@ -113,7 +115,15 @@ the query string come off a path **before** segments are classified, or `/plans/
 `/plans/123456?view=map` are not "a run of digits" and the bare id is published once the control is stripped. And
 a frame's path is reduced to its last three segments **before** any length cap, or a long absolute path keeps
 `/home/<user>/private/…` and loses the file name — publishing the one part nobody wanted and dropping the part
-that locates the defect.
+that locates the defect. A third rule came from the confirm round: the scrubber reads at most the first 400
+characters of a value (a bounded surface, since a signed body may be 1 MiB), and that cut is **not a slice** — a
+slice keeps a prefix, and an email, token or coordinate pair straddling character 400 survived as a fragment no
+rule matches, inside the field cap once earlier runs had collapsed to labels. The cut moves back to the last
+whitespace boundary, takes any comma-joined run with it (a coordinate pair is `lat, lng`), and is marked `…`; a
+whitespace-free value over 400 characters therefore shows as `…`, never as a prefix. For the same reason a frame
+path segment longer than the 120-character file column is dropped whole as `…` rather than cut: three such
+segments stay under the scrubber's 400, so the basename always survives, and the joined path is still scrubbed
+as one string because the credential-path rule needs `/r/<value>` across two segments.
 
 The phone rule needs a non-alphanumeric boundary on **both** sides. Without the right one it redacts a release
 SHA that merely begins with ten digits. The accepted consequence: a digit run glued to letters is treated as an
@@ -122,12 +132,17 @@ identifier, not a number (a run of 20 or more is still caught by the token rule)
 **D-6 · The message is built to be inert.** `allowed_mentions: { parse: [] }` — an error title saying
 `@everyone` pings nobody. Discord markdown escaped in every relayed string. Surviving URLs wrapped `<…>` so
 nothing unfurls — case-insensitively, and a cap is never allowed to cut the closing `>` off, because half a
-wrapper is a live link again. The one real link is the embed's URL, and only when it points at this
-organisation's Sentry. No `flags: 4`: SUPPRESS_EMBEDS would drop the relay's own embed, stack trace included.
-Every Discord limit is enforced by the relay with a visible `…`, never by Discord rejecting the post — and the
-stack field meets its 1024 by **shortening each frame line from the left**, not by dropping frames: a stack that
-silently shows four of eight reads as a four-frame stack. If even the shortest eight lines will not fit, the
-block says how many frames it dropped. No buttons — a channel webhook cannot act on Sentry the way the native
+wrapper is a live link again. The wrapper is marked by the function that inserts it (a control-character pair
+the scrub has already cleared from every input) and repaired only when a cap actually crossed one, keeping the
+`…`; a bare `<` in an error message is text and stays. The Tags field, a join of per-tag lines, is fitted by whole
+lines with a `… n tag(s) omitted` line, never cut inside a value. The one real link is the embed's URL, and only
+when it points at this organisation's Sentry. No `flags: 4`: SUPPRESS_EMBEDS would drop the relay's own embed,
+stack trace included. Every Discord limit is enforced by the relay with a visible `…`, never by Discord rejecting
+the post — and the stack field meets its 1024 by **shortening each frame line from the left**, not by dropping
+frames: a stack that silently shows four of eight reads as a four-frame stack. If even the shortest eight lines
+will not fit, the block says how many frames it dropped — a path no event reaches at 1024 (eight 120-character
+lines fence to 975), like the 6000-character total shrink (the component caps sum to about 3100); both are kept
+as guards and tested directly with an injected limit. No buttons — a channel webhook cannot act on Sentry the way the native
 integration's Resolve/Archive could; the link is the action.
 
 **D-7 · Sentry's native Discord action is removed once the relay is accepted.** Owner decision 2026-10-17, for
