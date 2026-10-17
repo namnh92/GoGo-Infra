@@ -1494,11 +1494,12 @@ describe('the name exemption is positional (owner decision 2026-10-17, rev 2.4)'
   // A digit-free run of 20+ with a well-formed separator is what F-27's name
   // test admitted that the pre-F-27 rule caught. The owner kept that
   // admission only where a name is what the field carries — a frame's file
-  // and function, the transaction / route / screen tags — and restored the
-  // strict rule everywhere else: title, culprit, exception type and value,
-  // the fallback message, environment, rule, every other tag. Asserted
-  // through the serialised Discord body, not scrub(): a field whose scrub
-  // call silently gained the name option would pass a scrub() test.
+  // and function, the transaction / route / screen tags, and since
+  // 2026-10-18 the exception type (Q-7, the next suite) — and restored the
+  // strict rule everywhere else: title, culprit, the exception value, the
+  // fallback message, environment, rule, every other tag. Asserted through
+  // the serialised Discord body, not scrub(): a field whose scrub call
+  // silently gained the name option would pass a scrub() test.
   const SEP_RUN = 'qwrtpsdfghjk-lzxcvbnmQWRT' // 25 chars, no digit, one `-`
   // 24 letters and nothing else: survives in free text under the strict rule
   // as it did before F-27 — the accepted admission the shape's D-5 line
@@ -1512,14 +1513,16 @@ describe('the name exemption is positional (owner decision 2026-10-17, rev 2.4)'
     return discordCalls[0].init.body
   }
 
-  it('a digit-free separator run is [token] in title, culprit, exception type and value', async () => {
+  it('a digit-free separator run is [token] in title, culprit and exception value', async () => {
+    // `type` left this list on 2026-10-18 (a name position, Q-7); it is
+    // pinned in the next suite, on both sides.
     const raw = await postedBodyRaw({
       title: `t ${SEP_RUN}`,
       culprit: `c ${SEP_RUN}`,
       exception: {
         values: [
           {
-            type: `E_${SEP_RUN}`,
+            type: 'E',
             value: `v ${SEP_RUN}`,
             stacktrace: { frames: [{ filename: 'a.ts', function: 'f', lineno: 1, colno: 1, in_app: true }] },
           },
@@ -1662,6 +1665,58 @@ describe('the name exemption is positional (owner decision 2026-10-17, rev 2.4)'
   it('a letters-only run of 24 survives in free text — the admission that predates F-27, unchanged', async () => {
     const raw = await postedBodyRaw({ title: `t ${LETTER_RUN}` })
     assert.ok(raw.includes(LETTER_RUN))
+  })
+})
+
+describe('exception `type` is a name position (owner decision 2026-10-18, shape rev 2.6 Q-7)', () => {
+  // A type is a class name or an error code by construction —
+  // `PLACE_PROVIDER_UNAVAILABLE`, `TypeError`, `com.foo.BarException` — and
+  // nothing puts a credential there. Rev 2.4 had classified it strict by
+  // inheritance, so a 20+ SCREAMING_SNAKE code reached Discord as `[token]`
+  // (SA F-39). The owner was asked about `type` only: the exception `value`
+  // stays strict, because it is free text where a user-typed string lands.
+  // Both halves are asserted through the serialised Discord body, as the
+  // positional suite does, and in one message so the asymmetry is visible.
+  const CODE = 'PLACE_PROVIDER_UNAVAILABLE' // 26 chars, `_`-joined letter words: a name, not a plain word
+  const postedEmbedOf = async (eventOverrides) => {
+    discordAnswering(savedMessage)
+    const res = await call(eventAlertBody({ event: eventOverrides }), {})
+    assert.equal(res.status, 200)
+    return JSON.parse(discordCalls[0].init.body).embeds[0]
+  }
+
+  it('an error code as the exception type reads as itself while the same code in the value is [token]', async () => {
+    const embed = await postedEmbedOf({
+      exception: {
+        values: [
+          {
+            type: CODE,
+            value: `provider said ${CODE}`,
+            stacktrace: { frames: [{ filename: 'a.ts', function: 'f', lineno: 1, colno: 1, in_app: true }] },
+          },
+        ],
+      },
+    })
+    // escapeMarkdown turns `_` into `\_` and `[` `]` into `\[` `\]`.
+    const line = embed.description.split('\n')[1]
+    assert.equal(line, 'PLACE\\_PROVIDER\\_UNAVAILABLE: provider said \\[token\\]', `headline was: ${line}`)
+  })
+
+  it('a forged type admits the name-position floor — a digit-free, well-formed 20+ run survives there (accepted)', async () => {
+    const SEP_RUN = 'qwrtpsdfghjk-lzxcvbnmQWRT'
+    const embed = await postedEmbedOf({
+      exception: { values: [{ type: SEP_RUN, value: `v ${SEP_RUN}`, stacktrace: { frames: [] } }] },
+    })
+    const line = embed.description.split('\n')[1]
+    assert.equal(line, `${SEP_RUN}: v \\[token\\]`, `headline was: ${line}`)
+  })
+
+  it('a digit in the type still marks it a token — the name test, not an exemption', async () => {
+    const embed = await postedEmbedOf({
+      exception: { values: [{ type: 'E_Ab12Cd34Ef56Gh78Ij90', value: 'v', stacktrace: { frames: [] } }] },
+    })
+    const line = embed.description.split('\n')[1]
+    assert.equal(line, '\\[token\\]: v', `headline was: ${line}`)
   })
 })
 

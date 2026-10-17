@@ -15,7 +15,8 @@ const cases = JSON.parse(readFileSync(fileURLToPath(new URL('./scrub-cases.json'
 const FNS = {
   scrub: (s) => scrub(s),
   // A name position (frame filename, frame function, the path rule's joined
-  // scrub) opts in; everything else is the strict default (rev 2.4).
+  // scrub; the exception type since rev 2.6) opts in; everything else is the
+  // strict default (rev 2.4).
   'scrub-name': (s) => scrub(s, { names: true }),
   // The release position: letters-only or a lowercase hex run of a SHA's
   // length survives; a 22-character run of anything else is a token (rev 2.5).

@@ -8,14 +8,21 @@
  * posts one embed to the project's Discord channel webhook — synchronously,
  * inside Sentry's 1 s reply budget.
  *
- * A Discord failure is answered to Sentry as 502 on purpose. Sentry does not
- * retry an issue-alert webhook, so the message is lost either way — but a
- * non-2xx lands on the integration's Webhook Requests tab, which is the
- * delivery detector. It is the only one: Sentry's per-integration circuit
- * breaker counts nothing but its own 5 s hard timeout as an error
+ * A Discord failure is answered to Sentry as 502 on purpose: a non-2xx lands
+ * on the integration's Webhook Requests tab, which is the delivery detector.
+ * It is the only one: Sentry's per-integration circuit breaker counts nothing
+ * but its own 5 s hard timeout as an error
  * (`utils/sentry_apps/circuit_breaker.py:26-28`), so a 502 answered inside
  * the budget never trips it and its owner email never fires for this relay
- * (shape D-4/D-8, rev 2.5). This Worker keeps no state and no queue.
+ * (shape D-4/D-8, rev 2.5). That is also why Sentry's native Discord action
+ * stays on every workflow next to this relay, permanently (owner decision
+ * 2026-10-18, ADR-0013 D-7): two messages per issue — Sentry's sparse one
+ * and this one — in exchange for an alert path that survives this Worker
+ * dying silently. Do not "clean up" the duplicate. Sentry does retry the
+ * webhook task on a 500/502, a soft timeout or a connection error — three
+ * times, five minutes apart (`sentry_apps/tasks/sentry_apps.py`
+ * `send_alert_webhook_v2`, `Retry(times=3, delay=300)`; shape rev 2.6 Q-8) —
+ * and not on 503, 504 or any 4xx. This Worker keeps no state and no queue.
  *
  * Every answer to Sentry is a bare status: `new Response(null, …)` and nothing
  * else. The response body would be the Worker's second egress — into Sentry's
@@ -210,8 +217,9 @@ const RE_RANDOM_MARK = /[0-9_-]/
 const isPlainWord = (run) => !RE_RANDOM_MARK.test(run)
 /**
  * The name test, applied ONLY in a name position — a frame's `filename` and
- * `function`, and the path-template tags `transaction` / `route` / `screen`
- * (scrubPathTemplate). What makes a run a name rather than a token: letters
+ * `function`, the path-template tags `transaction` / `route` / `screen`
+ * (scrubPathTemplate), and the exception `type` (owner decision 2026-10-18;
+ * see headline()). What makes a run a name rather than a token: letters
  * only, or letter words joined by single `_` or `-`. A digit is the evidence
  * of randomness — the client redactor's own test is "a letter and a digit"
  * (ADR-0011 D-9) — and a doubled or edge separator is not how a human writes
@@ -226,7 +234,7 @@ const isPlainWord = (run) => !RE_RANDOM_MARK.test(run)
  * any 16+ segment that is a name, letters-only included (the old segment test
  * had no digit condition) — bounded there because all three clients send
  * templates (`[param]`, `:param`, Nest patterns) whose ids are UUIDs or
- * numbers. Free text — title, culprit, exception type and value, the fallback
+ * numbers. Free text — title, culprit, the exception value, the fallback
  * message, environment, rule, every other tag — is where a user-typed or
  * attacker-influenced secret actually lands and carries no name worth that,
  * so it keeps the strict test; a relayed field added later is strict unless
@@ -603,12 +611,20 @@ export function fitTotal(embed, max = EMBED_TOTAL_MAX) {
 /**
  * The thrown exception's type and value, or the log message. Every value is
  * one line: scrub() takes the first line of whatever it is handed.
+ *
+ * `type` is a name position (owner decision 2026-10-18, shape rev 2.6 Q-7):
+ * a type is a class name or an error code by construction —
+ * `PLACE_PROVIDER_UNAVAILABLE`, `TypeError`, `com.foo.BarException` — and
+ * nothing puts a credential there; strict, it printed `[token]` for exactly
+ * the code an alert is about (SA F-39). The cost is one more field at the
+ * name-position floor. `value` stays strict: it is free text where a
+ * user-typed string lands, and the owner was asked about `type` only.
  */
 function headline(event) {
   const values = Array.isArray(event.exception?.values) ? event.exception.values : []
   const thrown = values.length ? values[values.length - 1] : null
   if (thrown && typeof thrown === 'object') {
-    const type = text(thrown.type, 80)
+    const type = text(thrown.type, 80, { names: true })
     const value = text(thrown.value, 200)
     if (type || value) return `${type}${type && value ? ': ' : ''}${value}`
   }

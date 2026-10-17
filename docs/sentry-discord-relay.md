@@ -20,12 +20,18 @@ Sentry issue alert ──HMAC-signed POST──▶ gogo-dev-sentry-relay ──e
                                                  500 relay error
 ```
 
-A 502 is deliberate (ADR-0013 D-4): Sentry does not retry, so the message is lost either way, and the non-2xx is
-what makes the failure visible on the integration's **Webhook Requests** tab. Reading that tab is how a broken relay
-is noticed — and it is the only way: Sentry's circuit breaker counts only its own 5 s hard timeout as an error, so a
-502 answered in time never trips it, and the owner email it would send on opening never fires for this relay. The
-status line tells `discord_failed` (the request never completed) from `discord_unconfirmed` (Discord answered 2xx but
-the answer carried no readable message id — that message may have been delivered); A-4 counts both.
+A 502 is deliberate (ADR-0013 D-4): the non-2xx is what makes the failure visible on the integration's **Webhook
+Requests** tab. Reading that tab is how a broken relay is noticed — and it is the only notice Sentry gives: its circuit
+breaker counts only its own 5 s hard timeout as an error, so a 502 answered in time never trips it, and the owner email
+it would send on opening never fires for this relay. **That is why Sentry's native Discord action stays on every
+workflow next to the relay, permanently** (ADR-0013 D-7, owner decision 2026-10-18): each issue posts twice in its
+channel — Sentry's sparse message and the relay's one with frames — and a sparse message with no relay message beside it
+is the in-channel sign that the relay is broken. Do not remove the native action to tidy the channel. Sentry **does**
+retry the webhook task on a 502 — three times, five minutes apart (`send_alert_webhook_v2`, `Retry(times=3,
+delay=300)` on `RequestException`; not on 503, 504 or any 4xx) — so a `rate_limited` or `discord_failed` message
+usually arrives late rather than never, while a `discord_unconfirmed` one may arrive more than once (shape rev 2.6, Q-8,
+open). The status line tells `discord_failed` (the request never completed) from `discord_unconfirmed` (Discord
+answered 2xx but the answer carried no readable message id — that message may have been delivered); A-4 counts both.
 
 ## Where the values live, and where they do not
 
@@ -115,32 +121,41 @@ Mobile), with `X-CSRFToken` from the `sc` cookie as in #219:
   "data": {} }
 ```
 
-A PUT recreates action ids, so read each workflow back afterwards and record the new ids in `docs/accounts.md`.
-`POST …/test-fire-actions/` on each one is the first end-to-end proof.
+Add it **next to** the existing native `discord` action; never remove that one (ADR-0013 D-7: the native message is
+the alert path that survives the relay dying silently). A PUT recreates action ids, so read each workflow back
+afterwards, confirm both actions are present, and record the new ids in `docs/accounts.md`.
+`POST …/test-fire-actions/` on each one is the first end-to-end proof — it fires every action on the workflow, so
+expect two messages per channel: the native one and the relay's (frames, `issue · event` footer).
 
 ## Acceptance (the issue closes on these)
 
 A-1 unauthenticated requests — missing header, bad hex, wrong signature, oversized `Content-Length`, GET — are
 refused and post nothing · A-2 the D-7 comment id, dated before the first action was saved, then one test-fire
-message per channel with frames, each with the relay's outcome read from `wrangler tail` (`posted`; an
-`unknown_project` fails the fire) · **A-3 the matrix**: each of the three workflows × the five triggers (new issue,
-new high-priority, escalated, regression, reappeared), plus BE metric detector 10634455 — sixteen cells, each
-with a distinct probe issue so the 30-minute throttle cannot mask one, recording the resource that arrived and the
-relay's own outcome from `wrangler tail` (a cell that logs `unknown_project` fails, whatever Sentry's tab shows), the
-relay's status code and response time from the Webhook Requests tab, and the correlated Discord message within 60 s ·
-A-4 every request 2xx on the Webhook Requests tab except the deliberate failures, the response time per cell recorded
-against the 850 ms deadline, `posted` / `discord_failed` / `discord_unconfirmed` counted, and `wrangler tail` showing
-status lines only · A-5 no source line,
+per channel producing **two** messages — the native one and the relay's with frames — each relay message with its
+outcome read from `wrangler tail` (`posted`; an `unknown_project` fails the fire) · **A-3 the matrix**: each of the
+three workflows × the five triggers (new issue, new high-priority, escalated, regression, reappeared), plus BE metric
+detector 10634455 — sixteen cells, each with a distinct probe issue so the 30-minute throttle cannot mask one,
+recording the resource that arrived and the relay's own outcome from `wrangler tail` (a cell that logs
+`unknown_project` fails, whatever Sentry's tab shows), the relay's status code and response time from the Webhook
+Requests tab, and the correlated **relay** message within 60 s — the one from the channel webhook with the `issue ·
+event` footer, not Sentry's native one, which is recorded beside it; a cell with no relay message is a relay gap to
+record, not a lost alert · A-4 every request 2xx on the Webhook Requests tab except the deliberate failures and
+Sentry's own retries of them (a 502 is retried three times, five minutes apart, each a new row), the response time per
+cell recorded against the 850 ms deadline, `posted` / `discord_failed` / `discord_unconfirmed` counted with any
+duplicate the retries produced, and `wrangler tail` showing status lines only · A-5 no source line,
 no `user`/`request`/`breadcrumbs` in a delivered message · A-6 a hostile title renders escaped, pings nobody,
 unfurls nothing, and the stack is still visible · A-7 `check-worker-subdomain.sh gogo-dev-sentry-relay` → `false,
 false`, and the script's settings read back with `observability.enabled = false`, `logpush = false` · A-8 the flag
-and capability flipped only after all four secrets are on the Worker · A-9 the native `discord` action removed
-from the three issue workflows, 6168773 untouched · **A-10 a forced failure**: delete the CMS webhook in Discord,
-probe gogo-cms, see the relay answer 502 on the Webhook Requests tab, recreate, re-put, probe again, see 200.
+and capability flipped only after all four secrets are on the Worker · A-9 the native `discord` action **present and
+unchanged** on all four workflows, read back after the PUT that added the relay's action (the PUT recreates ids, so
+the read-back is the proof), ids recorded · **A-10 a forced failure**: delete the CMS webhook in Discord, probe
+gogo-cms, see the relay answer 502 on the Webhook Requests tab **while the native message for that probe still
+arrives in the CMS channel**, recreate, re-put, probe again, see 200 — naming the second probe's own `Request-ID`, so a
+late retry of the first probe that lands after the webhook is back is not mistaken for it.
 
-A-3 gates A-9: a trigger that does not arrive as `event_alert`, or produces no message, is a notification that
-would be lost once the native action is gone. So does one written acknowledgement from the owner: that the Webhook
-Requests tab, read by a person, is the only notice of a broken relay (ADR-0013 D-4) — nothing emails anyone.
+Nothing gates on removing the native action, because it is never removed (ADR-0013 D-7, owner decision 2026-10-18):
+the circuit breaker ignores a 502 answered in time, so a relay-only path could die with no email and no trip. The
+written acknowledgement an earlier revision asked for is withdrawn with the removal it gated.
 
 ## Rotation
 
@@ -176,7 +191,8 @@ Discord's webhooks are live state.
    `pnpm exec wrangler secret delete SENTRY_CLIENT_SECRET --name gogo-dev-sentry-relay` first — the relay then
    refuses everything (`no_secret`), which closes the forgery window and stops real alerts too.
 3. **Stop the relay, keep the credentials.** In the owner's Sentry tab, remove the `webhook` action from the three
-   issue workflows and restore the native `discord` action. The sparse message returns; nothing else changes.
+   issue workflows. Nothing to restore: the native `discord` action was never removed, so the sparse message simply
+   continues alone; nothing else changes.
 4. **Tear it down.** Set `sentry_relay_host = ""` → the plan shows the script, the workers.dev subdomain setting,
    the route **and** the DNS record being destroyed together (they all live inside the counted module, which is
    why none of them is in the root `dns_records` map) → apply. Then delete the integration in Sentry, delete the
@@ -210,6 +226,7 @@ Discord's webhooks are live state.
 As of 2026-10-17 nothing above is deployed: PR-1 ships the Worker's code, its tests and this runbook. The module,
 the hostname, the integration, the Discord webhooks and the four SSM rows do not exist yet, so no environment
 holds a value, the capability is `planned`, and Sentry's native Discord action is still the only path to the
-channels. `scripts/ci/sentry-relay-bindings.test.sh` prints a skip with that reason until the module lands, while
+channels — and it stays after the relay is live (ADR-0013 D-7). `scripts/ci/sentry-relay-bindings.test.sh` prints a
+skip with that reason until the module lands, while
 still proving itself against an inline fixture on every CI run; it skips only while no module directory exists and
 nothing under `terraform/` or `config/*.tfvars` names the relay — either without a readable `main.tf` fails.

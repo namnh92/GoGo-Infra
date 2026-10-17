@@ -204,7 +204,11 @@ Discord message layout is fixed; the action takes only `data.tags`. Tags sent (D
 `environment,release,level,handled,browser.name,transaction` · gogo-mobile
 `environment,release,level,handled,os.name,device.family` · crash-free 6168773 `environment,release`. Stack
 traces and screen names are not in the message. Screen tags: GoGo-CMS#241, GoGo-MobileApp#341. Stack traces: the
-relay below.
+relay below — which is added **next to** this action, not in its place. Owner decision 2026-10-18 (ADR-0013 D-7,
+reversing 2026-10-17): this native action stays on all four workflows permanently, because Sentry's circuit breaker
+counts only its own 5 s hard timeout as an error and so would never notice, email or trip on a relay that dies
+answering 502s in time. Once the relay is live, every issue therefore posts twice in its channel: this sparse message
+and the relay's one with frames. The duplicate is deliberate.
 
 | Workflow | Fires on | Discord channel |
 | --- | --- | --- |
@@ -238,7 +242,9 @@ Sentry link, issue and event ids), scrubs every value, and posts one embed. **No
 2026-10-17), no `user`, `request`, `contexts` or `breadcrumbs`. A Discord failure is answered to Sentry as 502 on
 purpose, so it lands on the integration's *Webhook Requests* tab — that tab, read by a person, is the delivery
 detector and the only one: Sentry's circuit breaker counts only its own 5 s hard timeout, so the relay's 502s never
-trip it or the email it would send (ADR-0013 D-4).
+trip it or the email it would send (ADR-0013 D-4). Sentry does retry the webhook task on a 502, three times at
+five-minute spacing (not on 503, 504 or 4xx), so a failed relay message usually arrives late rather than never — and a
+`discord_unconfirmed` one may arrive twice (shape rev 2.6, Q-8, open).
 
 Credentials, when they exist (`docs/sentry-discord-relay.md` is the runbook, including which leak is revoked
 where): the integration's Client Secret and three Discord channel webhook URLs, all SecureString under
@@ -247,9 +253,13 @@ bindings exist. The two capabilities differ — the secret lets someone **forge*
 channels, a webhook URL lets someone **post into that one channel** with no account, so a leaked URL is revoked
 at Discord and a leaked secret is regenerated at Sentry.
 
-Once the relay is accepted (acceptance matrix A-1…A-10, `docs/sentry-discord-relay.md`), the native `discord`
-action is removed from workflows 6114982 / 6164951 / 6164950 and the relay becomes the only path for issue
-alerts; the crash-free workflow 6168773 keeps the native action, having no event to attach frames to.
+The native `discord` action on workflows 6114982 / 6164951 / 6164950 / 6168773 is **never removed** — owner
+decision 2026-10-18 (ADR-0013 D-7), reversing the 2026-10-17 plan to remove it from the first three once the relay
+was accepted. The relay's `webhook` action is added beside it, so each issue posts two messages in its channel: the
+native sparse one and the relay's with frames. Reason: a relay answering 502s inside Sentry's budget is a "success"
+to Sentry's circuit breaker, which fires its email only on hard timeouts — a relay-only path could stop silently.
+Acceptance A-9 now reads back all four workflows after the relay's action is added and checks the native action is
+still there; A-10 checks the native message still arrives while the relay is forced to fail.
 
 ### Which Google Cloud project owns a DEV credential
 

@@ -2,21 +2,25 @@
 
 **Status:** proposed — becomes accepted at merge; the session that merges PR #233 writes the merge SHA and the
 CODEOWNER date into this line (shape §5 step 6). SA shape: Fable,
-`dev/handoffs/sa-shape-infra-221-sentry-discord-relay.fable.md` rev 2.5 (workspace file). Every review round on the
-shape and on PR #233 — Astra rounds 1 and 2, Sol rounds 1 and 2, the SA find round on the code — is dispositioned
-finding by finding in that file's §7 and §8; the decisions below are the result, not the history.
+`dev/handoffs/sa-shape-infra-221-sentry-discord-relay.fable.md` rev 2.6 (workspace file). Every review round on the
+shape and on PR #233 — Astra rounds 1 and 2, Sol rounds 1 and 2, the SA find round on the code — and the owner's
+decisions of 2026-10-18 are dispositioned item by item in that file's §7 and §8; the decisions below are the result,
+not the history.
 **Issue:** GoGo-Infra#221 (context #219, #208)
 **Requirement authority:** owner decisions 2026-10-15 (#219: alerts go to Discord, one channel per project, every
-environment, one notification per issue per 30 min) and 2026-10-17 (this issue: scope, native action removed after
-acceptance, no source lines to Discord, three existing channels, hostname). ADR-0011 D-7 (privacy addendum before
-real data) and D-9 (allowlists, not denylists). ADR-0004 (what belongs on a Worker). `security.md` (logs carry no
-payloads). `gogo-platform-sre` (symptom alerts reach a human).
+environment, one notification per issue per 30 min), 2026-10-17 (this issue: scope, no source lines to Discord, three
+existing channels, hostname — and "native action removed after acceptance", **reversed the next day**) and
+2026-10-18 (the native action stays permanently beside the relay, D-7; exception `type` is a name position, D-5; the
+20-character scrub floor stays for every project, D-11). ADR-0011 D-7 (privacy addendum before real data) and D-9
+(allowlists, not denylists). ADR-0004 (what belongs on a Worker). `security.md` (logs carry no payloads).
+`gogo-platform-sre` (symptom alerts reach a human).
 **Basis:** GoGo-Infra `develop` `37c4dd7`.
 **Amends:** ADR-0004's table of edge-native workloads (one row, below). ADR-0011 D-9 gains a third implementer.
 ADR-0006 D3's notification path now has a relay in it.
 **Out of scope:** screen/route tags on client events (GoGo-CMS#241, GoGo-MobileApp#341 — the relay forwards them
-when they exist); the crash-free monitor's own notification (workflow 6168773 keeps Sentry's native Discord
-action); anything about PROD (D-2).
+when they exist); the crash-free monitor's own notification (workflow 6168773 fires on a metric detector — no event,
+nothing for the relay to add — and carries Sentry's native Discord action like the other three, D-7); anything about
+PROD (D-2).
 
 ## Context
 
@@ -99,10 +103,11 @@ body, at most 400 characters per value, at most ten tag lines, eight frames) and
 measured response time per cell; the 150 ms margin behind the 850 ms deadline stands or the deadline moves on that
 number, not on an asserted figure.
 
-This is the ADR's least obvious decision, so the reason is recorded: Sentry does not retry an issue-alert webhook,
-so the message is lost either way, but a non-2xx is recorded on the integration's *Webhook Requests* tab, with the
-response time Sentry measured (`utils/sentry_apps/webhooks.py:421-434`). **That tab is the delivery detector, and it is
-the only one.** The circuit breaker this ADR first named as a second detector is not one for this relay:
+This is the ADR's least obvious decision, so the reason is recorded: a non-2xx is recorded on the integration's
+*Webhook Requests* tab, with the response time Sentry measured (`utils/sentry_apps/webhooks.py:421-434`). **That tab
+is the delivery detector, and it is the only one.** (The first draft also said "Sentry does not retry an issue-alert
+webhook, so the message is lost either way" — wrong, see the end of this section.) The circuit breaker this ADR first
+named as a second detector is not one for this relay:
 `circuit_breaker_tracking` counts only Sentry's own 5 s hard timeout as an error — "if an app returns a say 500, in a
 reasonable time that's okay" (`utils/sentry_apps/circuit_breaker.py:26-28`) — so a 502 answered inside the budget is a
 *success* to it. It trips on 500 or more hard timeouts that are also half or more of the requests in a 10-minute
@@ -110,10 +115,27 @@ window, stays open 5 minutes and then recovers over 20 (`sentry-apps.webhook.cir
 `options/defaults.py`; `utils/circuit_breaker2.py`); while open, Sentry sends nothing and records nothing on the tab
 (`webhooks.py:341-342`, before `buffer.add_request`); its email goes to one address, only on the hard-timeout request
 that found it open, at most once a day (`webhooks.py:123-135,152,352-354`). None of that can happen to a relay that
-answers within 850 ms. So the owner's notice of a broken relay is the tab, read by a person — and D-7's removal of the
-native action is gated on the owner acknowledging exactly that (rev 2.5). The alternative —
-acknowledge 202 and post in `ctx.waitUntil` — makes every failure after the acknowledgement invisible, which with
-Sentry's native action removed (D-7) would mean an alert path that can stop working silently.
+answers within 850 ms. So the owner's notice of a broken relay is the tab, read by a person — and that is why Sentry's
+native Discord action stays beside the relay permanently (D-7, owner decision 2026-10-18): the one alert path that
+cannot fail with the relay. The alternative — acknowledge 202 and post in `ctx.waitUntil` — makes every failure after
+the acknowledgement invisible even on the tab.
+
+One more fact, read from the same source on 2026-10-18 and corrected here because the first draft had it backwards
+(shape rev 2.6, Q-8): **Sentry does retry this webhook on a 502.** The workflow-engine `webhook` action enqueues
+`send_alert_webhook_v2.delay(…)` (`sentry_apps/services/legacy_webhook/service.py:106`), a task declared
+`Retry(times=3, delay=60 * 5, on=(RequestException, InnerTimeoutError), ignore=(ClientError, …))`
+(`sentry_apps/tasks/sentry_apps.py:95,191-204`); `send_and_save_webhook_request` turns a 500 or 502 into
+`requests.HTTPError` through `raise_for_status()` and re-raises it, as it re-raises a soft `Timeout` and a
+`ConnectionError` (`utils/sentry_apps/webhooks.py:365-383,479-483`), while 503 (`ApiHostError`), 504 (`ApiTimeoutError`)
+and every 4xx (`ClientError`, in the ignore list) end the task. So a relay 502 is retried three times, five minutes
+apart; a 503, a 4xx and a 204 are final. Each action on a workflow is its own task
+(`workflow_engine/processors/action.py:263-268`), so a relay failure never reaches the native action. Consequences: a
+`rate_limited` or `discord_failed` message is usually delivered on a retry, so the loss D-10 states is smaller than
+first written; a `webhook_rejected` 502 appears on the tab three more times; and a `discord_unconfirmed` 502 — Discord
+answered 2xx, the relay could not read a message id, the message is probably in the channel — is retried into up to
+four relay copies of one message. The 502 stands. Whether `discord_unconfirmed` should answer 200 instead is an open
+owner question, to be decided on the acceptance run's count of that outcome (shape §3, Q-8). None of this changes
+D-7: the retry is invisible to the breaker, so a dying relay makes four tab rows per issue and still emails no one.
 
 **D-5 · What may leave Sentry is a closed list, scrubbed by value.** Project, `environment`, `release`, `level`,
 issue title, `culprit`, rule name, the ten allowed tags, the thrown exception's type and first value line, the
@@ -127,9 +149,10 @@ JWT, long token runs, invite paths `/r/ /l/ /invite/ /share-links/` in any lette
 pre-pass were case-sensitive while the query rule was not, so `/R/<code>` was published (rev 2.5) — credential query
 keys, coordinate pairs, phone numbers → labels) and a length cap; `transaction`, `route` and `screen` additionally get path-template
 treatment, so an id in a path becomes `[id]`. The long-run rule is positional (rev 2.4). In **free text** — title,
-culprit, exception type and value, the fallback message, environment, rule, every other tag — a 20+ run with a digit,
+culprit, the exception value, the fallback message, environment, rule, every other tag — a 20+ run with a digit,
 `_` or `-` is a token and only a letters-only run survives, the rule every string had before Astra F-27. In a **name
-position** — a frame's `filename` and `function`, and the `transaction`/`route`/`screen` tags — a run survives when it
+position** — a frame's `filename` and `function`, the `transaction`/`route`/`screen` tags, and since 2026-10-18 the
+exception `type` — a run survives when it
 is a name: letters, or letter words joined by single `_`/`-`; a digit, a doubled or an edge separator is what marks it
 random, the client redactor's own test (ADR-0011 D-9). So `get_notification_preferences` in a frame and a screen called
 `NotificationSettings` leave intact while `user_1a2b3c4d5e6f7g8h` does not (rev 2.3; the earlier test took the
@@ -143,10 +166,15 @@ and 0.013 % of 43-char runs again (letters-only, as it always did) instead of 2.
 2.15 % / 0.059 %. The strict rule is the code's default; a name position opts in, so a field relayed later fails
 toward redaction. Accepted: a 20+ snake/kebab *function* name in `culprit` prints `[token]` there and survives in the
 frame line; a 20+ `SCREAMING_SNAKE` *error code* in an exception value or title — `PLACE_PROVIDER_UNAVAILABLE` — prints
-`[token]` and appears in no frame, so that alert loses its most load-bearing string (rev 2.5 corrects the earlier
-sentence, which was true only of the function-name half). Whether exception `type` — a class name or an error code by
-construction, the one free-text field that is always a name — should be a name position was classified strict by
-inheritance, not by decision; it is an open owner question (shape §3, Q-7).
+`[token]` and appears in no frame (rev 2.5 corrects the earlier sentence, which was true only of the function-name
+half). **Owner decision 2026-10-18:** the exception `type` is a name position. A type is a class name or an error code
+by construction — `PLACE_PROVIDER_UNAVAILABLE`, `TypeError`, `com.foo.BarException` — and nothing puts a credential
+there; rev 2.4 had made it strict by inheritance, not by decision, and so the one string that alert is about reached
+Discord as `[token]`. The cost, accepted: one more field at the name-position floor (2.15 % / 0.059 % of digit-free,
+well-formed random runs). The exception `value` stays strict — the owner was asked about `type` only, and `value` is
+free text where a user-typed string lands — so the same code in the *value* is still `[token]`, with the `type` beside
+it now carrying it. The regression asserts both halves through the serialised Discord body
+(`workers/sentry-relay/test/worker.test.mjs`, suite "exception `type` is a name position").
 
 Never: `user`, `request`, `contexts`, `breadcrumbs`, `sdk`, `extra`, `modules`, `fingerprint`, `_meta`,
 `mechanism.data`, `abs_path`, frame variables, and — owner decision 2026-10-17 — **no source lines**
@@ -207,13 +235,27 @@ under the limit; the description floor alone could return an over-limit embed, w
 relay then reported as a Discord failure (rev 2.5). No buttons — a channel webhook cannot act on Sentry the way the native
 integration's Resolve/Archive could; the link is the action.
 
-**D-7 · Sentry's native Discord action is removed once the relay is accepted.** Owner decision 2026-10-17, for
-the three issue workflows 6114982 / 6164951 / 6164950: one message per issue, the complete one. The crash-free
-workflow 6168773 keeps the native action — it fires on a metric detector, where there is no event and so no stack
-trace to add. Removal is gated on the acceptance matrix (A-3 in the shape): each workflow × each of the five
-triggers, plus the BE metric detector, must be observed arriving as `event_alert` and producing a correlated
-Discord message. A trigger that arrives as anything else is a notification the owner would lose, and blocks the
-removal until the design has a path for it.
+**D-7 · Sentry's native Discord action stays on every workflow, permanently; the relay is an addition, never the
+only path.** Owner decision 2026-10-18, reversing 2026-10-17's "removed once the relay is accepted" for the three issue
+workflows 6114982 / 6164951 / 6164950 (the crash-free workflow 6168773 was always keeping it — a metric detector has no
+event and no stack trace to add). The reason is D-4's finding, and it is written here so that nobody later "cleans up"
+the duplicate: Sentry's circuit breaker records an error only on its own 5-second hard timeout — "if an app returns a
+say 500, in a reasonable time that's okay" (`utils/sentry_apps/circuit_breaker.py:26-28`) — so a relay that dies
+answering 502s inside its deadline is a *success* to Sentry: the breaker never opens, the owner's email never arrives,
+and the *Webhook Requests* tab shows the 502s only to a person who happens to read it. Remove the native action and
+the alert path can stop silently. Keep it and the sparse message is the one alert that cannot fail with the relay —
+and a native message with no relay message beside it is a per-issue tell of a broken relay, visible in the channel.
+
+The price, accepted by the owner: **two messages per issue in each channel** — Sentry's sparse one (tags only, from
+the Discord integration) and the relay's complete one (frames, from the channel webhook, the only one with the
+`issue <id> · event <id>` footer). They come from different authors and different rate-limit buckets; `frequency 30`
+throttles both together, since it is per workflow. Each workflow's `webhook` action is added **next to** the existing
+`discord` action, and the read-back after that PUT — which recreates action ids — is what proves native survived it
+(shape A-9, inverted from the 2026-10-17 text). The acceptance matrix (A-3) still runs each workflow × each of the
+five triggers plus the BE metric detector; a trigger that does not arrive as `event_alert` is now a relay gap to
+record and design for, not a notification the owner loses. The forced-failure cell (A-10) measures the fallback
+itself: the native message for the probe arrives while the relay answers 502. The acknowledgement that rev 2.5 had
+gated removal on is withdrawn — there is no removal to gate.
 
 **D-8 · Four credentials, two different capabilities, two different leak responses.** `sentry-relay/client-secret`
 and three `sentry-relay/discord-webhook-*`, all SecureString under `/gogo/ci/dev/`, consumer `pipeline`, put onto
@@ -245,12 +287,16 @@ guard, until the module lands, skips only while no module directory exists and n
 `config/*.tfvars` names the relay; either of those without a readable `main.tf` fails, so the skip cannot be mistaken
 for a module that landed under another name (rev 2.5).
 
-**D-10 · No queue, no buffer, and the loss is stated.** Sentry's `frequency 30` is the per-issue dedupe. A
-Discord failure or a 429 that cannot be honoured inside the budget is a dropped message and a 502 — a deploy that
-mints many new issues in a minute will drop some, because a channel webhook allows roughly five requests every two
-seconds. The issue stream in Sentry is the record; the channel is the notification. A queue would turn a visible
-502 into an invisible backlog. The accepted loss includes the channel, not only individual messages: a webhook that is
-gone or a Worker that is broken drops every alert for that project until a person reads the tab (D-4; rev 2.5).
+**D-10 · No queue, no buffer of our own, and the loss is stated.** Sentry's `frequency 30` is the per-issue dedupe. A
+Discord failure or a 429 that cannot be honoured inside the budget is a 502 — and Sentry's own task retries that 502
+three times at five-minute spacing (D-4, corrected 2026-10-18), so a deploy that mints many new issues in a minute,
+against a channel webhook that allows roughly five requests every two seconds, will see 502s that mostly deliver a few
+minutes late rather than never. The issue stream in Sentry is the record; the channel is the notification. A queue of
+our own would turn a visible 502 into an invisible backlog, and Sentry's retry is the buffer that already exists. The
+accepted loss includes the channel, not only individual messages: a webhook that is gone or a Worker that is broken
+drops every **relay** message for that project until a person reads the tab (D-4; rev 2.5) — the stack traces, not
+the alerts, because the native action still posts (D-7). The retry has one cost of its own: a `discord_unconfirmed`
+502 is re-posted, which is Q-8 in the shape.
 
 **D-11 · The privacy addendum is accepted before the first `webhook` action exists.** ADR-0011 D-7 requires a dated
 owner acceptance on GoGo-Infra#208 before real data reaches a new destination or processor. For this relay that is
@@ -258,8 +304,14 @@ owner acceptance on GoGo-Infra#208 before real data reaches a new destination or
 comments 6181943660, 6181998277, 6209622583, 6220437621). The comment is posted and accepted before the relay's
 `webhook` action is saved on any workflow — nothing real can reach the relay until an action carries it — and A-2
 records the comment id and checks its date against the action's. The addendum states the scrub floor as it is: in free
-text a letters-only run of 20+ passes, in a name position a name-shaped run of 20+ passes, nothing under 20 characters
-is tested by the run rule at all, and for `gogo-be` the relay is the first line for free text (Consequences).
+text a letters-only run of 20+ passes, in a name position (the exception `type` included, since 2026-10-18) a
+name-shaped run of 20+ passes, nothing under 20 characters is tested by the run rule at all, and for `gogo-be` the
+relay is the first line for free text (Consequences). **Owner decision 2026-10-18:** that 20-character floor stays
+for every project, `gogo-be` included — ADR-0011 D-9's "6+ with a letter and a digit" rule was not imported, because
+its accepted false positives (`node18`, `es2020`, `utf8mb4`, `sha256`, a short SHA) would print `[token]` in BE
+alerts. So, plainly: for `gogo-be` free text the relay tests nothing under 20 characters, and a 12-character room
+share code in an exception message is published unless it sits behind `/r/`, `/l/`, `/invite/`, `/share-links/` or a
+credential query key. The addendum says so in those words; the risk is owner-accepted with that date.
 
 ## Alternatives rejected
 
@@ -293,11 +345,14 @@ is tested by the run rule at all, and for `gogo-be` the relay is the first line 
   the **first** line for free text: the api's `beforeSend` rebuilds `event.request` and redacts coordinate-shaped values
   only (`GoGo-BE/apps/api/src/sentry.ts`, `libs/observability/src/telemetry-redaction.ts`) and never touches `message`,
   an exception value, the title or a tag; Sentry's server-side rules on `gogo-be` are the scrubber defaults,
-  `scrubIPAddresses` and `$user.geo.**` (`docs/accounts.md`), none of them a token or invite-code rule. Whether BE free
-  text should get the client's 6+ rule in the relay — importing ADR-0011's accepted false positives (`node18`,
-  `es2020`, a short SHA would print `[token]`) — is an owner question (shape §3, Q-6; rev 2.5).
-- Alert delivery now depends on Cloudflare's edge as well as Sentry and Discord. Detection of a failure depends on
-  someone reading Sentry's Webhook Requests tab or its circuit-breaker email (D-4).
+  `scrubIPAddresses` and `$user.geo.**` (`docs/accounts.md`), none of them a token or invite-code rule. The owner kept
+  the 20-character floor there rather than import the client's 6+ rule and its accepted false positives (`node18`,
+  `es2020`, a short SHA would print `[token]`) — decided 2026-10-18, D-11: a 12-character room share code in a BE
+  exception message is published unless a marker or query-key rule catches it.
+- Stack-trace delivery now depends on Cloudflare's edge as well as Sentry and Discord; the alert itself does not,
+  because the native action stays (D-7). Each issue posts twice in its channel. Detection of a relay failure depends
+  on someone reading Sentry's Webhook Requests tab, or noticing a native message with no relay message beside it;
+  the circuit-breaker email never fires for this relay, and Sentry's retries of a 502 do not change that (D-4).
 - Three PRs and two applies to get there (shape D-13): code and docs first with no Terraform path touched, then
   the module on the owner's apply order, then the provisioned flag. Nothing in this ADR is live until the last of
   them, and the issue stays open until the acceptance matrix is measured.
