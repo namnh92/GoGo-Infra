@@ -124,8 +124,9 @@ the query string come off a path **before** segments are classified, or `/plans/
 `/plans/123456?view=map` are not "a run of digits" and the bare id is published once the control is stripped. And
 a frame's path is reduced to its last three segments **before** any length cap, or a long absolute path keeps
 `/home/<user>/private/…` and loses the file name — publishing the one part nobody wanted and dropping the part
-that locates the defect. Before even that, the segment after any `r`/`l`/`invite`/`share-links` segment is replaced
-over the **whole** path: the tail cut had dropped the marker with the head, so `/r/AbCdEfGhIj/src/app.js` left as
+that locates the defect. Before even that, the segment after any `r`/`l`/`invite`/`share-links` segment — unless it is a
+route-template placeholder such as `[inviteCode].tsx`, the invite screen's own frame — is replaced over the **whole**
+path: the tail cut had dropped the marker with the head, so `/r/AbCdEfGhIj/src/app.js` left as
 `AbCdEfGhIj/src/app.js` with nothing for the credential-path rule to match (rev 2.3). A third rule came from the
 confirm round: the scrubber reads at most the first 400 characters of a value (a bounded surface, since a signed
 body may be 1 MiB), and that cut is **not a slice** — a

@@ -200,15 +200,26 @@ const RE_TOKEN_RUN = /[A-Za-z0-9_-]{20,}/g
  * separators themselves treated `get_notification_preferences` and
  * `sentry-discord-relay-worker` as random and printed `[token]` for exactly
  * the names an alert exists to carry (Astra F-27). What this admits that the
- * old test caught: a secret of 20+ characters with no digit and well-formed
- * separators — about 3 % of random base64url, none of hex — on top of the
- * letters-only runs both tests admit.
+ * old tests caught: in text, a secret of 20+ characters with no digit and
+ * well-formed separators — about 3 % of random base64url, none of hex — on
+ * top of the letters-only runs the old token test already admitted; in a
+ * path template, any 16+ segment that is a name, letters-only included (the
+ * old segment test had no digit condition) — bounded there because all three
+ * clients send templates (`[param]`, `:param`, Nest patterns) whose ids are
+ * UUIDs or numbers. An edge separator still fails the test, so the
+ * leading-underscore private convention (`_handleNotificationPress`, 20+)
+ * stays `[token]`.
  */
 const RE_NAME = /^[A-Za-z]+(?:[_-][A-Za-z]+)*$/
 const isName = (run) => RE_NAME.test(run)
 // The same vocabulary as the client redactor (ADR-0011 D-9): these path
 // segments and query keys are always credentials.
 const CRED_MARKERS = new Set(['r', 'l', 'invite', 'share-links'])
+// The invite screen itself is `src/app/r/[inviteCode].tsx`: the segment after
+// the marker is expo-router's placeholder — letters only inside the brackets,
+// so no code can wear it (ADR-0011 D-9, oracle C-24) — and it is the basename
+// of exactly the frames an invite-code bug produces. Kept, with its extension.
+const RE_ROUTE_PARAM = /^\[[A-Za-z]+\](?:\.[A-Za-z0-9]+)?$/
 const RE_CRED_PATH = /(\/(?:r|l|invite|share-links)\/)[A-Za-z0-9_-]+/g
 const RE_CRED_QUERY = /([?&](?:code|invite|token|slug|guest|lat|lng|latitude|longitude)=)[^&#\s]*/gi
 const RE_GEO = /-?\d{1,3}\.\d{3,}\s*,\s*-?\d{1,3}\.\d{3,}/g
@@ -388,10 +399,11 @@ function frameLine(frame) {
   // three, `/r/AbCdEfGhIj/src/app.js` became `AbCdEfGhIj/src/app.js`, the rule
   // had no `/r/` to match, and ten letters are below the token rule — the
   // code was published (Astra F-23). The segment after a marker is a
-  // credential whatever it contains. The full path is never handed to
-  // scrub(), whose 400-character cut would eat it; this loop is linear.
+  // credential whatever it contains, unless it is a route-template
+  // placeholder (RE_ROUTE_PARAM). The full path is never handed to scrub(),
+  // whose 400-character cut would eat it; this loop is linear.
   for (let i = 0; i + 1 < all.length; i += 1) {
-    if (CRED_MARKERS.has(all[i])) all[i + 1] = '[redacted]'
+    if (CRED_MARKERS.has(all[i]) && !RE_ROUTE_PARAM.test(all[i + 1])) all[i + 1] = '[redacted]'
   }
   const segments = all.slice(-3).map((seg) => (seg.length > FILE_SEGMENT_CAP ? '…' : seg))
   // Scrubbed as one string: the credential-path rule needs `/r/<value>` across

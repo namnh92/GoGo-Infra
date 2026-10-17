@@ -1313,6 +1313,26 @@ describe('a credential marker outside the kept window (Astra F-23)', () => {
     const raw = await postedRaw('/src/r')
     assert.match(raw, /src\/r:1:1/)
   })
+
+  // The invite screen itself lives at `src/app/r/[inviteCode].tsx`: the
+  // segment after `r` is the route-template placeholder, not a code (ADR-0011
+  // D-9, oracle C-24), and it is the basename of exactly the frames an
+  // invite-code bug produces. A first cut of the pre-pass redacted it.
+  for (const filename of ['src/app/r/[inviteCode].tsx', 'src/app/r/[inviteCode]/index.tsx']) {
+    it(`a route-template placeholder after a marker is kept: ${filename}`, async () => {
+      const raw = await postedRaw(filename)
+      assert.ok(raw.includes('[inviteCode]'), 'the placeholder segment was redacted')
+      assert.ok(!raw.includes('[redacted]'))
+    })
+  }
+
+  for (const filename of ['src/app/r/AbCdEfGhIj.tsx', 'src/app/r/[AbCdEf12].tsx']) {
+    it(`only a letters-only [param] is a placeholder: ${filename} is redacted`, async () => {
+      const raw = await postedRaw(filename)
+      assert.ok(!raw.includes('AbCdEf'), 'a code dressed as a file name or a placeholder was published')
+      assert.match(raw, /app\/r\/\[redacted\]:1:1/)
+    })
+  }
 })
 
 describe('the Discord work completes inside the deadline, retry included (Astra F-22)', () => {
