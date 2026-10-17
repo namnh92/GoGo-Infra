@@ -356,14 +356,34 @@ Nothing reads them but the lane the owner runs:
   store/android-keystore store/android-keystore-password \
   store/android-key-alias store/android-key-password store/play-service-account -- \
   fastlane android internal
+
+# Android — sign without uploading: name the four signing rows and leave the
+# service account out, because the upload step is the only thing that reads it.
+# Naming it while it has no value stops the wrapper before the build instead.
+./scripts/secrets/exec-with.sh prod \
+  store/android-keystore store/android-keystore-password \
+  store/android-key-alias store/android-key-password -- \
+  fastlane android build
 ```
 
 `exec-with.sh` takes a set because a lane needs all of them and nothing less: every row is resolved
 before any value is read, so a typo stops the lane instead of starting it half-credentialled, and
 `prod` asks for typed confirmation once for the whole set — read from the terminal, so the lane's own
-stdin can be a file or a pipe; a session with no terminal is refused unless `GOGO_ASSUME_YES=1`. The
-values are exported into that one process and `exec` replaces the shell, so nothing outlives the
-lane — no `export` in your shell, no `.env`, nothing written into `android/` or `ios/`.
+stdin can be a file or a pipe; a session with no terminal is refused unless `GOGO_ASSUME_YES=1`.
+
+**What the wrapper buys, exactly.** The values never enter your shell, a `.env`,
+`sentry.properties`, `android/` or `ios/`: they are fetched into the wrapper's own process and `exec`
+hands that process to the lane. What it does **not** buy is isolation inside the lane. The lane and
+**every process it starts** inherit the whole exported set, `exec` does not supervise those children
+or revoke their environment, and `unset VALUES` clears a shell variable — not an exported copy, and
+not bytes a child has written down. So the lane owns what the wrapper cannot: keeping these variables
+out of its own log, not passing them as arguments, and deleting whatever it decodes to disk (the
+keystore above all) even when it fails. A child that outlives the lane keeps the credentials for as
+long as it runs.
+
+The all-or-nothing rule is the **wrapper's**, not the lane's: `exec-with.sh` refuses before starting
+anything if one of the rows it was given has no value. A lane that is meant to run on fewer
+credentials is invoked with fewer — the signing-only form above.
 
 **What each one costs if it is lost or leaked** — read this before the commands:
 
