@@ -62,7 +62,7 @@ variable "staff_emails_json" {
 }
 
 variable "require_mfa" {
-  description = "Require Cloudflare MFA on the admission policy (GoGo-BE#687 D-8). Mandatory outside dev; needs an MFA-capable identity provider, which one-time PIN is not."
+  description = "Require Cloudflare MFA on the admission policy (GoGo-BE#687 D-8). Mandatory outside dev. The organisation has only the Cloudflare account-member method configured, not one-time PIN; whether it satisfies Cloudflare's mfa rule is unverified, so confirm that or add an MFA-capable identity provider before the first apply that sets this."
   type        = bool
   default     = false
 

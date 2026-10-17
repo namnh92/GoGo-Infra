@@ -183,7 +183,7 @@ variable "cms_script_name" {
 }
 
 variable "cms_require_mfa" {
-  description = "Require Cloudflare MFA on the CMS Access policy (GoGo-BE#687 D-8). false in dev (one-time PIN); the module refuses false elsewhere."
+  description = "Require Cloudflare MFA on the CMS Access policy (GoGo-BE#687 D-8). false in dev; the module refuses false elsewhere. The organisation offers only the Cloudflare account-member method (owner decision 2026-10-08, execution-policy §8) — no one-time PIN is configured, and whether that method satisfies Cloudflare's mfa rule is unverified; see docs/secrets.md."
   type        = bool
   default     = false
 }
