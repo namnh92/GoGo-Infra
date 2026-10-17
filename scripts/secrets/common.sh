@@ -143,17 +143,26 @@ param_hint() {
   esac
 }
 
-# The confirmation is read from the terminal, not from stdin: stdin may be the
-# value being written. `put.sh prod store/apple-asc-key < AuthKey.p8` used to
-# consume the key's first line as the answer, fail the comparison and abort —
-# and the multi-line credentials of GoGo-Infra#231 can only arrive that way
-# (the interactive branch is a single-line `read`). Caught by Sol on PR #232.
+# The confirmation is read from the controlling terminal, never from stdin.
+# stdin belongs to the caller's data: the value being written (`put.sh prod
+# store/apple-asc-key < AuthKey.p8` used to consume the key's first line as the
+# answer, and the multi-line credentials of GoGo-Infra#231 can only arrive that
+# way — the interactive branch is a single-line `read`), or the input of the
+# command exec-with.sh hands the set to. Callers therefore do not test stdin
+# for a terminal; this function is the one place that decides.
+#
+# The open of /dev/tty is the test for a terminal. `[[ -r /dev/tty ]]` is not:
+# it passes on the device node's permissions in a session that has no
+# controlling terminal, and the read then failed outside `die` — a bare
+# "/dev/tty: Device not configured" from bash and a silent `set -e` exit
+# (Sol, PR #232 rounds 1 and 2). GOGO_ASSUME_YES=1 is the only non-interactive
+# path.
 confirm_prod() {
   local env="$1" action="$2" answer
   if [[ "$env" == "prod" && "${GOGO_ASSUME_YES:-}" != "1" ]]; then
-    [[ -r /dev/tty ]] \
-      || die "prod needs typed confirmation on a terminal (or GOGO_ASSUME_YES=1) — aborted"
-    read -r -p "About to ${action} in PRODUCTION. Type 'prod' to continue: " answer </dev/tty
+    if ! read -r -p "About to ${action} in PRODUCTION. Type 'prod' to continue: " answer </dev/tty; then
+      die "prod needs typed confirmation on a terminal (or GOGO_ASSUME_YES=1) — aborted"
+    fi
     [[ "$answer" == "prod" ]] || die "aborted"
   fi
 }

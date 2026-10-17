@@ -101,11 +101,10 @@ for path in "${PARAM_PATHS[@]}"; do
 done
 unset manifest row env_var
 
-# confirm_prod reads the answer from stdin; with no terminal that read fails
-# and `set -e` would end the script without a word. Say why instead.
-if [[ "$ENVIRONMENT" == "prod" && "${GOGO_ASSUME_YES:-}" != "1" && ! -t 0 ]]; then
-  die "prod needs typed confirmation on a terminal (or GOGO_ASSUME_YES=1) — aborted"
-fi
+# confirm_prod opens the controlling terminal itself and refuses, with a
+# message, when there is none — so stdin stays the command's, redirected or
+# not. No `-t 0` test here: it refused a lane whose stdin was deliberately a
+# file although a terminal was there to answer (Sol F-02, round 2).
 confirm_prod "$ENVIRONMENT" "hand ${PARAM_PATHS[*]} to a command"
 require_aws
 

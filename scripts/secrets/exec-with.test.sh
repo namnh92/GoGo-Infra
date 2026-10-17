@@ -152,7 +152,6 @@ refuses "no command after --" "usage: exec-with.sh" dev sentry/mobile-auth-token
 refuses "an undeclared path" "is not declared" dev sentry/not-declared -- child
 refuses "a row with no env_var" "declares no env_var" dev terraform/read/r2-state-secret-access-key -- child
 refuses "the ci pseudo-environment" "'ci' is not a runtime environment" ci sentry/mobile-auth-token -- child
-refuses "prod without typed confirmation" "aborted|PRODUCTION" prod sentry/mobile-auth-token -- child
 GOGO_ASSUME_YES=1 refuses "the same path twice" "is named twice" prod store/apple-asc-key store/apple-asc-key -- lane
 GOGO_ASSUME_YES=1 refuses "a set with one undeclared path" "is not declared" prod store/apple-asc-key store/not-declared -- lane
 # No test for two different paths sharing an env_var: no two rows in the
@@ -176,6 +175,60 @@ if grep -q "get-parameter" "$CALLS"; then
   bad "a row with no env_var never reaches SSM" "$(cat "$CALLS")"
 else
   ok "a row with no env_var never reaches SSM"
+fi
+
+# 3c. The prod confirmation (GoGo-Infra#231, Sol F-02). It is read from the
+# controlling terminal, never from stdin — stdin is the command's — and a
+# session with no terminal is refused with a message, before any `aws` call.
+# Run through scripts/lib/tty-harness.py, which makes the terminal per case:
+# a test that ran the script directly would inherit the suite's own terminal
+# (blocking on the developer's keyboard) or none (CI), and pass or hang by
+# luck. Four cells: terminal answers `prod`; terminal answers wrong; no
+# terminal; no terminal with GOGO_ASSUME_YES=1.
+HARNESS="${DIR}/../lib/tty-harness.py"
+
+with_tty() { # with_tty <answer> <args...> — stdin stays /dev/null, the terminal types <answer>
+  local answer="$1"
+  shift
+  : >"$CALLS"
+  PATH="${SANDBOX}:${PATH}" AWS_PROFILE=stub python3 "$HARNESS" answer "$answer" -- "$SCRIPT" "$@" >"${SANDBOX}/out" 2>&1 </dev/null
+}
+without_tty() { # without_tty <args...> — a session with no controlling terminal at all
+  : >"$CALLS"
+  PATH="${SANDBOX}:${PATH}" AWS_PROFILE=stub python3 "$HARNESS" no-tty -- "$SCRIPT" "$@" >"${SANDBOX}/out" 2>&1 </dev/null
+}
+
+with_tty prod prod store/apple-asc-key store/apple-asc-key-id store/apple-asc-issuer-id -- lane
+status=$?
+if [[ $status -eq 0 ]] && [[ "$(grep -c 'present$' "${SANDBOX}/out")" == 3 ]] && grep -q "PRODUCTION" "${SANDBOX}/out"; then
+  ok "a prod lane with redirected stdin takes its confirmation from the terminal"
+else
+  bad "a prod lane with redirected stdin takes its confirmation from the terminal" "status=${status}: $(cat "${SANDBOX}/out")"
+fi
+
+with_tty no prod store/apple-asc-key store/apple-asc-key-id store/apple-asc-issuer-id -- lane
+status=$?
+if [[ $status -ne 0 ]] && grep -q "aborted" "${SANDBOX}/out" && ! grep -q "^lane:" "${SANDBOX}/out" && [[ ! -s "$CALLS" ]]; then
+  ok "a wrong answer on the terminal aborts before any aws call"
+else
+  bad "a wrong answer on the terminal aborts before any aws call" "status=${status}, calls: $(tr '\n' ';' <"$CALLS"); out: $(cat "${SANDBOX}/out")"
+fi
+
+without_tty prod sentry/mobile-auth-token -- child
+status=$?
+if [[ $status -ne 0 ]] && grep -q "needs typed confirmation on a terminal" "${SANDBOX}/out" \
+  && ! grep -q "^child:" "${SANDBOX}/out" && [[ ! -s "$CALLS" ]]; then
+  ok "prod with no terminal is refused with a message, before any aws call"
+else
+  bad "prod with no terminal is refused with a message, before any aws call" "status=${status}, calls: $(tr '\n' ';' <"$CALLS"); out: $(cat "${SANDBOX}/out")"
+fi
+
+GOGO_ASSUME_YES=1 without_tty prod store/apple-asc-key store/apple-asc-key-id store/apple-asc-issuer-id -- lane
+status=$?
+if [[ $status -eq 0 ]] && [[ "$(grep -c 'present$' "${SANDBOX}/out")" == 3 ]]; then
+  ok "GOGO_ASSUME_YES=1 runs a prod lane with no terminal at all"
+else
+  bad "GOGO_ASSUME_YES=1 runs a prod lane with no terminal at all" "status=${status}: $(cat "${SANDBOX}/out")"
 fi
 
 # 4. Tracing. `bash -x` would print the export, value included.
