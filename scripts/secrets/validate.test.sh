@@ -242,7 +242,13 @@ done
 # Omitting a profile must not be a way to pass. This is the same failure as an
 # unreadable namespace: nothing was checked, so nothing can be claimed.
 probe="$(mktemp -d)"
-sed 's/^    enabled: \[dev\]/    enabled: []/; s/^    planned: \[staging, prod\]/    planned: []/' \
+# Empty every capability's environment lists, whatever they contain. This used
+# to name the two list shapes the file happened to have (`[dev]` and
+# `[staging, prod]`), which stopped emptying anything the moment a capability
+# arrived with a third shape — GoGo-Infra#221 added `planned: [dev]`, the probe
+# silently left dev declared, and the case failed for a reason that had nothing
+# to do with what it tests.
+sed -E 's/^    (enabled|planned): \[[^]]*\]/    \1: []/' \
   "${ROOT}/config/secrets.manifest.yml" > "${probe}/secrets.manifest.yml"
 mkdir -p "${probe}/scripts/lib" "${probe}/config"
 mv "${probe}/secrets.manifest.yml" "${probe}/config/secrets.manifest.yml"
