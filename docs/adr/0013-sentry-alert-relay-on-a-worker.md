@@ -124,9 +124,9 @@ One more fact, read from the same source on 2026-10-18 and corrected here becaus
 (shape rev 2.6, Q-8): **Sentry does retry this webhook on a 502.** The workflow-engine `webhook` action enqueues
 `send_alert_webhook_v2.delay(…)` (`sentry_apps/services/legacy_webhook/service.py:106`), a task declared
 `Retry(times=3, delay=60 * 5, on=(RequestException, InnerTimeoutError), ignore=(ClientError, …))`
-(`sentry_apps/tasks/sentry_apps.py:95,191-204`); `send_and_save_webhook_request` turns a 500 or 502 into
+(`sentry_apps/tasks/sentry_apps.py:97,191-204`); `send_and_save_webhook_request` turns a 500 or 502 into
 `requests.HTTPError` through `raise_for_status()` and re-raises it, as it re-raises a soft `Timeout` and a
-`ConnectionError` (`utils/sentry_apps/webhooks.py:365-383,479-483`), while 503 (`ApiHostError`), 504 (`ApiTimeoutError`)
+`ConnectionError` (`utils/sentry_apps/webhooks.py:365-393,479-483`), while 503 (`ApiHostError`), 504 (`ApiTimeoutError`)
 and every 4xx (`ClientError`, in the ignore list) end the task. So a relay 502 is retried three times, five minutes
 apart; a 503, a 4xx and a 204 are final. Each action on a workflow is its own task
 (`workflow_engine/processors/action.py:263-268`), so a relay failure never reaches the native action. Consequences: a
