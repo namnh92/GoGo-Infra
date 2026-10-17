@@ -1,7 +1,7 @@
 # ADR 0011 — Client error reporting on Sentry
 
-**Status:** accepted — 2026-10-14; D-2 and D-9 amended, D-12 added 2026-10-16 (GoGo-Infra#229, oracle v2; Astra
-A-F-01/A-F-03/F-03/F-04 on PR #230). Owner decision 2026-10-16 on the native launch window (D-12 *Launch*): not
+**Status:** accepted — 2026-10-14; D-2 and D-9 amended, D-12 added 2026-10-16, its in-run cells listed in full 2026-10-17 (GoGo-Infra#229,
+oracle v2; Astra A-F-01/A-F-03/F-03/F-04/F-05 on PR #230). Owner decision 2026-10-16 on the native launch window (D-12 *Launch*): not
 accepted, measured on the relay device run, merge of PR #230 and GoGo-MobileApp PR #349 held until then.
 **Issue:** GoGo-Infra#208; consumers GoGo-MobileApp#336, GoGo-CMS#238, GoGo-WebApp#44 (blocked: no app yet)
 **Requirement authority:** owner decisions 2026-10-08 (Sentry for crash reporting, Crashlytics dropped) and
@@ -202,13 +202,28 @@ occurrence. A crash report captured in an earlier run is written with that run's
 rewritten by the seed; the relay run checks it (launch 3 delivers launch 2's crash with launch 2's crash-time screen,
 not `/`). Attribution inside a run is each client's ADR (Mobile ADR 0010): an error the app reports itself carries the
 screen read from the navigation container's state at capture — event-local, so a throw while a new screen renders or
-mounts names that screen — while a native crash, which cannot run JS, carries the last scope write, as does an error
-the SDK catches itself (unhandled error or rejection). That leaves one in-run cell the scope write does not promise,
-and the relay run measures it too — owner decision 2026-10-16, in session (review-state GoGo-MobileApp-349): in the
-AC, not a stated limit. The cell: a warm navigation to a new screen; an unhandled promise rejection raised inside that
-screen's own mount commit (render / layout effect / `componentDidMount`), captured by the SDK's rejection handler
-rather than the error boundary; **expected `screen` = that screen's template**, per D-7 addition 3 and the F-04
-ruling. The previous screen is a FAIL — a finding for the SA role, not an accepted limit and not a script defect.
+mounts names that screen; a read that fails for a state that exists is sent as `unknown`, never the scope's previous
+screen (Astra F-05, round 3, 2026-10-17: absence — no state yet, the seeded `/` stands — and failure are different
+answers) — while a native crash, which cannot run JS, carries the last scope write, as does an error the SDK catches
+itself (unhandled error or rejection). That leaves two in-run cells the scope write does not promise. Neither is an
+accepted limit — the owner accepted neither the wider mount window (F-04 ruling, 2026-10-16) nor a native-mount
+exception (Astra F-04, remaining half, round 3) — both are in the AC and the relay run measures them; **expected
+`screen` = the new screen's template** in both, per D-7 addition 3 and the F-04 ruling; the previous screen is a FAIL —
+a finding for the SA role, not an accepted limit and not a script defect:
+
+- *SDK-caught mount-commit rejection* (owner decision 2026-10-16, in session, review-state GoGo-MobileApp-349: in the
+  AC, not a stated limit): a warm navigation to a new screen; an unhandled promise rejection raised inside that
+  screen's own mount commit (render / layout effect / `componentDidMount`), captured by the SDK's rejection handler
+  rather than the error boundary.
+- *Native mount* (Astra F-04, remaining half): a warm navigation to a new screen; a native crash raised inside that
+  screen's own mount commit (render / layout effect / `componentDidMount`), before the scope write for that screen. On
+  the measured mechanism (the scope moves one commit after mount, both effect kinds) this cell is expected to carry the
+  previous screen; a FAIL is resolved by moving the scope write to dispatch time — the container's state has already
+  moved, before the new screen renders — not by accepting the window.
+
+The outstanding cells are therefore three — the same three Mobile ADR 0010 lists — all measured on the relay run and
+all holding the merge of PR #230 and GoGo-MobileApp PR #349: the launch window above, the mount-commit rejection and
+the native mount. Nothing else on the native/SDK path is recorded as a remaining limit.
 
 ## Alternatives rejected
 
