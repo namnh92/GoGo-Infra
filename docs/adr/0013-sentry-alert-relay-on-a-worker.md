@@ -103,17 +103,32 @@ Never: `user`, `request`, `contexts`, `breadcrumbs`, `sdk`, `extra`, `modules`, 
 release is the deploy SHA by contract (ADR-0012a D-1, ADR-0011 D-3) and would otherwise always print as `[token]`,
 destroying the one field that says which deploy broke.
 
-Field names do not make values safe, so the test oracle is the **serialised Discord request body**: a fixture
-carrying every forbidden key and a sentinel inside every *permitted* field must produce a body containing none of
-them (`workers/sentry-relay/test/worker.test.mjs`), and Scrub V1 has its own case file
-(`test/scrub-cases.json`).
+Field names do not make values safe, so the test oracle is the **serialised Discord request body**: each scrub
+shape is driven through each permitted field — title, culprit, exception type and value, frame filename and
+function, the fallback message, environment, release and every allowed tag — and the body must contain none of
+them (`workers/sentry-relay/test/worker.test.mjs`). Scrub V1 has its own case file (`test/scrub-cases.json`).
+
+Two ordering rules inside that are load-bearing, and both were wrong in the first draft. Control characters and
+the query string come off a path **before** segments are classified, or `/plans/123<control>456` and
+`/plans/123456?view=map` are not "a run of digits" and the bare id is published once the control is stripped. And
+a frame's path is reduced to its last three segments **before** any length cap, or a long absolute path keeps
+`/home/<user>/private/…` and loses the file name — publishing the one part nobody wanted and dropping the part
+that locates the defect.
+
+The phone rule needs a non-alphanumeric boundary on **both** sides. Without the right one it redacts a release
+SHA that merely begins with ten digits. The accepted consequence: a digit run glued to letters is treated as an
+identifier, not a number (a run of 20 or more is still caught by the token rule).
 
 **D-6 · The message is built to be inert.** `allowed_mentions: { parse: [] }` — an error title saying
 `@everyone` pings nobody. Discord markdown escaped in every relayed string. Surviving URLs wrapped `<…>` so
-nothing unfurls; the one real link is the embed's URL, and only when it points at this organisation's Sentry. No
-`flags: 4`: SUPPRESS_EMBEDS would drop the relay's own embed, stack trace included. Every Discord limit is
-enforced by the relay with a visible `…`, never by Discord rejecting the post. No buttons — a channel webhook
-cannot act on Sentry the way the native integration's Resolve/Archive could; the link is the action.
+nothing unfurls — case-insensitively, and a cap is never allowed to cut the closing `>` off, because half a
+wrapper is a live link again. The one real link is the embed's URL, and only when it points at this
+organisation's Sentry. No `flags: 4`: SUPPRESS_EMBEDS would drop the relay's own embed, stack trace included.
+Every Discord limit is enforced by the relay with a visible `…`, never by Discord rejecting the post — and the
+stack field meets its 1024 by **shortening each frame line from the left**, not by dropping frames: a stack that
+silently shows four of eight reads as a four-frame stack. If even the shortest eight lines will not fit, the
+block says how many frames it dropped. No buttons — a channel webhook cannot act on Sentry the way the native
+integration's Resolve/Archive could; the link is the action.
 
 **D-7 · Sentry's native Discord action is removed once the relay is accepted.** Owner decision 2026-10-17, for
 the three issue workflows 6114982 / 6164951 / 6164950: one message per issue, the complete one. The crash-free

@@ -288,6 +288,12 @@ jobs:
       - name: the relay logs enums and validated ids only
         run: ./scripts/ci/sentry-relay-no-payload-logging.test.sh
 
+      # gitleaks' [allowlist] paths is global and exempts the manifest and
+      # .env.example — the two files somebody is most likely to paste a webhook
+      # URL into "just to document it". This check has no path exemptions.
+      - name: no tracked file carries a Discord webhook URL
+        run: ./scripts/ci/no-discord-webhook-urls.test.sh
+
       # The provider probe's whole value is the reason code it reports. Routes
       # errors arrive as a JSON array, and reading them as an object turned a
       # live BILLING_DISABLED into "no machine-readable reason" — a confident

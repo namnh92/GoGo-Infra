@@ -568,3 +568,458 @@ describe('the status line is enums and validated ids only (shape D-9)', () => {
     assert.equal(line.event_id, null)
   })
 })
+
+/* ───────── regressions from Sol's round 1 on PR #233 (F-01…F-17) ────────── */
+
+describe('early rejection really is early (F-15)', () => {
+  // A status assertion alone cannot tell "refused before reading" from
+  // "refused after reading": moving arrayBuffer() above the guards would keep
+  // every earlier test green. So the body reader throws if it is touched.
+  const bodyTrap = (headers, { method = 'POST', path = PATH } = {}) => {
+    const req = new Request(`${HOST}${path}`, { method, body: method === 'POST' ? 'x' : undefined, headers })
+    Object.defineProperty(req, 'arrayBuffer', {
+      value: async () => {
+        throw new Error('the body was read on an early-exit path')
+      },
+    })
+    return req
+  }
+
+  it('404 (wrong path) never reads the body', async () => {
+    const res = await worker.fetch(bodyTrap({ 'Content-Length': '1' }, { path: '/elsewhere' }), env())
+    assert.equal(res.status, 404)
+  })
+
+  it('404 (wrong method) never reads the body', async () => {
+    const res = await worker.fetch(bodyTrap({ 'Content-Length': '1' }, { method: 'GET' }), env())
+    assert.equal(res.status, 404)
+  })
+
+  it('413 never reads the body', async () => {
+    const res = await worker.fetch(bodyTrap({ 'Content-Length': String(8 * 1024 * 1024) }), env())
+    assert.equal(res.status, 413)
+  })
+
+  it('401 (bad signature shape) never reads the body', async () => {
+    const res = await worker.fetch(bodyTrap({ 'Content-Length': '1', 'Sentry-Hook-Signature': 'nope' }), env())
+    assert.equal(res.status, 401)
+  })
+
+  it('401 (no secret bound) never reads the body', async () => {
+    const res = await worker.fetch(
+      bodyTrap({ 'Content-Length': '1', 'Sentry-Hook-Signature': 'a'.repeat(64) }),
+      env({ SENTRY_CLIENT_SECRET: undefined }),
+    )
+    assert.equal(res.status, 401)
+  })
+
+  it('a body read that fails is a controlled 500, not an escaped throw (F-09)', async () => {
+    const body = eventAlertBody()
+    const req = new Request(`${HOST}${PATH}`, {
+      method: 'POST',
+      body,
+      headers: { 'Content-Length': String(Buffer.byteLength(body)), 'Sentry-Hook-Signature': sign(body) },
+    })
+    Object.defineProperty(req, 'arrayBuffer', {
+      value: async () => {
+        throw new Error('stream reset')
+      },
+    })
+    const res = await worker.fetch(req, env())
+    assert.equal(res.status, 500)
+    assert.equal(logged.at(-1).outcome, 'relay_error')
+  })
+})
+
+describe('channel routing is asserted for every project (F-16)', () => {
+  const ROUTES = [
+    { project: PROJECT_BE, label: 'BE', webhook: WEBHOOKS.DISCORD_WEBHOOK_BE },
+    { project: PROJECT_CMS, label: 'CMS', webhook: WEBHOOKS.DISCORD_WEBHOOK_CMS },
+    { project: 4512252504178688, label: 'MOBILE', webhook: WEBHOOKS.DISCORD_WEBHOOK_MOBILE },
+  ]
+  for (const route of ROUTES) {
+    it(`project ${route.project} posts to the ${route.label} webhook and logs that label`, async () => {
+      discordAnswering(savedMessage)
+      const res = await call(eventAlertBody({ project: route.project }), {})
+      assert.equal(res.status, 200)
+      assert.equal(discordCalls[0].url, `${route.webhook}?wait=true`)
+      assert.equal(logged.at(-1).project, route.label)
+      assert.ok(
+        JSON.parse(discordCalls[0].init.body).embeds[0].title.startsWith(`[${route.label}]`),
+        'the embed title must name the project it was routed as',
+      )
+    })
+  }
+
+  it('the three webhooks are distinct, so a wrong mapping cannot pass', () => {
+    assert.equal(new Set(ROUTES.map((r) => r.webhook)).size, 3)
+  })
+})
+
+describe('every scrub shape, through every permitted field (F-13)', () => {
+  // One sentinel per rule, and each one driven through each permitted field.
+  // The previous fixture put sentinels in a few fields only, so removing the
+  // scrub from `filename`, `function` or the fallback message changed nothing.
+  const SENTINELS = [
+    { name: 'email', raw: 'owner@gogo.id.vn', gone: 'owner@gogo.id.vn' },
+    { name: 'jwt', raw: 'eyJhbGciOi.eyJzdWIi.SflKxwRJ', gone: 'eyJhbGciOi.eyJzdWIi.SflKxwRJ' },
+    { name: 'invite path', raw: '/r/AbCdEfGhIjKlMnOpQrSt', gone: 'AbCdEfGhIjKlMnOpQrSt' },
+    { name: 'coordinates', raw: '10.762622, 106.660172', gone: '106.660172' },
+    // `standalone: true` — the phone rule requires non-alphanumeric
+    // boundaries on both sides, so a digit run glued to letters is treated as
+    // an identifier, not a number. That is deliberate: without the right
+    // boundary the rule eats a release SHA that merely begins with ten digits
+    // (Sol F-17). The case below pins both halves of the trade-off.
+    { name: 'phone', raw: '0912345678', gone: '0912345678', standalone: true },
+  ]
+
+  const postedBodyRaw = async (eventOverrides) => {
+    discordAnswering(savedMessage)
+    const res = await call(eventAlertBody({ event: eventOverrides }), {})
+    assert.equal(res.status, 200)
+    return discordCalls[0].init.body
+  }
+
+  for (const s of SENTINELS) {
+    it(`${s.name} is scrubbed out of title, culprit, exception value and type`, async () => {
+      const raw = await postedBodyRaw({
+        title: `t ${s.raw}`,
+        culprit: `c ${s.raw}`,
+        exception: {
+          values: [
+            {
+              type: s.standalone ? `E ${s.raw}` : `E${s.raw}`,
+              value: `v ${s.raw}`,
+              stacktrace: { frames: [{ filename: 'a.ts', function: 'f', lineno: 1, colno: 1, in_app: true }] },
+            },
+          ],
+        },
+      })
+      assert.ok(!raw.includes(s.gone), `${s.name} survived in a text field`)
+    })
+
+    it(`${s.name} is scrubbed out of a frame's filename and function`, async () => {
+      const raw = await postedBodyRaw({
+        exception: {
+          values: [
+            {
+              type: 'E',
+              value: 'v',
+              stacktrace: {
+                frames: [{ filename: `src/${s.raw}.ts`, function: `fn_${s.raw}`, lineno: 1, colno: 1, in_app: true }],
+              },
+            },
+          ],
+        },
+      })
+      assert.ok(!raw.includes(s.gone), `${s.name} survived in a frame`)
+    })
+
+    it(`${s.name} is scrubbed out of the fallback message`, async () => {
+      const raw = await postedBodyRaw({ exception: undefined, logentry: { formatted: `msg ${s.raw}` } })
+      assert.ok(!raw.includes(s.gone), `${s.name} survived in the fallback message`)
+    })
+
+    it(`${s.name} is scrubbed out of environment, release and every allowed tag`, async () => {
+      const raw = await postedBodyRaw({
+        environment: `dev ${s.raw}`,
+        release: s.standalone ? `gogo-be@dead ${s.raw}` : `gogo-be@dead${s.raw}`,
+        tags: [
+          ['environment', `dev ${s.raw}`],
+          ['release', `rel ${s.raw}`],
+          ['transaction', s.standalone ? `/x/${s.raw}` : `/x/${s.raw}`],
+          ['browser.name', `b ${s.raw}`],
+          ['os.name', `o ${s.raw}`],
+          ['device.family', `d ${s.raw}`],
+          ['screen', `/s/${s.raw}`],
+          ['route', `/r2/${s.raw}`],
+          ['handled', `h ${s.raw}`],
+          ['level', 'error'],
+        ],
+      })
+      assert.ok(!raw.includes(s.gone), `${s.name} survived in a tag or release`)
+    })
+  }
+
+  it('a digit run glued to letters is an identifier, not a phone number (the F-17 trade-off)', async () => {
+    discordAnswering(savedMessage)
+    // 11 characters, so the token-run rule (>=20) does not reach it either —
+    // this is the actual uncovered shape, not a 20-character identifier.
+    await call(eventAlertBody({ event: { culprit: 'in f0912345678 at line 3' } }), {})
+    const embed = JSON.parse(discordCalls[0].init.body).embeds[0]
+    // Not redacted, and that is the decision: the alternative redacts every
+    // release SHA beginning with ten digits. A standalone number is covered by
+    // the next case, and a longer glued run is caught by the token rule.
+    assert.match(embed.description, /f0912345678/)
+  })
+
+  it('a standalone phone number is redacted wherever it appears', async () => {
+    discordAnswering(savedMessage)
+    await call(eventAlertBody({ event: { culprit: 'otp to 0912345678 failed' } }), {})
+    const embed = JSON.parse(discordCalls[0].init.body).embeds[0]
+    // Labels arrive markdown-escaped; Discord renders them as [phone].
+    assert.match(embed.description, /\\\[phone\\\]/)
+    assert.ok(!JSON.stringify(embed).includes('0912345678'))
+  })
+
+  it('the release SHA itself survives — the exemption is the token rule only (F-17)', async () => {
+    discordAnswering(savedMessage)
+    await call(eventAlertBody({ event: { release: 'gogo-be@0123456789abcdef0123456789abcdef01234567' } }), {})
+    const fields = JSON.parse(discordCalls[0].init.body).embeds[0].fields
+    const release = fields.find((f) => f.name === 'Release').value
+    assert.match(release, /0123456789abcdef0123456789abcdef01234567/)
+    assert.ok(!release.includes('[phone]'), 'a SHA beginning with ten digits is not a phone number')
+    assert.ok(!release.includes('[token]'))
+  })
+})
+
+describe('value shapes that used to slip through (F-01…F-06)', () => {
+  const postedEmbed = async (eventOverrides) => {
+    discordAnswering(savedMessage)
+    await call(eventAlertBody({ event: eventOverrides }), {})
+    return JSON.parse(discordCalls[0].init.body).embeds[0]
+  }
+
+  it('an id split by a control character is still an id (F-01)', async () => {
+    const embed = await postedEmbed({ tags: [['transaction', `/plans/123${String.fromCharCode(0)}456/edit`]] })
+    const tags = embed.fields.find((f) => f.name === 'Tags').value
+    assert.match(tags, /\/plans\/\\\[id\\\]\/edit/)
+    assert.ok(!tags.includes('123456'))
+  })
+
+  it('an id carrying a query string is still an id, and the query is dropped (F-01)', async () => {
+    const embed = await postedEmbed({ tags: [['transaction', '/plans/123456?view=map&token=abc']] })
+    const tags = embed.fields.find((f) => f.name === 'Tags').value
+    assert.match(tags, /transaction=\/plans\/\\\[id\\\]$/m)
+    assert.ok(!tags.includes('123456'))
+    assert.ok(!tags.includes('view=map'))
+  })
+
+  it('a long absolute path keeps its basename, not the home directory (F-02)', async () => {
+    const embed = await postedEmbed({
+      exception: {
+        values: [
+          {
+            type: 'E',
+            value: 'v',
+            stacktrace: {
+              frames: [
+                {
+                  filename: `/home/someuser/private/${'nesting/'.repeat(30)}src/castVote.ts`,
+                  function: 'castVote',
+                  lineno: 7,
+                  colno: 1,
+                  in_app: true,
+                },
+              ],
+            },
+          },
+        ],
+      },
+    })
+    const stack = embed.fields.find((f) => f.name === 'Stack').value
+    assert.match(stack, /castVote\.ts:7:1/)
+    assert.ok(!stack.includes('someuser'), 'the home directory must not be published')
+    assert.ok(!stack.includes('private/nesting'))
+  })
+
+  it('an uppercase scheme and host is still stripped (F-03)', async () => {
+    const embed = await postedEmbed({
+      exception: {
+        values: [
+          {
+            type: 'E',
+            value: 'v',
+            stacktrace: {
+              frames: [{ filename: 'HTTPS://internal.gogo.local/src/app.js', function: 'f', lineno: 2, colno: 3, in_app: true }],
+            },
+          },
+        ],
+      },
+    })
+    const stack = embed.fields.find((f) => f.name === 'Stack').value
+    assert.ok(!stack.includes('internal.gogo.local'), 'the host must not be published')
+    assert.match(stack, /src\/app\.js:2:3/)
+  })
+
+  for (const [label, sep] of [
+    ['CR', String.fromCharCode(13)],
+    ['CRLF', String.fromCharCode(13, 10)],
+    ['U+2028', ' '],
+  ]) {
+    it(`only the first line of an exception value leaves, separated by ${label} (F-04)`, async () => {
+      const embed = await postedEmbed({
+        exception: {
+          values: [
+            {
+              type: 'E',
+              value: `first line${sep}SECOND-LINE-SENTINEL`,
+              stacktrace: { frames: [{ filename: 'a.ts', function: 'f', lineno: 1, colno: 1, in_app: true }] },
+            },
+          ],
+        },
+      })
+      assert.match(embed.description, /first line/)
+      assert.ok(!JSON.stringify(embed).includes('SECOND-LINE-SENTINEL'))
+    })
+
+    it(`only the first line of a fallback message leaves, separated by ${label} (F-04)`, async () => {
+      const embed = await postedEmbed({ exception: undefined, logentry: { formatted: `head${sep}TAIL-SENTINEL` } })
+      assert.ok(!JSON.stringify(embed).includes('TAIL-SENTINEL'))
+    })
+  }
+
+  it('a hostile field cannot exhaust CPU: a 1 MiB near-match is still answered (F-05)', async () => {
+    // Under MAX_BODY_BYTES: past it the length guard answers 413 and the
+    // scrubber is never reached, which proves nothing about the scrubber.
+    const hostile = `${'a'.repeat(240000)}@${'b'.repeat(240000)}`
+    discordAnswering(savedMessage)
+    const started = Date.now()
+    const res = await call(eventAlertBody({ event: { title: hostile, culprit: hostile } }), {})
+    assert.equal(res.status, 200)
+    assert.ok(Date.now() - started < 2000, 'scrubbing a hostile field must not take seconds')
+    const embed = JSON.parse(discordCalls[0].init.body).embeds[0]
+    assert.ok(embed.title.length <= 256)
+  })
+
+  it('an uppercase URL is wrapped so Discord cannot unfurl it (F-06)', async () => {
+    const embed = await postedEmbed({ culprit: 'see HTTP://Evil.Example.COM/a for details' })
+    assert.match(embed.description, /<HTTP:\/\/Evil\.Example\.COM\/a>/)
+  })
+
+  it('a cap never leaves a wrapper unclosed (F-06)', async () => {
+    const embed = await postedEmbed({ culprit: `x`.repeat(170) + ' https://example.com/' + 'y'.repeat(200) })
+    const opens = (embed.description.match(/</g) ?? []).length
+    const closes = (embed.description.match(/>/g) ?? []).length
+    assert.equal(opens, closes, 'an unclosed < would make the URL live again')
+  })
+})
+
+describe('Discord limits are met by shortening, not by silence (F-07, F-14)', () => {
+  const framesOf = (n, nameLen, fnLen) =>
+    Array.from({ length: n }, (_, i) => ({
+      // Pure letters: the token rule would otherwise collapse these to [token]
+      // and the test would never reach the limit it claims to test.
+      filename: `${'q'.repeat(nameLen)}/${'r'.repeat(nameLen)}/file${String.fromCharCode(97 + i)}.ts`,
+      function: 'f'.repeat(fnLen),
+      lineno: 100 + i,
+      colno: 5,
+      in_app: i % 2 === 0,
+    }))
+
+  const postedEmbed = async (eventOverrides) => {
+    discordAnswering(savedMessage)
+    const res = await call(eventAlertBody({ event: eventOverrides }), {})
+    assert.equal(res.status, 200)
+    return JSON.parse(discordCalls[0].init.body).embeds[0]
+  }
+
+  it('all eight frames survive long names, shortened from the left', async () => {
+    const embed = await postedEmbed({
+      exception: {
+        values: [{ type: 'E', value: 'v', stacktrace: { frames: framesOf(8, 200, 80) } }],
+      },
+    })
+    const stack = embed.fields.find((f) => f.name === 'Stack').value
+    assert.ok(stack.length <= 1024, `stack field is ${stack.length}`)
+    const lines = stack.split('\n').slice(1, -1)
+    assert.equal(lines.length, 8, 'frames must be shortened, not dropped')
+    assert.ok(!stack.includes('older frame(s) omitted'))
+    // the newest frame keeps its line number — the part that locates the defect
+    assert.match(lines[0], /:107:5/)
+  })
+
+  it('an impossible stack says how many frames it dropped', async () => {
+    const embed = await postedEmbed({
+      exception: {
+        values: [
+          {
+            type: 'E',
+            value: 'v',
+            stacktrace: {
+              frames: Array.from({ length: 8 }, (_, i) => ({
+                // every character survives the scrub and nothing can be cut
+                // below the floor: forces the omission path
+                filename: `${'w'.repeat(400)}.ts`,
+                function: 'g'.repeat(400),
+                lineno: 1,
+                colno: i,
+                in_app: true,
+              })),
+            },
+          },
+        ],
+      },
+    })
+    const stack = embed.fields.find((f) => f.name === 'Stack').value
+    assert.ok(stack.length <= 1024)
+    if (stack.split('\n').slice(1, -1).length < 8) {
+      assert.match(stack, /older frame\(s\) omitted/)
+    }
+  })
+
+  it('a near-6000 embed is shrunk by the relay, and the fields keep their caps', async () => {
+    const letters = (n) => 'z'.repeat(n)
+    const embed = await postedEmbed({
+      title: letters(400),
+      culprit: letters(400),
+      environment: letters(200),
+      release: letters(300),
+      exception: {
+        values: [{ type: letters(300), value: letters(900), stacktrace: { frames: framesOf(8, 200, 80) } }],
+      },
+      tags: [
+        ['transaction', `/${letters(300)}`],
+        ['browser.name', letters(300)],
+        ['os.name', letters(300)],
+        ['device.family', letters(300)],
+        ['screen', `/${letters(300)}`],
+        ['route', `/${letters(300)}`],
+        ['handled', letters(300)],
+        ['level', 'error'],
+        ['release', letters(300)],
+        ['environment', letters(300)],
+      ],
+    })
+    assert.ok(embed.title.length <= 256, `title ${embed.title.length}`)
+    assert.ok(embed.description.length <= 4096)
+    for (const f of embed.fields) assert.ok(f.value.length <= 1024, `${f.name} is ${f.value.length}`)
+    const total =
+      embed.title.length +
+      embed.description.length +
+      (embed.footer?.text.length ?? 0) +
+      embed.fields.reduce((n, f) => n + f.name.length + f.value.length, 0)
+    assert.ok(total <= 6000, `embed total ${total}`)
+  })
+})
+
+describe('the 429 retry is only taken when Discord asked for it (F-08)', () => {
+  it('a 429 with no retry_after anywhere is rate_limited, never an instant retry', async () => {
+    discordAnswering(() => new Response('{}', { status: 429, headers: { 'content-type': 'application/json' } }))
+    const res = await call(eventAlertBody(), {})
+    assert.equal(res.status, 502)
+    assert.equal(discordCalls.length, 1, 'an absent Retry-After must not read as zero')
+    assert.equal(logged.at(-1).outcome, 'rate_limited')
+  })
+
+  it('a blank Retry-After header is not zero either', async () => {
+    discordAnswering(() => new Response('not json', { status: 429, headers: { 'Retry-After': ' ' } }))
+    const res = await call(eventAlertBody(), {})
+    assert.equal(res.status, 502)
+    assert.equal(discordCalls.length, 1)
+  })
+
+  it('a Retry-After header alone is honoured when it fits', async () => {
+    discordAnswering(() => new Response('not json', { status: 429, headers: { 'Retry-After': '0.02' } }), savedMessage)
+    const res = await call(eventAlertBody(), {})
+    assert.equal(res.status, 200)
+    assert.equal(discordCalls.length, 2)
+  })
+
+  it('a non-numeric Retry-After is not a retry', async () => {
+    discordAnswering(() => new Response('not json', { status: 429, headers: { 'Retry-After': 'Wed, 21 Oct 2026 07:28:00 GMT' } }))
+    const res = await call(eventAlertBody(), {})
+    assert.equal(res.status, 502)
+    assert.equal(discordCalls.length, 1)
+  })
+})

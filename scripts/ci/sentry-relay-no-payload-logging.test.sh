@@ -7,7 +7,9 @@
 # and regex-validated identifiers only. A convention nobody checks is a
 # comment, so this guard pins it:
 #
-#   1. every `console.` call in src/index.js sits inside logStatus();
+#   1. the word `console` appears in src/index.js only inside logStatus()
+#      — not `console.` but `console` at all, because `console?.log(x)` and
+#      `console['log'](x)` log just as much and match neither dot form;
 #   2. the body of logStatus references none of the payload-shaped
 #      identifiers (event, payload, body, frames, title, tags, headers,
 #      request, parsed, data);
@@ -53,10 +55,14 @@ else:
     body = src[m.end() : i - 1]
     before, after = src[: m.start()], src[i:]
 
-# 1. console.* only inside logStatus.
+# 1. ANY console reference outside logStatus. `console.` alone let
+#    `console?.log(parsed)` and `console["log"](parsed)` through — both log the
+#    whole event and both read as something else to a regex (Sol F-10). This is
+#    a lexical check, so it is conservative on purpose: the word `console` has
+#    exactly one legitimate occurrence in this file.
 for part, where in ((before, "before"), (after, "after")):
-    if re.search(r"\bconsole\s*\.", part):
-        failures.append(f"console.* call outside logStatus ({where} it)")
+    if re.search(r"\bconsole\b", part):
+        failures.append(f"console referenced outside logStatus ({where} it)")
 
 # 2. logStatus must not touch payload-shaped identifiers.
 for name in ("event", "payload", "body", "frames", "title", "tags", "headers", "request", "parsed", "data"):
@@ -133,6 +139,15 @@ PY
 mutate "a console.log outside logStatus" \
   'export default \{' \
   'console.log("leak")\nexport default {'
+mutate "an optional-chained console call" \
+  'export default \{' \
+  'console?.log(parsed)\nexport default {'
+mutate "a bracket-indexed console call" \
+  'export default \{' \
+  'console["log"](parsed)\nexport default {'
+mutate "a console alias" \
+  'export default \{' \
+  'const c = console; c.log(parsed)\nexport default {'
 mutate "logStatus reading the event" \
   '(function logStatus\([^)]*\) \{)' \
   '\1 const t = event.title;'

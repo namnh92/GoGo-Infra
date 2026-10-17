@@ -126,8 +126,19 @@ function normalizeResource(header) {
 
 /* ───────────────────────── scrub (shape D-5, Scrub V1) ───────────────────── */
 
-const RE_EMAIL = /[^\s@<>()]+@[^\s@<>()]+\.[a-z]{2,}/gi
-const RE_JWT = /eyJ[\w-]+\.[\w-]+\.[\w-]+/g
+/**
+ * Every relayed field is capped at 300 characters or fewer, so scrubbing more
+ * than this is wasted work on a surface an attacker controls: a signed body may
+ * be up to 1 MiB, and an unbounded alternation over it is where a Worker's CPU
+ * budget goes (Sol F-05). Cut first, then scrub, then cap — the cut sits above
+ * every field cap, so nothing a cap would have kept is lost here.
+ */
+const SCRUB_INPUT_CAP = 400
+
+// Bounded quantifiers, for the same reason. An unbounded local part followed by
+// a single `@` and no dot is the classic quadratic case.
+const RE_EMAIL = /[^\s@<>()]{1,64}@[^\s@<>()]{1,64}\.[a-z]{2,24}/gi
+const RE_JWT = /eyJ[\w-]{1,512}\.[\w-]{1,512}\.[\w-]{1,512}/g
 // A long base64url-ish run that is not a plain word. Deliberately aggressive:
 // it eats hashed bundle names too, which carry no meaning a human needed.
 const RE_TOKEN_RUN = /[A-Za-z0-9_-]{20,}/g
@@ -136,10 +147,23 @@ const RE_TOKEN_RUN = /[A-Za-z0-9_-]{20,}/g
 const RE_CRED_PATH = /(\/(?:r|l|invite|share-links)\/)[A-Za-z0-9_-]+/g
 const RE_CRED_QUERY = /([?&](?:code|invite|token|slug|guest|lat|lng|latitude|longitude)=)[^&#\s]*/gi
 const RE_GEO = /-?\d{1,3}\.\d{3,}\s*,\s*-?\d{1,3}\.\d{3,}/g
-// Boundaries matter: without them the rule fires on ten digits inside a
-// 40-hex release SHA and mangles the one identifier the message exists for.
-const RE_PHONE = /(?<![A-Za-z0-9])(?:\+84|0)\d{9,10}(?!\d)/g
+// Boundaries on both sides. Without the left one the rule fires on ten digits
+// inside a 40-hex release SHA; without a non-alphanumeric right boundary it
+// still fires on a SHA that merely *starts* with them (Sol F-17) — the digits
+// of `gogo-be@0123456789abcdef…` are not a phone number.
+const RE_PHONE = /(?<![A-Za-z0-9])(?:\+84|0)\d{9,10}(?![A-Za-z0-9])/g
 const RE_CONTROL = /[\u0000-\u001F\u007F]/g
+/**
+ * Every line terminator, not just LF. A value whose second line is separated by
+ * a bare CR (or U+2028, which JSON carries literally) would otherwise reach
+ * Discord whole when only its first line was meant to (Sol F-04).
+ */
+const RE_LINE_BREAK = /[\n\r\u0085\u2028\u2029]/
+
+/** The first line of a value, under every line-terminator convention. */
+export function firstLine(value) {
+  return String(value).split(RE_LINE_BREAK)[0]
+}
 
 /**
  * Scrub V1. Applied to every relayed string. `keepLongRuns` exempts only the
@@ -148,7 +172,7 @@ const RE_CONTROL = /[\u0000-\u001F\u007F]/g
  * as `[token]`; every other rule and the caps still apply to it).
  */
 export function scrub(value, { keepLongRuns = false } = {}) {
-  let s = String(value).normalize('NFC').replace(RE_CONTROL, '')
+  let s = String(value).normalize('NFC').replace(RE_CONTROL, '').slice(0, SCRUB_INPUT_CAP)
   s = s.replace(RE_EMAIL, '[email]')
   s = s.replace(RE_JWT, '[token]')
   if (!keepLongRuns) {
@@ -164,12 +188,18 @@ export function scrub(value, { keepLongRuns = false } = {}) {
 /**
  * Path-template rule for transaction / route / screen tags: a segment that is
  * a UUID, a ≥16-char base64url run, or a pure number of ≥6 digits is an id.
+ *
+ * Control characters and the query/fragment come off BEFORE classification
+ * (Sol F-01). A segment reading `123<control>456` or `123456?view=map` is not
+ * literally a run of digits, so it would survive classification and then be
+ * published as the bare id once the control was stripped. The query is dropped
+ * rather than relayed: it is not part of a route template, and in a transaction
+ * name it is exactly where ids and codes live.
  */
 export function scrubPathTemplate(value) {
-  // Template rule first: a UUID or long run that is an id by position becomes
-  // [id] before the token-run rule could rename it [token]; the full scrub
-  // then still covers emails, credential paths and anything non-segment.
-  const templated = String(value)
+  const cleaned = String(value).normalize('NFC').replace(RE_CONTROL, '')
+  const path = cleaned.split(/[?#]/)[0]
+  const templated = path
     .split('/')
     .map((seg) => {
       if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(seg)) return '[id]'
@@ -188,13 +218,30 @@ export function escapeMarkdown(s) {
   return String(s).replace(/[\\*_~`|>[\]@]/g, '\\$&')
 }
 
-/** Any URL that survived the scrub renders inert: `<…>` suppresses previews. */
+/**
+ * Any URL that survived the scrub renders inert: `<…>` suppresses Discord's
+ * preview. Case-insensitive — `HTTPS://` is a URL to Discord too (Sol F-06).
+ */
 function wrapUrls(s) {
-  return s.replace(/https?:\/\/[^\s<>]+/g, '<$&>')
+  return s.replace(/https?:\/\/[^\s<>]+/gi, '<$&>')
 }
 
 function truncate(s, max) {
   return s.length <= max ? s : `${s.slice(0, max - 1)}…`
+}
+
+/**
+ * A cap applied after wrapping can cut the closing `>` off, which turns an
+ * inert URL back into a link Discord unfurls (Sol F-06). So: wrap, cap, and if
+ * the cap left an unclosed wrapper, drop that fragment rather than ship half a
+ * delimiter.
+ */
+function capWrapped(s, max) {
+  const cut = truncate(s, max)
+  if (cut.lastIndexOf('<') > cut.lastIndexOf('>')) {
+    return truncate(cut.slice(0, cut.lastIndexOf('<')), max)
+  }
+  return cut
 }
 
 /** A typed string read: anything but a string becomes the fallback (F-07). */
@@ -202,9 +249,9 @@ function str(value, fallback = '') {
   return typeof value === 'string' ? value : fallback
 }
 
-/** Scrubbed, escaped, URL-wrapped, capped — the shape's order for text. */
+/** Scrubbed, escaped, URL-wrapped, then capped without breaking a wrapper. */
 function text(value, cap, opts) {
-  return truncate(wrapUrls(escapeMarkdown(scrub(str(value), opts))), cap)
+  return capWrapped(wrapUrls(escapeMarkdown(scrub(str(value), opts))), cap)
 }
 
 const TAG_ALLOWLIST = new Set([
@@ -234,7 +281,7 @@ function allowedTags(raw) {
     const scrubbed = PATH_TEMPLATE_TAGS.has(k)
       ? scrubPathTemplate(v)
       : scrub(v, { keepLongRuns: k === 'release' })
-    out.push(`${k}=${truncate(wrapUrls(escapeMarkdown(scrubbed)), 120)}`)
+    out.push(`${k}=${capWrapped(wrapUrls(escapeMarkdown(scrubbed)), 120)}`)
   }
   return out
 }
@@ -247,10 +294,17 @@ function allowedTags(raw) {
  */
 function frameLine(frame) {
   const f = frame && typeof frame === 'object' ? frame : {}
+  // Order matters, and it used to be wrong (Sol F-02/F-03): capping before
+  // taking the tail keeps the *leading* directories — `/home/alice/private/…`
+  // published the user's home path and cut the file name off, which is the
+  // opposite of both intents. And the scheme match was case-sensitive, so
+  // `HTTPS://internal.host/src/app.js` kept its host.
   let file = str(f.filename)
     .replace(/[?#].*$/, '')
-    .replace(/^(?:file|https?):\/\/[^/]*/, '')
-  file = truncate(scrub(file), 120).split('/').slice(-3).join('/')
+    .replace(/^(?:file|https?):\/\/[^/]*/i, '')
+  file = scrub(file.split('/').filter(Boolean).slice(-3).join('/'))
+  // Left-truncate: the basename is the part that locates the defect.
+  if (file.length > 120) file = `…${file.slice(-119)}`
   const fn = truncate(scrub(str(f.function, '?')), 80)
   const line = Number.isInteger(f.lineno) ? `:${f.lineno}` : ''
   const col = Number.isInteger(f.colno) ? `:${f.colno}` : ''
@@ -258,19 +312,43 @@ function frameLine(frame) {
   return `${mark} ${file}${line}${col}  ${fn}`.replace(/`/g, "'")
 }
 
-/** The newest MAX_FRAMES frames of the thrown (last) exception, newest first. */
+/**
+ * The newest MAX_FRAMES frames of the thrown (last) exception, newest first.
+ *
+ * Discord's 1024-character field limit is met by shortening lines, not by
+ * quietly dropping frames: a stack that silently shows four of eight reads as
+ * a four-frame stack, and the reader has no way to know (Sol F-07). Frames are
+ * shortened from the left, so the file name and line survive. Only if the
+ * eight shortest possible lines still do not fit does it drop from the oldest
+ * end, and then it says so in the block.
+ */
 function stackBlock(event) {
   const values = Array.isArray(event.exception?.values) ? event.exception.values : []
   const thrown = values.length ? values[values.length - 1] : null
   const frames = Array.isArray(thrown?.stacktrace?.frames) ? thrown.stacktrace.frames : []
   if (!frames.length) return null
-  const lines = frames.slice(-MAX_FRAMES).reverse().map(frameLine)
-  let block = `\`\`\`\n${lines.join('\n')}\n\`\`\``
-  while (block.length > 1024 && lines.length > 1) {
-    lines.pop()
-    block = `\`\`\`\n${lines.join('\n')}\n\`\`\``
+
+  const newest = frames.slice(-MAX_FRAMES).reverse()
+  const fence = (lines) => `\`\`\`\n${lines.join('\n')}\n\`\`\``
+  const shorten = (line, per) => (line.length <= per ? line : `${line.slice(0, 2)}…${line.slice(-(per - 3))}`)
+
+  for (const per of [200, 150, 120, 96, 72, 56, 40]) {
+    const lines = newest.map((f) => shorten(frameLine(f), per))
+    const block = fence(lines)
+    if (block.length <= 1024) return block
   }
-  return block.length <= 1024 ? block : null
+
+  // Nothing fits at the floor: drop from the oldest end, visibly.
+  const lines = newest.map((f) => shorten(frameLine(f), 40))
+  while (lines.length > 1) {
+    const dropped = newest.length - lines.length + 1
+    const marked = [...lines.slice(0, -1), `… ${dropped} older frame(s) omitted`]
+    const block = fence(marked)
+    if (block.length <= 1024) return block
+    lines.pop()
+  }
+  const only = fence([shorten(frameLine(newest[0]), 40), `… ${newest.length - 1} older frame(s) omitted`])
+  return only.length <= 1024 ? only : null
 }
 
 /** The thrown exception's type and first-line value, or the log message. */
@@ -279,11 +357,11 @@ function headline(event) {
   const thrown = values.length ? values[values.length - 1] : null
   if (thrown && typeof thrown === 'object') {
     const type = text(thrown.type, 80)
-    const value = text(str(thrown.value).split('\n')[0], 200)
+    const value = text(firstLine(str(thrown.value)), 200)
     if (type || value) return `${type}${type && value ? ': ' : ''}${value}`
   }
   const message = str(event.logentry?.formatted) || str(event.logentry?.message) || str(event.message)
-  if (message) return `message: ${text(message.split('\n')[0], 300)}`
+  if (message) return `message: ${text(firstLine(message), 300)}`
   return ''
 }
 
@@ -354,8 +432,13 @@ async function retryAfterMs(response) {
   } catch {
     // fall through to the header
   }
-  const header = Number(response.headers.get('Retry-After'))
-  return Number.isFinite(header) && header >= 0 ? Math.ceil(header * 1000) : null
+  // `Number(null)` is 0, which turned an absent header into "retry immediately"
+  // — an unauthorised second request straight back into a rate limit (Sol
+  // F-08). Absent or blank means: we were not told, so do not retry.
+  const header = response.headers.get('Retry-After')
+  if (header === null || header.trim() === '') return null
+  const seconds = Number(header)
+  return Number.isFinite(seconds) && seconds >= 0 ? Math.ceil(seconds * 1000) : null
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -498,24 +581,31 @@ export default {
       return new Response(null, { status: 401 })
     }
 
-    const bodyBytes = await request.arrayBuffer()
-    if (bodyBytes.byteLength > MAX_BODY_BYTES || !(await signatureValid(env.SENTRY_CLIENT_SECRET, signatureHex, bodyBytes))) {
-      logStatus('bad_signature', resource, 'unknown', null, null, null)
-      return new Response(null, { status: 401 })
-    }
-
-    let parsed
+    // One boundary around everything that can throw (Sol F-09): reading the
+    // body, WebCrypto key import and verification, decoding, parsing, and the
+    // relay itself. A throw escaping the handler is an uncontrolled response
+    // with no status line, on the one path Sentry uses to decide whether this
+    // integration still works.
     try {
-      parsed = JSON.parse(new TextDecoder().decode(bodyBytes))
-    } catch {
-      logStatus('malformed', resource, 'unknown', null, null, null)
-      return new Response(null, { status: 400 })
-    }
+      const bodyBytes = await request.arrayBuffer()
+      if (
+        bodyBytes.byteLength > MAX_BODY_BYTES ||
+        !(await signatureValid(env.SENTRY_CLIENT_SECRET, signatureHex, bodyBytes))
+      ) {
+        logStatus('bad_signature', resource, 'unknown', null, null, null)
+        return new Response(null, { status: 401 })
+      }
 
-    try {
+      let parsed
+      try {
+        parsed = JSON.parse(new TextDecoder().decode(bodyBytes))
+      } catch {
+        logStatus('malformed', resource, 'unknown', null, null, null)
+        return new Response(null, { status: 400 })
+      }
+
       return await relay(parsed, resource, env, t0)
     } catch {
-      // Authentic request, unexpected failure: Sentry must see it (F-06/F-07).
       logStatus('relay_error', resource, 'unknown', null, null, null)
       return new Response(null, { status: 500 })
     }

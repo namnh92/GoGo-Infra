@@ -187,7 +187,12 @@ Discord's webhooks are live state.
   outside the allowlist. The unit test asserts on the serialised Discord body, not on the code path.
 - It never follows a redirect from Discord, and never posts anywhere but
   `https://discord.com/api/webhooks/…`.
-- It never retries more than once, and only on a 429 whose `retry_after` fits the request budget.
+- It never retries more than once, and only on a 429 that actually carried a delay. An absent or blank
+  `Retry-After` is not zero: being told nothing is not permission to retry immediately.
+- It never answers Sentry by throwing. Reading the body, verifying the signature, decoding, parsing and the relay
+  itself all sit inside one boundary that turns an unexpected failure into a logged 500.
+- It never reads the request body before deciding on method, path, length and signature shape — the tests prove
+  this with a body reader that throws if it is touched, not by checking a status code.
 
 ## Not yet true
 

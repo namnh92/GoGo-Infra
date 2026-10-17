@@ -155,37 +155,70 @@ else
 fi
 
 cases=0
-mutate() { # mutate <name> <perl expression>
+mutate() { # mutate <name> <perl expression> <expected diagnostic substring>
   cases=$((cases + 1))
-  local f="${SCRATCH}/case-${cases}.tf"
+  local f="${SCRATCH}/case-${cases}.tf" out
   if ! perl -0pe "$2" "$FIXTURE" >"$f" || cmp -s "$f" "$FIXTURE"; then
     echo "  FAIL  mutation '$1' did not change the fixture"
     failures=$((failures + 1))
     return
   fi
-  if check "$f" >/dev/null 2>&1; then
+  if out="$(check "$f" 2>&1)"; then
     echo "  FAIL  guard passed a module with $1"
     failures=$((failures + 1))
-  else
-    echo "  ok    guard refuses a module with $1"
+    return
   fi
+  # Which diagnostic, not just "it failed". The workers.dev mutation used to be
+  # caught by the observability assertion because its pattern matched that line
+  # first — so deleting the subdomain assertion would not have failed a single
+  # case (Sol F-12).
+  if [[ -n "${3:-}" ]] && ! grep -qF "$3" <<<"$out"; then
+    echo "  FAIL  guard refused '$1' for the wrong reason:"
+    printf '%s\n' "$out" | sed 's/^/          /'
+    failures=$((failures + 1))
+    return
+  fi
+  echo "  ok    guard refuses a module with $1"
 }
 
-mutate "no ignore_changes" 's/ignore_changes\s*=\s*\[bindings\]/ignore_changes = []/'
-mutate "no keep_bindings" 's/\n\s*keep_bindings\s*=[^\n]*//'
-mutate "keep_bindings only in a # comment" 's/\n(\s*)keep_bindings(\s*=[^\n]*)/\n$1# keep_bindings$2/'
-mutate "keep_bindings without secret_text" 's/"secret_text",\s*//'
-mutate "observability enabled" 's/(observability = \{\s*\n\s*enabled\s*=\s*)false/${1}true/'
-mutate "no observability block" 's/\n\s*observability = \{\s*\n\s*enabled\s*=\s*false\s*\n\s*\}//'
-mutate "logpush on" 's/logpush\s*=\s*false/logpush       = true/'
-mutate "no subdomain resource" 's/resource "cloudflare_workers_script_subdomain"[^\z]*//s'
-mutate "workers.dev enabled" 's/\n(\s*)enabled(\s*)=\s*false/\n$1enabled$2= true/'
-mutate "preview URLs enabled" 's/previews_enabled\s*=\s*false/previews_enabled = true/'
+mutate "no ignore_changes" \
+  's/ignore_changes\s*=\s*\[bindings\]/ignore_changes = []/' \
+  'ignore_changes = [bindings]'
+mutate "no keep_bindings" \
+  's/\n\s*keep_bindings\s*=[^\n]*//' \
+  'keep_bindings including "secret_text"'
+mutate "keep_bindings only in a # comment" \
+  's/\n(\s*)keep_bindings(\s*=[^\n]*)/\n$1# keep_bindings$2/' \
+  'keep_bindings including "secret_text"'
+mutate "keep_bindings without secret_text" \
+  's/"secret_text",\s*//' \
+  'keep_bindings including "secret_text"'
+mutate "observability enabled" \
+  's/(observability = \{\s*\n\s*enabled\s*=\s*)false/${1}true/' \
+  'observability { enabled = false }'
+mutate "no observability block" \
+  's/\n\s*observability = \{\s*\n\s*enabled\s*=\s*false\s*\n\s*\}//' \
+  'observability { enabled = false }'
+mutate "logpush on" \
+  's/logpush\s*=\s*false/logpush       = true/' \
+  'logpush = false'
+mutate "no subdomain resource" \
+  's/resource "cloudflare_workers_script_subdomain"[^\z]*//s' \
+  'resource cloudflare_workers_script_subdomain.sentry_relay'
+# Scoped to the subdomain resource: the unscoped pattern matched
+# `observability { enabled = false }` first and tested the wrong control.
+mutate "workers.dev enabled" \
+  's/(resource "cloudflare_workers_script_subdomain" "sentry_relay" \{[^}]*?)enabled(\s*)=\s*false/${1}enabled$2= true/s' \
+  'enabled = false on the relay workers.dev subdomain'
+mutate "preview URLs enabled" \
+  's/previews_enabled\s*=\s*false/previews_enabled = true/' \
+  'previews_enabled = false'
 mutate "controls only in a /* */ copy of the script resource" '
   my ($copy) = /(resource "cloudflare_workers_script" "sentry_relay" \{.*?\n\}\n)/s;
   s/\n\s*keep_bindings\s*=[^\n]*//;
   s/\n\s*lifecycle\s*\{\s*\n\s*ignore_changes\s*=\s*\[bindings\]\s*\n\s*\}//;
-  s/^(?=resource "cloudflare_workers_script" "sentry_relay" \{)/\/*\n${copy}*\/\n/m'
+  s/^(?=resource "cloudflare_workers_script" "sentry_relay" \{)/\/*\n${copy}*\/\n/m' \
+  'keep_bindings including "secret_text"'
 
 if [[ "$failures" -gt 0 ]]; then
   echo "${failures} sentry-relay binding check(s) failed."
