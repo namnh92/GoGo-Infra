@@ -1,12 +1,19 @@
 {
-  "comment": "Scrub V1 oracle (shape D-5, rev 2.1). fn: scrub | scrub-release (keepLongRuns) | path (scrubPathTemplate). Every rule is hit at least twice; one case per permitted field is in worker.test.mjs's sentinel fixture.",
+  "comment": "Scrub V1 oracle (shape D-5, rev 2.3). fn: scrub | scrub-release (keepLongRuns) | path (scrubPathTemplate). Every rule is hit at least twice; one case per permitted field is in worker.test.mjs's sentinel fixture. A run is a name when it is letters, or letter words joined by single `_`/`-`; a digit, a doubled or an edge separator makes it a token (20+) or an id (16+ path segment) — the client oracle's own test (ADR-0011 D-9).",
   "cases": [
     { "name": "email in a title", "fn": "scrub", "input": "User nam.nh@example.com could not vote", "expected": "User [email] could not vote" },
     { "name": "email with plus tag", "fn": "scrub", "input": "mail to a+test@sub.domain.vn failed", "expected": "mail to [email] failed" },
     { "name": "jwt in a message", "fn": "scrub", "input": "auth eyJhbGciOi.eyJzdWIi.SflKxwRJ rejected", "expected": "auth [token] rejected" },
     { "name": "jwt at end of line", "fn": "scrub", "input": "bearer=eyJa-b.c_d.e-f", "expected": "bearer=[token]" },
     { "name": "long run with digits", "fn": "scrub", "input": "key Ab12Cd34Ef56Gh78Ij90 leaked", "expected": "key [token] leaked" },
-    { "name": "long kebab run (aggressive by design)", "fn": "scrub", "input": "module sentry-discord-relay-worker crashed", "expected": "module [token] crashed" },
+    { "name": "long kebab run of letter words is a name (rev 2.3)", "fn": "scrub", "input": "module sentry-discord-relay-worker crashed", "expected": "module sentry-discord-relay-worker crashed" },
+    { "name": "long kebab run with a digit is a token", "fn": "scrub", "input": "module sentry-relay-7f3a9c2b1d-worker crashed", "expected": "module [token] crashed" },
+    { "name": "snake_case function name survives (rev 2.3)", "fn": "scrub", "input": "in get_notification_preferences at line 3", "expected": "in get_notification_preferences at line 3" },
+    { "name": "SCREAMING_SNAKE constant survives (rev 2.3)", "fn": "scrub", "input": "flag NOTIFICATION_SETTINGS_ENABLED off", "expected": "flag NOTIFICATION_SETTINGS_ENABLED off" },
+    { "name": "snake run with a digit is a token", "fn": "scrub", "input": "session user_1a2b3c4d5e6f7g8h closed", "expected": "session [token] closed" },
+    { "name": "doubled separator is not a name", "fn": "scrub", "input": "key ab__cdefghijklmnopqrstuv leaked", "expected": "key [token] leaked" },
+    { "name": "leading separator is not a name", "fn": "scrub", "input": "key _abcdefghijklmnopqrstuvw leaked", "expected": "key [token] leaked" },
+    { "name": "trailing separator is not a name", "fn": "scrub", "input": "key abcdefghijklmnopqrstuvw- leaked", "expected": "key [token] leaked" },
     { "name": "long pure-letter word survives", "fn": "scrub", "input": "Internationalizations everywhere", "expected": "Internationalizations everywhere" },
     { "name": "invite path /r/", "fn": "scrub", "input": "GET /r/AbCdEfGhIjKlMnOpQrStUv failed", "expected": "GET /r/[redacted] failed" },
     { "name": "share-link path /l/", "fn": "scrub", "input": "open /l/Af82XcAf82Xc now", "expected": "open /l/[redacted] now" },
@@ -29,6 +36,12 @@
     { "name": "path template long number", "fn": "path", "input": "/plans/123456789/active", "expected": "/plans/[id]/active" },
     { "name": "path template short number kept", "fn": "path", "input": "/tab/12345/x", "expected": "/tab/12345/x" },
     { "name": "path template plain segments kept", "fn": "path", "input": "/(tabs)/plans", "expected": "/(tabs)/plans" },
-    { "name": "path template invite segment via cred rule", "fn": "path", "input": "/r/AbCdEfGhIj", "expected": "/r/[redacted]" }
+    { "name": "path template invite segment via cred rule", "fn": "path", "input": "/r/AbCdEfGhIj", "expected": "/r/[redacted]" },
+    { "name": "path template PascalCase screen survives (rev 2.3)", "fn": "path", "input": "/NotificationSettings", "expected": "/NotificationSettings" },
+    { "name": "path template kebab screen survives (rev 2.3)", "fn": "path", "input": "/settings/notification-settings", "expected": "/settings/notification-settings" },
+    { "name": "path template placeholders survive", "fn": "path", "input": "/room/[roomId]/preference", "expected": "/room/[roomId]/preference" },
+    { "name": "path template colon params survive", "fn": "path", "input": "GET /v1/rooms/:roomId/preferences", "expected": "GET /v1/rooms/:roomId/preferences" },
+    { "name": "path template doubled-separator segment is an id", "fn": "path", "input": "/x/abcdefgh__ijklmnop", "expected": "/x/[id]" },
+    { "name": "path template letters-and-digits 20 is an id", "fn": "path", "input": "/x/AbCdEfGhIjKlMnOpQr12", "expected": "/x/[id]" }
   ]
 }

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHmac } from 'node:crypto'
 import { afterEach, beforeEach, describe, it } from 'node:test'
-import worker, { buildEmbed, fitTotal, scrub, stackBlock } from '../src/index.js'
+import worker, { buildEmbed, fitTotal, postToDiscord, scrub, stackBlock } from '../src/index.js'
 
 /**
  * GoGo-Infra#221 — the relay's behaviour with Discord faked at `fetch` and
@@ -1273,5 +1273,216 @@ describe('the 429 retry is only taken when Discord asked for it (F-08)', () => {
     const res = await call(eventAlertBody(), {})
     assert.equal(res.status, 502)
     assert.equal(discordCalls.length, 1)
+  })
+})
+
+describe('a credential marker outside the kept window (Astra F-23)', () => {
+  const postedRaw = async (filename) => {
+    discordAnswering(savedMessage)
+    await call(
+      eventAlertBody({
+        event: {
+          exception: {
+            values: [{ type: 'E', value: 'v', stacktrace: { frames: [{ filename, function: 'f', lineno: 1, colno: 1, in_app: true }] } }],
+          },
+        },
+      }),
+      {},
+    )
+    return discordCalls[0].init.body
+  }
+
+  for (const marker of ['r', 'l', 'invite', 'share-links']) {
+    it(`/${marker}/<code> four segments deep is redacted and the basename stays`, async () => {
+      // The tail cut kept `AbCdEfGhIj/src/app.js`: the marker left with the
+      // head, the credential-path rule had nothing to match, and ten letters
+      // are below the token rule — so the code was published verbatim.
+      const raw = await postedRaw(`/${marker}/AbCdEfGhIj/src/app.js`)
+      assert.ok(!raw.includes('AbCdEfGhIj'), `the code after /${marker}/ was published`)
+      assert.match(raw, /app\.js:1:1/)
+    })
+  }
+
+  it('a marker six segments deep is still seen', async () => {
+    const raw = await postedRaw('/r/AbCdEfGhIj/a/b/c/d.js')
+    assert.ok(!raw.includes('AbCdEfGhIj'))
+    assert.match(raw, /b\/c\/d\.js:1:1/)
+  })
+
+  it('a marker with nothing after it redacts nothing', async () => {
+    const raw = await postedRaw('/src/r')
+    assert.match(raw, /src\/r:1:1/)
+  })
+})
+
+describe('the Discord work completes inside the deadline, retry included (Astra F-22)', () => {
+  const URL = WEBHOOKS.DISCORD_WEBHOOK_BE
+  const rateLimited = (retryAfter) =>
+    new Response(JSON.stringify({ retry_after: retryAfter }), { status: 429, headers: { 'content-type': 'application/json' } })
+  /**
+   * Discord never answers: the promise settles only when the relay aborts it.
+   * The relay's AbortSignal.timeout() timer is unref'd, so a ref'd timer keeps
+   * the event loop alive until the abort; it also bounds a relay that never
+   * aborts, which would otherwise hang the suite instead of failing it.
+   */
+  const hangUntilAborted = (url, init) =>
+    new Promise((_, reject) => {
+      const { signal } = init
+      const never = setTimeout(() => reject(new Error('the relay never aborted its request')), 2000)
+      const abort = () => {
+        clearTimeout(never)
+        reject(signal.reason)
+      }
+      if (signal.aborted) abort()
+      else signal.addEventListener('abort', abort, { once: true })
+    })
+  const counting = (first, second) => {
+    let calls = 0
+    globalThis.fetch = async (url, init) => {
+      discordCalls.push({ url: String(url), init })
+      calls += 1
+      return calls === 1 ? first(url, init) : second(url, init)
+    }
+  }
+
+  it('a retry whose wait leaves less than the minimum window is rate_limited, not attempted', async () => {
+    // 800 ms already spent. A 20 ms wait "fits" an 850 ms admission line
+    // (820 ≤ 850) but leaves 30 ms for the POST itself — a request that can
+    // only time out, and would then be logged discord_failed, misnaming a
+    // rate limit.
+    counting(() => rateLimited(0.02), () => rateLimited(0.02))
+    const out = await postToDiscord(URL, '{}', Date.now() - 800)
+    assert.deepEqual(out, { outcome: 'rate_limited', status: 429 })
+    assert.equal(discordCalls.length, 1, 'a retry that cannot complete must not start')
+  })
+
+  it('the retried POST is capped to what is left before the deadline, not a fresh 600 ms', async () => {
+    // 600 ms spent, 50 ms wait → about 200 ms left: the retry is admitted and
+    // must end by the 850 ms line. It used to get its own full timeout and
+    // ran to ~1250 ms after arrival.
+    counting(() => rateLimited(0.05), hangUntilAborted)
+    const t0 = Date.now() - 600
+    const out = await postToDiscord(URL, '{}', t0)
+    const elapsed = Date.now() - t0
+    assert.equal(discordCalls.length, 2, 'the retry fits and is taken')
+    assert.equal(out.outcome, 'discord_failed')
+    assert.ok(elapsed <= 950, `Discord work ran ${elapsed} ms past arrival; the deadline is 850`)
+  })
+
+  it('the first POST is capped too when the budget is already partly spent', async () => {
+    counting(hangUntilAborted, hangUntilAborted)
+    const t0 = Date.now() - 700
+    const out = await postToDiscord(URL, '{}', t0)
+    const elapsed = Date.now() - t0
+    assert.equal(out.outcome, 'discord_failed')
+    assert.ok(elapsed <= 950, `the first attempt ran ${elapsed} ms past arrival`)
+  })
+
+  it('past the deadline nothing is posted: discord_failed without a request', async () => {
+    counting(hangUntilAborted, hangUntilAborted)
+    const out = await postToDiscord(URL, '{}', Date.now() - 900)
+    assert.deepEqual(out, { outcome: 'discord_failed', status: null })
+    assert.equal(discordCalls.length, 0)
+  })
+
+  it("Astra's case through the handler: a 429 with retry_after 0.5 is answered to Sentry inside 1 s", async () => {
+    // Arrival ≈ 0, 429 at once, wait 500 → the retry is admitted; a retry
+    // with its own 600 ms timeout answered Sentry at ~1100 ms, past the 1 s
+    // Sentry gives a webhook.
+    counting(() => rateLimited(0.5), hangUntilAborted)
+    const started = Date.now()
+    const res = await call(eventAlertBody(), {})
+    const elapsed = Date.now() - started
+    assert.equal(discordCalls.length, 2, 'the wait fits, so the retry is taken')
+    assert.equal(res.status, 502)
+    assert.ok(elapsed < 1000, `answered after ${elapsed} ms; Sentry gives up at 1000`)
+    assert.equal(logged.at(-1).outcome, 'discord_failed')
+  })
+})
+
+describe('static names survive the scrub (Astra F-27)', () => {
+  it('a snake_case function, a PascalCase screen, a kebab-case directory and route templates reach Discord intact', async () => {
+    discordAnswering(savedMessage)
+    await call(
+      eventAlertBody({
+        event: {
+          tags: [
+            ['screen', '/NotificationSettings'],
+            ['transaction', 'GET /v1/rooms/:roomId/preferences'],
+            ['route', '/places/:id'],
+          ],
+          exception: {
+            values: [
+              {
+                type: 'E',
+                value: 'v',
+                stacktrace: {
+                  frames: [
+                    {
+                      filename: 'src/features/notification-settings/preferences.ts',
+                      function: 'get_notification_preferences',
+                      lineno: 1,
+                      colno: 1,
+                      in_app: true,
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      }),
+      {},
+    )
+    const raw = discordCalls[0].init.body
+    for (const name of ['get_notification_preferences', 'NotificationSettings', 'notification-settings', ':roomId/preferences', ':id']) {
+      assert.ok(raw.includes(name), `${name} was redacted`)
+    }
+  })
+
+  it('a run of twenty with a digit is still a token in a function name and a screen', async () => {
+    discordAnswering(savedMessage)
+    await call(
+      eventAlertBody({
+        event: {
+          tags: [['screen', '/places/Ab12Cd34Ef56Gh78']],
+          exception: {
+            values: [
+              {
+                type: 'E',
+                value: 'v',
+                stacktrace: { frames: [{ filename: 'a.ts', function: 'castVote_7f3a9c2b1d4e', lineno: 1, colno: 1, in_app: true }] },
+              },
+            ],
+          },
+        },
+      }),
+      {},
+    )
+    const raw = discordCalls[0].init.body
+    assert.ok(!raw.includes('7f3a9c2b1d4e'))
+    assert.ok(!raw.includes('Ab12Cd34Ef56Gh78'))
+  })
+})
+
+describe('the cut backs over whitespace before it drops a run (Astra F-24a)', () => {
+  // `RE_GEO` allows whitespace around the comma, so `lat , lng` is a pair the
+  // rule redacts — and when character 400 falls in that whitespace the slice
+  // ended in a space, the trailing-unit strip found nothing to strip, and
+  // trimEnd() left a bare latitude: a fragment no rule matches.
+  for (const spelling of ['10.762622 , 106.660172', '10.762622 ,106.660172', '10.762622, 106.660172', '10.762622,106.660172']) {
+    it(`no half of \`${spelling}\` survives, wherever the cut falls in it`, () => {
+      for (let pad = 376; pad <= 400; pad += 1) {
+        const out = scrub(`${'x'.repeat(pad)} ${spelling} more`)
+        assert.ok(!/\d\.\d/.test(out), `pad ${pad}: ${JSON.stringify(out.slice(-26))}`)
+      }
+    })
+  }
+
+  it('a complete run followed by whitespace at the cut goes with it (accepted, rev 2.3)', () => {
+    // 394 x, a space, `abcd`, a space: character 400 is that second space.
+    // The cut cannot tell a finished word from the first half of a pair, so
+    // the word goes; the `…` says something was cut.
+    assert.equal(scrub(`${'x'.repeat(394)} abcd  more`), `${'x'.repeat(394)}…`)
   })
 })

@@ -57,14 +57,25 @@ const WEBHOOK_SHAPE = /^https:\/\/discord\.com\/api\/webhooks\/[0-9]{17,20}\/[A-
 /** Largest request body an anonymous caller can make this Worker read. */
 const MAX_BODY_BYTES = 1048576
 
-/** Discord gets this long to answer; Sentry's own budget is 1 s. */
+/** One Discord attempt gets at most this long; Sentry's own budget is 1 s. */
 const DISCORD_TIMEOUT_MS = 600
 
 /**
- * A 429 retry may only *start* while this much of the request's lifetime is
- * left unspent (ms since arrival). Past the line, drop as rate_limited.
+ * Every Discord attempt — the first or the one 429 retry — is aborted at this
+ * many ms after arrival, whatever its own timeout says, so the answer to
+ * Sentry leaves with 150 ms of its 1 s to spare. It used to be an admission
+ * line for the retry only: a retry admitted at 700 ms then ran its own 600 ms
+ * and answered Sentry at 1300 ms, past the budget D-4 exists to respect
+ * (Astra F-22).
  */
-const RETRY_LINE_MS = 850
+const DISCORD_DEADLINE_MS = 850
+
+/**
+ * A retry is admitted only when at least this much is left for its POST after
+ * the wait. A retry with 30 ms to run can only time out, and would then be
+ * logged discord_failed — misnaming a rate limit.
+ */
+const RETRY_MIN_WINDOW_MS = 100
 
 /** Frames shown: the newest N of the thrown exception, newest first. */
 const MAX_FRAMES = 8
@@ -161,20 +172,43 @@ const SCRUB_INPUT_CAP = 400
 // `\S+` inside the starred group would be exponential on `a,a,a,…,a X`.
 const RE_TRAILING_UNIT = /(?:[^\s,]+\s*,\s*)*[^\s,]*$/
 
-/** The first SCRUB_INPUT_CAP characters, cut back to a run boundary, marked. */
+/**
+ * The first SCRUB_INPUT_CAP characters, cut back to a run boundary, marked.
+ * Trailing whitespace comes off BEFORE the trailing unit is dropped: when the
+ * cut fell in the whitespace of `10.762622 , 106.660172`, the slice ended in a
+ * space, the strip found no unit to drop, and the bare latitude left as a
+ * fragment the geo rule never sees (Astra F-24a). Accepted: a complete run
+ * that was followed by whitespace at the cut goes too — the cut cannot tell a
+ * finished word from the first half of a pair.
+ */
 function cutAtRunBoundary(s) {
-  return `${s.slice(0, SCRUB_INPUT_CAP).replace(RE_TRAILING_UNIT, '').trimEnd()}…`
+  return `${s.slice(0, SCRUB_INPUT_CAP).trimEnd().replace(RE_TRAILING_UNIT, '').trimEnd()}…`
 }
 
 // Bounded quantifiers, for the same reason. An unbounded local part followed by
 // a single `@` and no dot is the classic quadratic case.
 const RE_EMAIL = /[^\s@<>()]{1,64}@[^\s@<>()]{1,64}\.[a-z]{2,24}/gi
 const RE_JWT = /eyJ[\w-]{1,512}\.[\w-]{1,512}\.[\w-]{1,512}/g
-// A long base64url-ish run that is not a plain word. Deliberately aggressive:
-// it eats hashed bundle names too, which carry no meaning a human needed.
+// A long base64url-ish run that is not a name (RE_NAME). Still aggressive on
+// purpose: a hashed bundle name carries a digit and goes.
 const RE_TOKEN_RUN = /[A-Za-z0-9_-]{20,}/g
+/**
+ * What makes a run a name rather than a token: letters only, or letter words
+ * joined by single `_` or `-`. A digit is the evidence of randomness — the
+ * client redactor's own test is "a letter and a digit" (ADR-0011 D-9) — and a
+ * doubled or edge separator is not how a human writes a name. Testing the
+ * separators themselves treated `get_notification_preferences` and
+ * `sentry-discord-relay-worker` as random and printed `[token]` for exactly
+ * the names an alert exists to carry (Astra F-27). What this admits that the
+ * old test caught: a secret of 20+ characters with no digit and well-formed
+ * separators — about 3 % of random base64url, none of hex — on top of the
+ * letters-only runs both tests admit.
+ */
+const RE_NAME = /^[A-Za-z]+(?:[_-][A-Za-z]+)*$/
+const isName = (run) => RE_NAME.test(run)
 // The same vocabulary as the client redactor (ADR-0011 D-9): these path
 // segments and query keys are always credentials.
+const CRED_MARKERS = new Set(['r', 'l', 'invite', 'share-links'])
 const RE_CRED_PATH = /(\/(?:r|l|invite|share-links)\/)[A-Za-z0-9_-]+/g
 const RE_CRED_QUERY = /([?&](?:code|invite|token|slug|guest|lat|lng|latitude|longitude)=)[^&#\s]*/gi
 const RE_GEO = /-?\d{1,3}\.\d{3,}\s*,\s*-?\d{1,3}\.\d{3,}/g
@@ -208,7 +242,7 @@ export function scrub(value, { keepLongRuns = false } = {}) {
   s = s.replace(RE_EMAIL, '[email]')
   s = s.replace(RE_JWT, '[token]')
   if (!keepLongRuns) {
-    s = s.replace(RE_TOKEN_RUN, (run) => (/[0-9_-]/.test(run) ? '[token]' : run))
+    s = s.replace(RE_TOKEN_RUN, (run) => (isName(run) ? run : '[token]'))
   }
   s = s.replace(RE_CRED_PATH, '$1[redacted]')
   s = s.replace(RE_CRED_QUERY, '$1[redacted]')
@@ -219,7 +253,9 @@ export function scrub(value, { keepLongRuns = false } = {}) {
 
 /**
  * Path-template rule for transaction / route / screen tags: a segment that is
- * a UUID, a ≥16-char base64url run, or a pure number of ≥6 digits is an id.
+ * a UUID, a ≥16-char base64url run that is not a name, or a pure number of
+ * ≥6 digits is an id. A screen called `NotificationSettings` is a name, not
+ * an id (Astra F-27; RE_NAME above).
  *
  * Control characters and the query/fragment come off BEFORE classification
  * (Sol F-01). A segment reading `123<control>456` or `123456?view=map` is not
@@ -235,7 +271,7 @@ export function scrubPathTemplate(value) {
     .split('/')
     .map((seg) => {
       if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(seg)) return '[id]'
-      if (/^[A-Za-z0-9_-]{16,}$/.test(seg)) return '[id]'
+      if (/^[A-Za-z0-9_-]{16,}$/.test(seg) && !isName(seg)) return '[id]'
       if (/^\d{6,}$/.test(seg)) return '[id]'
       return seg
     })
@@ -332,7 +368,8 @@ function allowedTags(raw) {
  * A frame line for the Stack code block. Backticks would end the fence, so
  * they are dropped rather than escaped (markdown escaping does not work
  * inside a code block). filename: strip query/fragment, drop scheme + host,
- * scrub, cap, keep the last three path segments — the shape's order.
+ * redact the segment after any credential marker, keep the last three path
+ * segments, scrub the joined path, cap — the shape's order (D-5, rev 2.3).
  */
 function frameLine(frame) {
   const f = frame && typeof frame === 'object' ? frame : {}
@@ -341,13 +378,22 @@ function frameLine(frame) {
   // published the user's home path and cut the file name off, which is the
   // opposite of both intents. And the scheme match was case-sensitive, so
   // `HTTPS://internal.host/src/app.js` kept its host.
-  const segments = str(f.filename)
+  const all = str(f.filename)
     .replace(/[?#].*$/, '')
     .replace(/^(?:file|https?):\/\/[^/]*/i, '')
     .split('/')
     .filter(Boolean)
-    .slice(-3)
-    .map((seg) => (seg.length > FILE_SEGMENT_CAP ? '…' : seg))
+  // The credential-path rule runs over the WHOLE path, segment by segment,
+  // before the tail is taken: with the marker further out than the kept
+  // three, `/r/AbCdEfGhIj/src/app.js` became `AbCdEfGhIj/src/app.js`, the rule
+  // had no `/r/` to match, and ten letters are below the token rule — the
+  // code was published (Astra F-23). The segment after a marker is a
+  // credential whatever it contains. The full path is never handed to
+  // scrub(), whose 400-character cut would eat it; this loop is linear.
+  for (let i = 0; i + 1 < all.length; i += 1) {
+    if (CRED_MARKERS.has(all[i])) all[i + 1] = '[redacted]'
+  }
+  const segments = all.slice(-3).map((seg) => (seg.length > FILE_SEGMENT_CAP ? '…' : seg))
   // Scrubbed as one string: the credential-path rule needs `/r/<value>` across
   // two segments, so a per-segment scrub would miss it. The leading slash is
   // restored for the same rule's sake — taking the last three segments drops
@@ -528,20 +574,31 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /**
  * One POST, `?wait=true` so a 2xx carries the saved message (F-08), redirects
- * refused (F-20), at most one 429 retry and only when `retry_after` fits
- * inside RETRY_LINE_MS from arrival (F-17). Everything else is a drop that
+ * refused (F-20), at most one 429 retry (F-17). Everything else is a drop that
  * the caller answers to Sentry as 502 (F-06).
+ *
+ * The deadline is absolute (Astra F-22): every attempt's timeout is the
+ * smaller of DISCORD_TIMEOUT_MS and what is left before t0 +
+ * DISCORD_DEADLINE_MS, and the retry is admitted only when the wait leaves
+ * RETRY_MIN_WINDOW_MS for it. Reading the 429 body for `retry_after` runs
+ * under the first attempt's signal and the clock is read after it, so that
+ * time is inside the budget too.
  */
-async function postToDiscord(webhookUrl, body, t0) {
+export async function postToDiscord(webhookUrl, body, t0) {
+  const deadline = t0 + DISCORD_DEADLINE_MS
+  const remaining = () => deadline - Date.now()
   const attempt = async () =>
     fetch(`${webhookUrl}?wait=true`, {
       method: 'POST',
       redirect: 'manual',
       headers: { 'content-type': 'application/json' },
       body,
-      signal: AbortSignal.timeout(DISCORD_TIMEOUT_MS),
+      signal: AbortSignal.timeout(Math.max(0, Math.min(DISCORD_TIMEOUT_MS, remaining()))),
     })
 
+  // Past the deadline nothing is posted: a request that cannot complete in
+  // time is one Discord may still save while Sentry hears 502.
+  if (remaining() <= 0) return { outcome: 'discord_failed', status: null }
   let response
   try {
     response = await attempt()
@@ -550,7 +607,7 @@ async function postToDiscord(webhookUrl, body, t0) {
   }
   if (response.status === 429) {
     const waitMs = await retryAfterMs(response)
-    if (waitMs === null || Date.now() - t0 + waitMs > RETRY_LINE_MS) {
+    if (waitMs === null || waitMs + RETRY_MIN_WINDOW_MS > remaining()) {
       return { outcome: 'rate_limited', status: 429 }
     }
     await sleep(waitMs)

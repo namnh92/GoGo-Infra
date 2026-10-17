@@ -1,8 +1,10 @@
 # ADR 0013 — The Sentry → Discord alert relay runs on a Cloudflare Worker
 
 **Status:** proposed — 2026-10-17 (SA shape: Fable, `dev/handoffs/sa-shape-infra-221-sentry-discord-relay.fable.md`
-rev 2.2; Astra round 1 `changes-required` F-01…F-21, all dispositioned in §7 of that file; confirm round pending;
-rev 2.2 answers Sol's confirm round on PR #233 — the scrub cut, frame segments, URL wrappers and the Tags field,
+rev 2.3; Astra round 1 `changes-required` F-01…F-21, all dispositioned in §7 of that file; Astra's confirm round on
+rev 2.2 `changes-required` F-22…F-27, dispositioned in §8 of that file — rev 2.3 answers it: the Discord deadline
+under D-4, the frame marker pre-pass, the cut's whitespace and the name test under D-5; a delta confirm is pending.
+Rev 2.2 answered Sol's confirm round on PR #233 — the scrub cut, frame segments, URL wrappers and the Tags field,
 recorded under D-5/D-6 below)
 **Issue:** GoGo-Infra#221 (context #219, #208)
 **Requirement authority:** owner decisions 2026-10-15 (#219: alerts go to Discord, one channel per project, every
@@ -80,9 +82,12 @@ rotation (D-8). Capture requires a TLS break or a Sentry-side leak, and the harm
 already sent.
 
 **D-4 · The Discord POST is synchronous, and a failed post is a 502 to Sentry.** `?wait=true` so a 2xx carries the
-saved message id; redirects refused; 600 ms timeout; at most one retry, only on 429 and only when `retry_after`
-fits inside 850 ms from arrival. Anything else — redirect, 401/403/404 (a revoked URL), 5xx, timeout, a 2xx with
-no message id — is answered to Sentry as **502**.
+saved message id; redirects refused; **every attempt ends by 850 ms from arrival** — its timeout is the smaller of
+600 ms and what is left, and nothing is posted past that line; at most one retry, only on 429 and only when
+`retry_after` leaves at least 100 ms for its POST before the deadline. (Rev 2.3: the 850 ms used to admit the retry's
+*start* — admitted at 700 ms, it ran its own 600 ms and answered Sentry at 1300 ms; and a retry with 30 ms to run could
+only time out, logged as a Discord failure rather than the rate limit it was.) Anything else — redirect, 401/403/404
+(a revoked URL), 5xx, timeout, a 2xx with no message id — is answered to Sentry as **502**.
 
 This is the ADR's least obvious decision, so the reason is recorded: Sentry does not retry an issue-alert webhook,
 so the message is lost either way, but a non-2xx is recorded on the integration's *Webhook Requests* tab and feeds
@@ -97,7 +102,11 @@ newest 8 frames of that exception as `filename · function · line:col · in_app
 there is no exception, the event's Sentry URL, and `issue_id` / `event_id`. Every string passes Scrub V1 (email,
 JWT, long token runs, invite paths `/r/ /l/ /invite/ /share-links/`, credential query keys, coordinate pairs,
 phone numbers → labels) and a length cap; `transaction`, `route` and `screen` additionally get path-template
-treatment, so an id in a path becomes `[id]`.
+treatment, so an id in a path becomes `[id]`. A long run is a token, and a long path segment an id, only when it is
+**not a name** — letters, or letter words joined by single `_`/`-`; a digit, a doubled or an edge separator is what
+marks it random, the client redactor's own test (ADR-0011 D-9). So `get_notification_preferences` and a screen called
+`NotificationSettings` leave intact while `user_1a2b3c4d5e6f7g8h` does not (rev 2.3; the earlier test took the
+separator itself as evidence and printed `[token]` for the names an alert exists to carry).
 
 Never: `user`, `request`, `contexts`, `breadcrumbs`, `sdk`, `extra`, `modules`, `fingerprint`, `_meta`,
 `mechanism.data`, `abs_path`, frame variables, and — owner decision 2026-10-17 — **no source lines**
@@ -115,11 +124,15 @@ the query string come off a path **before** segments are classified, or `/plans/
 `/plans/123456?view=map` are not "a run of digits" and the bare id is published once the control is stripped. And
 a frame's path is reduced to its last three segments **before** any length cap, or a long absolute path keeps
 `/home/<user>/private/…` and loses the file name — publishing the one part nobody wanted and dropping the part
-that locates the defect. A third rule came from the confirm round: the scrubber reads at most the first 400
-characters of a value (a bounded surface, since a signed body may be 1 MiB), and that cut is **not a slice** — a
+that locates the defect. Before even that, the segment after any `r`/`l`/`invite`/`share-links` segment is replaced
+over the **whole** path: the tail cut had dropped the marker with the head, so `/r/AbCdEfGhIj/src/app.js` left as
+`AbCdEfGhIj/src/app.js` with nothing for the credential-path rule to match (rev 2.3). A third rule came from the
+confirm round: the scrubber reads at most the first 400 characters of a value (a bounded surface, since a signed
+body may be 1 MiB), and that cut is **not a slice** — a
 slice keeps a prefix, and an email, token or coordinate pair straddling character 400 survived as a fragment no
-rule matches, inside the field cap once earlier runs had collapsed to labels. The cut moves back to the last
-whitespace boundary, takes any comma-joined run with it (a coordinate pair is `lat, lng`), and is marked `…`; a
+rule matches, inside the field cap once earlier runs had collapsed to labels. The cut trims trailing whitespace,
+moves back to the last whitespace boundary, takes any comma-joined run with it (a coordinate pair is `lat, lng` — or
+`lat , lng`, and with the cut in that whitespace a bare latitude once survived; rev 2.3), and is marked `…`; a
 whitespace-free value over 400 characters therefore shows as `…`, never as a prefix. For the same reason a frame
 path segment longer than the 120-character file column is dropped whole as `…` rather than cut: three such
 segments stay under the scrubber's 400, so the basename always survives, and the joined path is still scrubbed
