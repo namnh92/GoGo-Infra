@@ -307,14 +307,17 @@ describe('delivery (shape D-4/D-8)', () => {
     assert.equal(discordCalls[0].url, `${WEBHOOKS.DISCORD_WEBHOOK_CMS}?wait=true`)
   })
 
-  it('a 2xx without a saved message id is 502 to Sentry, discord_unconfirmed (F-08, SA F-31)', async () => {
+  it('a 2xx without a saved message id is 200 to Sentry, logged discord_unconfirmed (F-08, SA F-31, Q-8)', async () => {
     // `new Response('', { status: 204 })` used to stand here — a null-body
     // status with a body throws inside the fake, so the test exercised the
     // thrown-fetch path and never the branch it named. A 200 with an empty
     // body reaches it: Discord answered, the answer carries no message.
+    // Answered 200 since shape rev 2.7 (owner decision 2026-10-18): a 502
+    // here was retried by Sentry into up to four copies of a message that
+    // was probably saved. The outcome stays distinct so A-4 can count it.
     discordAnswering(() => new Response('', { status: 200 }))
     const res = await call(eventAlertBody(), {})
-    assert.equal(res.status, 502)
+    assert.equal(res.status, 200)
     assert.equal(logged.at(-1).outcome, 'discord_unconfirmed')
     assert.equal(logged.at(-1).discord_status, 200)
   })
@@ -1956,15 +1959,20 @@ describe('a project id that arrives as a decimal string is still routed (SA F-37
   }
 })
 
-describe('a completed 2xx whose answer cannot be read is discord_unconfirmed, not discord_failed (SA F-31)', () => {
-  // Both are 502 to Sentry (D-4: a 2xx with no message id is not a save the
-  // relay can vouch for), but A-4 has to count how many of those 502s were
-  // false — the message may well be in the channel. A request that never
-  // completed stays discord_failed.
+describe('a completed 2xx whose answer cannot be read is discord_unconfirmed and 200; a request that never completed is discord_failed and 502 (SA F-31, Q-8)', () => {
+  // Rev 2.5 kept the two outcomes apart behind one 502 so A-4 could count
+  // the false ones. Rev 2.7 (owner decision 2026-10-18, shape Q-8 = a)
+  // splits the answer too: Sentry retries a 502 three times, five minutes
+  // apart, and an unconfirmed message is probably in the channel — a 502
+  // bought up to four copies of it. So `discord_unconfirmed` is final, 200,
+  // and the owner's accepted cost is the rare unconfirmed-and-not-saved
+  // message: lost from the relay's side with no row on the tab, the native
+  // message still arriving (D-7), the status line in `wrangler tail` the
+  // only trace. `discord_failed` stays 502 so the retry can deliver it.
   it('a 200 with a body that is not JSON', async () => {
     discordAnswering(() => new Response('not json', { status: 200 }))
     const res = await call(eventAlertBody(), {})
-    assert.equal(res.status, 502)
+    assert.equal(res.status, 200)
     assert.deepEqual([logged.at(-1).outcome, logged.at(-1).discord_status], ['discord_unconfirmed', 200])
   })
 
@@ -1978,15 +1986,41 @@ describe('a completed 2xx whose answer cannot be read is discord_unconfirmed, no
       },
     }))
     const res = await call(eventAlertBody(), {})
-    assert.equal(res.status, 502)
+    assert.equal(res.status, 200)
     assert.deepEqual([logged.at(-1).outcome, logged.at(-1).discord_status], ['discord_unconfirmed', 200])
   })
 
-  it('a request that never completed is still discord_failed with no status', async () => {
+  it('a 200 whose JSON carries no numeric message id', async () => {
+    for (const body of ['{}', '{"id":"abc"}', '{"id":123}', '[]']) {
+      logged.length = 0
+      discordAnswering(() => new Response(body, { status: 200, headers: { 'content-type': 'application/json' } }))
+      const res = await call(eventAlertBody(), {})
+      assert.equal(res.status, 200, body)
+      assert.deepEqual([logged.at(-1).outcome, logged.at(-1).discord_status], ['discord_unconfirmed', 200], body)
+    }
+  })
+
+  it('a request that never completed is still discord_failed, 502, with no status', async () => {
     discordAnswering(new Error('connection reset'))
     const res = await call(eventAlertBody(), {})
     assert.equal(res.status, 502)
     assert.deepEqual([logged.at(-1).outcome, logged.at(-1).discord_status], ['discord_failed', null])
+  })
+
+  it('every other non-save outcome keeps its 502 — the answer Sentry retries', async () => {
+    const cases = [
+      ['discord_redirect', () => new Response(null, { status: 302, headers: { location: 'https://example.com/' } })],
+      ['webhook_rejected', () => new Response('{}', { status: 404 })],
+      ['discord_failed', () => new Response('oops', { status: 500 })],
+      ['rate_limited', () => new Response(JSON.stringify({ retry_after: 30 }), { status: 429 })],
+    ]
+    for (const [outcome, answer] of cases) {
+      logged.length = 0
+      discordAnswering(answer)
+      const res = await call(eventAlertBody(), {})
+      assert.equal(res.status, 502, outcome)
+      assert.equal(logged.at(-1).outcome, outcome)
+    }
   })
 })
 

@@ -2,7 +2,7 @@
 
 **Status:** proposed — becomes accepted at merge; the session that merges PR #233 writes the merge SHA and the
 CODEOWNER date into this line (shape §5 step 6). SA shape: Fable,
-`dev/handoffs/sa-shape-infra-221-sentry-discord-relay.fable.md` rev 2.6 (workspace file). Every review round on the
+`dev/handoffs/sa-shape-infra-221-sentry-discord-relay.fable.md` rev 2.7 (workspace file). Every review round on the
 shape and on PR #233 — Astra rounds 1 and 2, Sol rounds 1 and 2, the SA find round on the code — and the owner's
 decisions of 2026-10-18 are dispositioned item by item in that file's §7 and §8; the decisions below are the result,
 not the history.
@@ -11,8 +11,9 @@ not the history.
 environment, one notification per issue per 30 min), 2026-10-17 (this issue: scope, no source lines to Discord, three
 existing channels, hostname — and "native action removed after acceptance", **reversed the next day**) and
 2026-10-18 (the native action stays permanently beside the relay, D-7; exception `type` is a name position, D-5; the
-20-character scrub floor stays for every project, D-11). ADR-0011 D-7 (privacy addendum before real data) and D-9
-(allowlists, not denylists). ADR-0004 (what belongs on a Worker). `security.md` (logs carry no payloads).
+20-character scrub floor stays for every project, D-11; `discord_unconfirmed` answers 200 and is not retried, D-4).
+ADR-0011 D-7 (privacy addendum before real data) and D-9 (allowlists, not denylists). ADR-0004 (what belongs on a
+Worker). `security.md` (logs carry no payloads).
 `gogo-platform-sre` (symptom alerts reach a human).
 **Basis:** GoGo-Infra `develop` `37c4dd7`.
 **Amends:** ADR-0004's table of edge-native workloads (one row, below). ADR-0011 D-9 gains a third implementer.
@@ -90,12 +91,13 @@ saved message id; redirects refused; **every attempt ends by 850 ms from arrival
 `retry_after` leaves at least 100 ms for its POST before the deadline. (Rev 2.3: the 850 ms used to admit the retry's
 *start* — admitted at 700 ms, it ran its own 600 ms and answered Sentry at 1300 ms; and a retry with 30 ms to run could
 only time out, logged as a Discord failure rather than the rate limit it was.) Anything else — redirect, 401/403/404
-(a revoked URL), 5xx, timeout, a 2xx with no message id — is answered to Sentry as **502**.
+(a revoked URL), 5xx, timeout — is answered to Sentry as **502**; a 2xx whose saved message the relay could not read
+is answered **200** and logged `discord_unconfirmed` (owner decision 2026-10-18, the end of this section).
 
 Three refinements from the SA find round on the code (shape rev 2.5). A 2xx whose answer the relay could not read, or
-that carried no message id, is still a 502 — the relay cannot vouch for a save — but it is logged `discord_unconfirmed`,
-apart from `discord_failed` (the request never completed), because that message may well be in the channel and the
-acceptance run has to count how many 502s were false. The project id is an integer by Sentry's documentation, not by
+that carried no message id, is logged `discord_unconfirmed`, apart from `discord_failed` (the request never
+completed), because that message may well be in the channel and the acceptance run has to count it — rev 2.5 still
+answered it 502; rev 2.7 answers it 200 (the end of this section). The project id is an integer by Sentry's docs, not by
 capture: a decimal string is coerced before the closed-map lookup, and the acceptance matrix reads the relay's own
 outcome per cell, so an `unknown_project` 204 — a success on Sentry's tab and silence in every channel — cannot pass as
 delivered. And the parse/scrub/build segment before the Discord POST is not instrumented: its inputs are bounded (1 MiB
@@ -133,8 +135,16 @@ apart; a 503, a 4xx and a 204 are final. Each action on a workflow is its own ta
 `rate_limited` or `discord_failed` message is usually delivered on a retry, so the loss D-10 states is smaller than
 first written; a `webhook_rejected` 502 appears on the tab three more times; and a `discord_unconfirmed` 502 — Discord
 answered 2xx, the relay could not read a message id, the message is probably in the channel — is retried into up to
-four relay copies of one message. The 502 stands. Whether `discord_unconfirmed` should answer 200 instead is an open
-owner question, to be decided on the acceptance run's count of that outcome (shape §3, Q-8). None of this changes
+four relay copies of one message. **Decided 2026-10-18 (shape rev 2.7, Q-8 = a), by the owner in session and ahead
+of the acceptance count rev 2.6 had planned to decide it on: `discord_unconfirmed` answers 200.** No retry, no
+duplicate. The cost is the owner's and is written here so that nobody later reads that 200 as a save: when the branch
+is taken and Discord did *not* in fact save the message, the relay's message is lost — no row on the Webhook Requests
+tab, no retry — and the only trace is the relay's own `discord_unconfirmed` status line in `wrangler tail`, which A-4
+correlates against the channel; the native message for that issue still arrives (D-7). What the retry does for each
+answer that stays: `rate_limited` and `discord_failed` get another attempt five minutes later, which usually delivers;
+`webhook_rejected` and `discord_redirect` repeat three more times on the tab until the webhook URL is fixed; a
+`relay_error` 500 is retried the same way; 503, every 4xx and 204 are final. In code the map is one set,
+`ACKNOWLEDGED = {posted, discord_unconfirmed}` → 200, every other `postToDiscord` outcome → 502. None of this changes
 D-7: the retry is invisible to the breaker, so a dying relay makes four tab rows per issue and still emails no one.
 
 **D-5 · What may leave Sentry is a closed list, scrubbed by value.** Project, `environment`, `release`, `level`,
@@ -277,8 +287,9 @@ pasted URL fail CI.
 **D-9 · The relay logs enums, and Workers observability stays off.** One logging function, emitting only
 `{ outcome, resource, project, issue_id, event_id, discord_status }` — outcome/resource/project from fixed enums,
 the two ids regex-validated and present only after the signature passed, the raw `Sentry-Hook-Resource` header
-never stored. `outcome` tells `discord_failed` (the request never completed) from `discord_unconfirmed` (it completed
-with a 2xx the relay could not read as a save), so the acceptance run can count false 502s (rev 2.5).
+never stored. `outcome` tells `discord_failed` (the request never completed, a 502) from `discord_unconfirmed` (it
+completed with a 2xx the relay could not read as a save, a 200 since 2026-10-18), so the acceptance run can check each
+unconfirmed 200 against the channel — the only measurement of the loss D-4 accepts (rev 2.5, rev 2.7).
 `observability.enabled = false` and `logpush = false` on the script. The status line exists for
 `wrangler tail` during acceptance and nowhere else; two CI guards pin both halves. The relay's answer to Sentry is a
 bare status: every `new Response(` passes `null`, pinned by the logging guard with its own mutations — the response
@@ -295,8 +306,10 @@ minutes late rather than never. The issue stream in Sentry is the record; the ch
 our own would turn a visible 502 into an invisible backlog, and Sentry's retry is the buffer that already exists. The
 accepted loss includes the channel, not only individual messages: a webhook that is gone or a Worker that is broken
 drops every **relay** message for that project until a person reads the tab (D-4; rev 2.5) — the stack traces, not
-the alerts, because the native action still posts (D-7). The retry has one cost of its own: a `discord_unconfirmed`
-502 is re-posted, which is Q-8 in the shape.
+the alerts, because the native action still posts (D-7). The one message the retry never carries is the
+`discord_unconfirmed` one — answered 200 so that a probable save is not posted four times (owner decision 2026-10-18,
+D-4) — so the loss also includes, with no tab row, the rare unconfirmed message Discord did not in fact save; its
+`discord_unconfirmed` status line is the only trace.
 
 **D-11 · The privacy addendum is accepted before the first `webhook` action exists.** ADR-0011 D-7 requires a dated
 owner acceptance on GoGo-Infra#208 before real data reaches a new destination or processor. For this relay that is

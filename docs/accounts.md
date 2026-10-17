@@ -243,8 +243,10 @@ Sentry link, issue and event ids), scrubs every value, and posts one embed. **No
 purpose, so it lands on the integration's *Webhook Requests* tab — that tab, read by a person, is the delivery
 detector and the only one: Sentry's circuit breaker counts only its own 5 s hard timeout, so the relay's 502s never
 trip it or the email it would send (ADR-0013 D-4). Sentry does retry the webhook task on a 502, three times at
-five-minute spacing (not on 503, 504 or 4xx), so a failed relay message usually arrives late rather than never — and a
-`discord_unconfirmed` one may arrive twice (shape rev 2.6, Q-8, open).
+five-minute spacing (not on 503, 504 or 4xx), so a failed relay message usually arrives late rather than never. A
+`discord_unconfirmed` answer (Discord said 2xx, the relay could not read the saved message) is 200 and not retried
+(owner decision 2026-10-18, shape rev 2.7 Q-8): no duplicates, at the accepted cost that an unconfirmed message
+Discord did not save is lost with no tab row — the status line in `wrangler tail` is its only trace.
 
 Credentials, when they exist (`docs/sentry-discord-relay.md` is the runbook, including which leak is revoked
 where): the integration's Client Secret and three Discord channel webhook URLs, all SecureString under

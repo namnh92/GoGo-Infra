@@ -14,10 +14,10 @@ value, and posts one Discord embed to that project's channel — inside Sentry's
 ```
 Sentry issue alert ──HMAC-signed POST──▶ gogo-dev-sentry-relay ──embed──▶ Discord channel
                                               │
-                                              └─ 200 posted · 204 ignored/unknown project
+                                              └─ 200 posted / unconfirmed · 204 ignored/unknown project
                                                  401 bad signature · 413 too large · 400 malformed
-                                                 503 not provisioned · 502 Discord failed / unconfirmed
-                                                 500 relay error
+                                                 503 not provisioned · 502 Discord failed / rate-limited /
+                                                 redirect / rejected · 500 relay error
 ```
 
 A 502 is deliberate (ADR-0013 D-4): the non-2xx is what makes the failure visible on the integration's **Webhook
@@ -27,11 +27,21 @@ it would send on opening never fires for this relay. **That is why Sentry's nati
 workflow next to the relay, permanently** (ADR-0013 D-7, owner decision 2026-10-18): each issue posts twice in its
 channel — Sentry's sparse message and the relay's one with frames — and a sparse message with no relay message beside it
 is the in-channel sign that the relay is broken. Do not remove the native action to tidy the channel. Sentry **does**
-retry the webhook task on a 502 — three times, five minutes apart (`send_alert_webhook_v2`, `Retry(times=3,
-delay=300)` on `RequestException`; not on 503, 504 or any 4xx) — so a `rate_limited` or `discord_failed` message
-usually arrives late rather than never, while a `discord_unconfirmed` one may arrive more than once (shape rev 2.6, Q-8,
-open). The status line tells `discord_failed` (the request never completed) from `discord_unconfirmed` (Discord
-answered 2xx but the answer carried no readable message id — that message may have been delivered); A-4 counts both.
+retry the webhook task on a 500 or 502 — three times, five minutes apart (`send_alert_webhook_v2`, `Retry(times=3,
+delay=300)` on `RequestException`; not on 503, 504 or any 4xx) — and that retry is what each answer means:
+
+| Status line `outcome` | Answer to Sentry | Sentry retries? | What it means |
+| --- | --- | --- | --- |
+| `posted` | 200 | no | Discord answered 2xx with a saved message id |
+| `discord_unconfirmed` | 200 | no | Discord answered 2xx but the relay could not read a message id inside its deadline — the message is probably in the channel, and it is answered 200 so the retry does not post it up to four times (owner decision 2026-10-18, ADR-0013 D-4). **If Discord did not in fact save it, the relay's message is lost with no row on the tab**; the native message still arrives, and this line is the only trace — A-4 checks each one against the channel |
+| `discord_failed` | 502 | yes, ×3 | the request never completed (timeout, network, deadline, or a Discord status that is not a save) — usually delivered by the retry |
+| `rate_limited` | 502 | yes, ×3 | a 429 whose `retry_after` did not fit the budget — usually delivered by the retry |
+| `webhook_rejected` | 502 | yes, ×3 | 401/403/404: a revoked or wrong URL — repeats on the tab three more times until the URL is fixed (the A-10 signal) |
+| `discord_redirect` | 502 | yes, ×3 | Discord answered 3xx, never followed — the same repair as a rejected URL |
+| `relay_error` | 500 | yes, ×3 | an unexpected throw after authentication |
+| `not_provisioned` | 503 | no | a `DISCORD_WEBHOOK_*` binding missing or misshapen — nothing posts, for any project |
+| `ignored` / `unknown_project` | 204 | no | not an `event_alert`, or a project outside the routing map — a success on the tab and silence in every channel, which is why A-3 reads this line per cell |
+| `bad_signature` / `no_secret` / `too_large` / `malformed` / `not_found` | 401 / 401 / 413 / 400 / 404 | no | refused before or at parsing; nothing posted |
 
 ## Where the values live, and where they do not
 
@@ -141,8 +151,10 @@ Requests tab, and the correlated **relay** message within 60 s — the one from 
 event` footer, not Sentry's native one, which is recorded beside it; a cell with no relay message is a relay gap to
 record, not a lost alert · A-4 every request 2xx on the Webhook Requests tab except the deliberate failures and
 Sentry's own retries of them (a 502 is retried three times, five minutes apart, each a new row), the response time per
-cell recorded against the 850 ms deadline, `posted` / `discord_failed` / `discord_unconfirmed` counted with any
-duplicate the retries produced, and `wrangler tail` showing status lines only · A-5 no source line,
+cell recorded against the 850 ms deadline, `posted` / `discord_failed` / `discord_unconfirmed` counted — and every
+`discord_unconfirmed` line checked against the channel: relay message present means the 200 was right, absent means a
+relay message lost with no tab row, recorded beside the native message that did arrive (the loss the owner accepted,
+ADR-0013 D-4) — and `wrangler tail` showing status lines only · A-5 no source line,
 no `user`/`request`/`breadcrumbs` in a delivered message · A-6 a hostile title renders escaped, pings nobody,
 unfurls nothing, and the stack is still visible · A-7 `check-worker-subdomain.sh gogo-dev-sentry-relay` → `false,
 false`, and the script's settings read back with `observability.enabled = false`, `logpush = false` · A-8 the flag
@@ -169,8 +181,9 @@ Both kinds rotate without downtime in the Worker, but they differ in what the ga
     DISCORD_WEBHOOK_<PROJECT> gogo-dev-sentry-relay
 ```
 
-Between the two the relay answers 502 for that project — visible in Sentry, and the alerts in that window are
-lost.
+Between the two the relay answers 502 (`webhook_rejected`) for that project — visible in Sentry, and retried three
+times at five-minute spacing, so a rotation finished inside that quarter hour delays the relay's messages rather than
+losing them; the native message arrives either way.
 
 **The client secret** — regenerate it in Sentry, then `put.sh` + `put-worker-secret.sh`. Sentry signs with the new
 secret immediately, so every real alert is 401 until the binding is replaced; forged requests signed with the

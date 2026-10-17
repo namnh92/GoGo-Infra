@@ -21,8 +21,17 @@
  * dying silently. Do not "clean up" the duplicate. Sentry does retry the
  * webhook task on a 500/502, a soft timeout or a connection error — three
  * times, five minutes apart (`sentry_apps/tasks/sentry_apps.py`
- * `send_alert_webhook_v2`, `Retry(times=3, delay=300)`; shape rev 2.6 Q-8) —
- * and not on 503, 504 or any 4xx. This Worker keeps no state and no queue.
+ * `send_alert_webhook_v2`, `Retry(times=3, delay=300)`; shape rev 2.6) —
+ * and not on 503, 504 or any 4xx. That retry is why `discord_unconfirmed`
+ * answers 200 (owner decision 2026-10-18, shape rev 2.7 Q-8): Discord
+ * answered 2xx and the relay could not read the saved message, which is
+ * probably in the channel — a 502 was retried into up to four copies of it.
+ * The owner's accepted cost: when Discord did not in fact save it, that
+ * message is lost from the relay's side with no row on the tab and no retry;
+ * the native message still arrives, and the `discord_unconfirmed` status
+ * line in `wrangler tail` is the only trace (A-4 counts it). Every other
+ * non-save answer stays 502 so the retry can deliver it (ACKNOWLEDGED below).
+ * This Worker keeps no state and no queue.
  *
  * Every answer to Sentry is a bare status: `new Response(null, …)` and nothing
  * else. The response body would be the Worker's second egress — into Sentry's
@@ -134,6 +143,14 @@ const OUTCOMES = new Set([
   'too_large',
   'not_found',
 ])
+/**
+ * Outcomes Sentry hears as 200, final. Everything else postToDiscord returns
+ * is a 502 that Sentry's task retries three times, five minutes apart (shape
+ * D-4, rev 2.7): `rate_limited` and `discord_failed` usually self-heal on
+ * that retry; `webhook_rejected` and `discord_redirect` repeat on the tab
+ * until the URL is fixed. A `relay_error` 500 is retried the same way.
+ */
+const ACKNOWLEDGED = new Set(['posted', 'discord_unconfirmed'])
 const RESOURCES = new Set(['event_alert', 'installation', 'other'])
 const PROJECTS = new Set(['BE', 'CMS', 'MOBILE', 'unknown'])
 
@@ -707,14 +724,17 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 /**
  * One POST, `?wait=true` so a 2xx carries the saved message (F-08), redirects
  * refused (F-20), at most one 429 retry (F-17). Everything else is a drop that
- * the caller answers to Sentry as 502 (F-06).
+ * the caller answers to Sentry as 502 (F-06) — with one exception.
  *
- * Two outcomes behind that 502 are kept apart for A-4 (SA F-31): a request
- * that never completed (`discord_failed` — thrown fetch, timeout, deadline
- * passed, or a status Discord answered that is not a save) and a request that
- * completed with a 2xx whose answer could not be read or carried no message
- * id (`discord_unconfirmed`) — the message may well be in the channel, and the
- * 502 Sentry sees for it is a false failure A-4 has to count.
+ * Two outcomes are kept apart for A-4 (SA F-31) and, since shape rev 2.7,
+ * answered differently: a request that never completed (`discord_failed` —
+ * thrown fetch, timeout, deadline passed, or a status Discord answered that is
+ * not a save) is a 502 Sentry retries; a request that completed with a 2xx
+ * whose answer could not be read or carried no message id
+ * (`discord_unconfirmed`) is a 200 — the message is probably in the channel
+ * and a retry would duplicate it (Q-8, owner decision 2026-10-18). A-4 checks
+ * each `discord_unconfirmed` line against the channel; the one with no
+ * message beside it is the loss the owner accepted.
  *
  * The deadline is absolute (Astra F-22): every attempt's timeout is the
  * smaller of DISCORD_TIMEOUT_MS and what is left before t0 +
@@ -842,7 +862,7 @@ async function relay(parsed, resource, env, t0) {
   const { outcome, status } = await postToDiscord(env[channel.binding], body, t0)
   const discordStatus = status
   logStatus(outcome, resource, projectLabel, safeIssueId, safeEventId, discordStatus)
-  return new Response(null, { status: outcome === 'posted' ? 200 : 502 })
+  return new Response(null, { status: ACKNOWLEDGED.has(outcome) ? 200 : 502 })
 }
 
 export default {
