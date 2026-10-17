@@ -360,9 +360,10 @@ Nothing reads them but the lane the owner runs:
 
 `exec-with.sh` takes a set because a lane needs all of them and nothing less: every row is resolved
 before any value is read, so a typo stops the lane instead of starting it half-credentialled, and
-`prod` asks for typed confirmation once for the whole set. The values are exported into that one
-process and `exec` replaces the shell, so nothing outlives the lane — no `export` in your shell, no
-`.env`, nothing written into `android/` or `ios/`.
+`prod` asks for typed confirmation once for the whole set — read from the terminal, so the lane's own
+stdin can be a file or a pipe; a session with no terminal is refused unless `GOGO_ASSUME_YES=1`. The
+values are exported into that one process and `exec` replaces the shell, so nothing outlives the
+lane — no `export` in your shell, no `.env`, nothing written into `android/` or `ios/`.
 
 **What each one costs if it is lost or leaked** — read this before the commands:
 
@@ -373,9 +374,10 @@ process and `exec` replaces the shell, so nothing outlives the lane — no `expo
 | `store/play-service-account` | Create another key for the same service account. | Anyone can publish to our Play tracks until the key is deleted in Google Cloud IAM. |
 
 **The keystore here is the upload key, not the signature installed copies verify.** Play App Signing
-is mandatory for apps created on Play since August 2021, so GoGo's **app signing key is generated and
-held by Google**; what this keystore does is authenticate uploads. That is the whole reason the row is
-recoverable, and it has two consequences the lanes depend on:
+is mandatory for apps created on Play since August 2021 — a new app cannot decline it — and the
+intended arrangement is the default one: Google **generates and holds the app signing key**, and this
+keystore, generated locally and distinct from it, authenticates uploads. That is the whole reason the
+row is recoverable, and it has two consequences the lanes depend on:
 
 - A lost or compromised upload key is a Play Console reset, not the end of updates. Keep a backup
   anyway — a reset is support-mediated and slow — but do not treat this row as irreplaceable.
@@ -384,10 +386,15 @@ recoverable, and it has two consequences the lanes depend on:
   from any Play track carries Google's signature, so registering the upload key's SHA-1 leaves the map
   grey with `Authorization failure` in logcat.
 
-**Confirm this at account creation.** The Play Console account does not exist yet (GoGo-MobileApp#21,
-owner). If the owner opts out of Play App Signing, or imports an existing app signing key, this table
-inverts: the keystore then *is* the signature installed copies check, loss ends updates for them, and
-the row must be treated as irreplaceable. Say which it is on #231 when the account exists.
+**Three arrangements; which one GoGo has is decided at enrolment.** The Play Console account does not
+exist yet (GoGo-MobileApp#21, owner). The table above is written for the first; the owner records on
+#231 which one was chosen once the account exists.
+
+| Arrangement | This keystore is | Lost | Compromised |
+| --- | --- | --- | --- |
+| **Intended** — Google generates the app signing key; this row is a distinct upload key. The default when enrolling a new app. | the upload key only | Play Console upload-key reset; installed copies unaffected | the same reset; nothing installed is at risk |
+| **Imported app signing key** — the owner uploads an existing key as the app signing key at enrolment. Still enrolled: Google holds the imported key and signs every release with it. This row then holds a *separate* upload key, never the imported one. | the upload key only | the same reset — Google still holds the signing key | an exposed *upload* key is the same reset; an exposed *imported* key is the worse case — it is the signature installed copies verify, and no upload-key reset retires it |
+| **Legacy, not enrolled** — only an app created before August 2021 that never enrolled. Not GoGo's case; recorded so the irreplaceable-keystore model is not applied here by mistake. | the app signing key itself | ends updates for installed copies — irreplaceable | the same, and no reset exists |
 
 ### Creating and storing them
 
@@ -420,21 +427,33 @@ interactive branch reads a single line and cannot take a multi-line key at all).
    Two details that the obvious command gets wrong:
 
    - **PKCS12, not JKS.** `keytool` has defaulted to PKCS12 since JDK 9 and writes PKCS12 whatever
-     the file is called, so a `.jks` name is a lie about the format. PKCS12 has **one** password —
-     `keytool` refuses a key password that differs from the store password — so both rows carry the
-     same value, and `keytool -keypasswd` does not apply. The two rows stay separate because
-     fastlane reads both names, and because a future JKS keystore could differ.
+     the file is called, so a `.jks` name is a lie about the format. PKCS12 has **one** password,
+     and a `-keypass` that differs from the store password is not refused: `keytool` prints
+     `Different store and key passwords not supported for PKCS12 KeyStores. Ignoring user-specified
+     -keypass value` and the key opens with the store password. So whatever was typed, both rows
+     hold the **store** password — either row unlocks both layers once paired with the file — and
+     `keytool -keypasswd` is not available for PKCS12. The two rows stay separate because fastlane
+     reads both names, and because a future JKS keystore could differ.
    - **RSA-2048, not 4096.** Play requires at least 2048. A Standard-tier SSM parameter holds 4 KiB
      and `put.sh` pins that tier; base64 of a 4096-bit keystore lands close to or over that ceiling,
      so `put.sh` would refuse it (it now says so in bytes rather than failing inside `aws`).
 
-   Verify the round trip before deleting anything local, and keep a backup off this machine:
+   Verify the round trip before deleting anything local, and keep a backup off this machine.
+   `get.sh --show` on `prod` prints its warning and asks for `prod` from the terminal — that works
+   with stdout piped, since the answer is not read from stdin — and the fetched bytes go to a
+   `mktemp` file (0600, unpredictable name), never to the screen:
 
    ```bash
-   ./scripts/secrets/get.sh prod store/android-keystore | base64 -d > /tmp/rt.p12
-   keytool -list -v -keystore /tmp/rt.p12 -storetype PKCS12   # same SHA-256 fingerprint
-   rm -f /tmp/rt.p12
+   rt="$(mktemp)" && chmod 600 "$rt"
+   ./scripts/secrets/get.sh prod store/android-keystore --show | base64 -d > "$rt"
+   shasum -a 256 gogo-upload.p12 "$rt"               # the two digests must be identical
+   keytool -list -keystore "$rt" -storetype PKCS12    # and it still opens: same certificate SHA-256 as the source
+   rm -f "$rt"
    ```
+
+   The file digest is the comparison; `keytool -list` proves the decoded bytes are a loadable
+   keystore. A mismatch means the stored value is not the file — re-run `put.sh`, and do not delete
+   `gogo-upload.p12` until the digests agree.
 
 3. **Play service account** — Google Cloud → IAM → service account, then Play Console → Users and
    permissions → invite it with *release management* on the GoGo app only. Download the JSON key:

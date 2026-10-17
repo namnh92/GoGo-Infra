@@ -210,10 +210,15 @@ losing the upload key is a Play Console reset rather than the end of updates. Ke
 reset is support-mediated. The Apple key and the Play service-account key are replaced the usual way —
 create the new one, ship one build with it, then revoke or delete the old.
 
-Two consequences worth writing down before the Play account exists: the Maps certificate SHA-1 to
-register (GoGo-MobileApp#351 AC-4) is the **app signing key's**, from Play Console → App integrity, not
-this keystore's; and if the owner opts out of Play App Signing at account creation, this keystore
-becomes the app signing key and the row turns irreplaceable. Confirm which on GoGo-Infra#231.
+Two things worth writing down before the Play account exists. The Maps certificate SHA-1 to register
+(GoGo-MobileApp#351 AC-4) is the **app signing key's**, from Play Console → App integrity, not this
+keystore's. And the arrangement is decided at enrolment — intended: Google generates the app signing
+key and this keystore is a distinct upload key (the default for a new app, which cannot decline Play
+App Signing). If the owner instead imports an existing key as the app signing key, Google still holds
+and signs with it: this row stays a separate upload key, loss is still a reset, but compromise of the
+imported key is the worse case, since no upload-key reset retires it. Only an app created before August
+2021 that never enrolled has its keystore as the app signing key, irreplaceable — not GoGo's case.
+Record which arrangement was chosen on GoGo-Infra#231.
 
 Not stored: an Apple team id (an App Store Connect API key authenticates without one and fastlane
 reads the team from it), and no Apple ID password or session cookie anywhere — the API key exists so
