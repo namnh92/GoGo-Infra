@@ -38,6 +38,21 @@ description = "Redis connection string with credentials"
 regex = '''rediss?://[^:\s]*:[^@\s]+@'''
 tags = ["redis"]
 
+[[rules]]
+id = "gogo-discord-webhook-url"
+description = "Discord channel webhook URL (carries its own token)"
+# GoGo-Infra#221. Discord's execute URL is the credential: whoever holds it can
+# post into the channel, with no account and no further authentication. The
+# relay Worker receives its three URLs from SSM through put-worker-secret.sh and
+# never prints one — this rule is what makes a pasted URL fail CI instead of
+# living in a commit, a fixture or an evidence file.
+#
+# Non-capturing on the id/token split, for the reason gogo-postgres-url records:
+# a capturing group makes gitleaks report the group as the Secret, and allowlist
+# regexes are matched against the Secret.
+regex = '''https://discord(?:app)?\.com/api/webhooks/[0-9]{17,20}/[A-Za-z0-9_-]{20,}'''
+tags = ["discord", "webhook"]
+
 [allowlist]
 description = "Placeholders and documentation examples"
 regexes = [

@@ -203,8 +203,8 @@ Discord message layout is fixed; the action takes only `data.tags`. Tags sent (D
 6181998277): gogo-be `environment,release,level,handled,transaction` · gogo-cms
 `environment,release,level,handled,browser.name,transaction` · gogo-mobile
 `environment,release,level,handled,os.name,device.family` · crash-free 6168773 `environment,release`. Stack
-traces and screen names are not in the message. Follow-ups: relay with stack trace GoGo-Infra#221 (SA shape
-first); screen tags GoGo-CMS#241 and GoGo-MobileApp#341.
+traces and screen names are not in the message. Screen tags: GoGo-CMS#241, GoGo-MobileApp#341. Stack traces: the
+relay below.
 
 | Workflow | Fires on | Discord channel |
 | --- | --- | --- |
@@ -220,6 +220,35 @@ Test notifications (`POST …/test-fire-actions/`) went to each channel twice, a
 final tags. The owner saw both rounds arrive in all three channels.
 Every new issue on DEV, probe and test issues included, posts to its channel. To mute a channel, change
 the workflow; disabling the integration silences all three projects at once.
+
+### Sentry → Discord relay with stack trace (GoGo-Infra#221, ADR-0013) — not deployed yet
+
+**State 2026-10-17: code only.** The Worker `gogo-dev-sentry-relay` (`workers/sentry-relay/`), its tests, its CI
+guards, its four manifest rows and `docs/sentry-discord-relay.md` are on `develop`. Nothing is deployed: the
+Terraform module, the hostname `sentry-relay-dev.gogo.id.vn`, the Sentry internal integration
+`gogo-alert-relay`, the three Discord channel webhooks and the four SSM values **do not exist**. The capability
+`sentry_discord_relay` is `planned: [dev]`. Sentry's native Discord action above is still the only path to the
+channels, and the message still has no stack trace.
+
+The relay exists because Sentry's Discord action takes only `data.tags` — frames cannot be added to it at any
+price. Instead an alertable internal integration POSTs the whole stored event to a Cloudflare Worker, which
+verifies an HMAC signature, keeps a closed list of fields (title, culprit, exception type and first value line,
+the newest 8 frames as file · function · line:col · in_app, the allowed tags, environment, release, rule, the
+Sentry link, issue and event ids), scrubs every value, and posts one embed. **No source lines** (owner decision
+2026-10-17), no `user`, `request`, `contexts` or `breadcrumbs`. A Discord failure is answered to Sentry as 502 on
+purpose, so it lands on the integration's *Webhook Requests* tab and feeds the circuit breaker that emails the
+owner organisation — that tab is the delivery detector.
+
+Credentials, when they exist (`docs/sentry-discord-relay.md` is the runbook, including which leak is revoked
+where): the integration's Client Secret and three Discord channel webhook URLs, all SecureString under
+`/gogo/ci/dev/sentry-relay/`, put onto the Worker with `put-worker-secret.sh`; Terraform records only whether the
+bindings exist. The two capabilities differ — the secret lets someone **forge** a signed request into all three
+channels, a webhook URL lets someone **post into that one channel** with no account, so a leaked URL is revoked
+at Discord and a leaked secret is regenerated at Sentry.
+
+Once the relay is accepted (acceptance matrix A-1…A-10, `docs/sentry-discord-relay.md`), the native `discord`
+action is removed from workflows 6114982 / 6164951 / 6164950 and the relay becomes the only path for issue
+alerts; the crash-free workflow 6168773 keeps the native action, having no event to attach frames to.
 
 ### Which Google Cloud project owns a DEV credential
 

@@ -40,6 +40,11 @@ RD="redis""s://"
 PG="postgre""sql://"
 PGS="postgre""s://"
 BEGIN_KEY="-----BEGIN"" PRIVATE KEY-----"
+# Split the same way, and for the same reason: a whole Discord webhook URL in
+# a committed file is exactly what the rule below exists to catch.
+DISCORD="https://discord"".com/api/webhooks"
+FAKE_HOOK_TOKEN="$(head -c 64 /dev/urandom | base64 | tr -dc 'A-Za-z0-9_-' | head -c 68)"
+PLACEHOLDER_HOOK_TOKEN="PLACEHOLDER_$(printf 'a%.0s' {1..56})"
 
 # count_findings <file> -> prints the number of findings
 count_findings() {
@@ -72,6 +77,14 @@ expect 1 'postgres:// without the ql is caught too' \
   "db=\"${PGS}admin:${FAKE_PW}@db.internal:5432/gogo\""
 
 expect 1 'an APNs private key is caught' "$BEGIN_KEY"
+
+# GoGo-Infra#221. The relay's three channel credentials are URLs: whoever has
+# one can post into that Discord channel.
+expect 1 'a Discord channel webhook URL is caught' \
+  "DISCORD_WEBHOOK_BE=${DISCORD}/123456789012345678/${FAKE_HOOK_TOKEN}"
+
+expect 0 "the relay's test fixture URL is not a secret" \
+  "DISCORD_WEBHOOK_BE=${DISCORD}/000000000000000001/${PLACEHOLDER_HOOK_TOKEN}"
 
 # scripts/bootstrap/upstash.sh builds REDIS_URL exactly like this and pipes it
 # into SSM without printing it. The credential is a variable, not a value.

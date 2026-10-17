@@ -1,0 +1,16 @@
+{
+  // Local development only. Deployment is Terraform's job
+  // (terraform/modules/cloudflare-sentry-relay, PR-2 of GoGo-Infra#221) — a
+  // Worker wired up through the dashboard or a stray `wrangler deploy` is
+  // configuration that exists in one place and no repository, which is the
+  // drift this repo exists to prevent.
+  //
+  // No vars and no secrets here: SENTRY_CLIENT_SECRET and the three
+  // DISCORD_WEBHOOK_* bindings are put with scripts/secrets/put-worker-secret.sh
+  // and never live in a file. For local runs, `wrangler dev` with
+  // `--var` / .dev.vars stays on the developer's machine.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gogo-sentry-relay-dev",
+  "main": "src/index.js",
+  "compatibility_date": "2026-01-01"
+}

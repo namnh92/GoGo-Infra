@@ -150,6 +150,29 @@ jobs:
       - name: node --test
         run: node --test workers/share-link/test/worker.test.mjs
 
+  relay-worker:
+    name: sentry-relay worker tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # GoGo-Infra#221. The relay is the one GoGo component that holds a whole
+      # Sentry event — user, request, breadcrumbs, source context — and decides
+      # what of it may reach Discord. Its tests assert on the serialised Discord
+      # request body, so a trimmed allowlist fails here rather than in a channel.
+      #
+      # Files, not the directory: the directory form resolves as a module on
+      # Node 22 and dies before a single test runs (same note as share-link).
+      - name: node --test
+        run: |
+          node --test \
+            workers/sentry-relay/test/worker.test.mjs \
+            workers/sentry-relay/test/scrub.test.mjs
+
   scripts:
     name: shellcheck
     runs-on: ubuntu-latest
@@ -250,6 +273,20 @@ jobs:
       # without keep_bindings a code upload drops a secret Terraform never saw.
       - name: share-link Worker bindings stay Cloudflare-owned
         run: ./scripts/ci/share-link-bindings.test.sh
+
+      # GoGo-Infra#221. Same #172 controls on the relay script, plus the two
+      # that are privacy design rather than preference: observability off (the
+      # Worker holds the full event in memory) and workers.dev off from
+      # creation. The module lands in PR-2; until then this skips with its
+      # reason and still proves itself against an inline fixture.
+      - name: sentry-relay Worker bindings, logging and exposure
+        run: ./scripts/ci/sentry-relay-bindings.test.sh
+
+      # The relay's logging convention is the last thing between a stored
+      # Sentry event and Cloudflare's logs: one logging function, enums and
+      # validated ids only. A convention nobody checks is a comment.
+      - name: the relay logs enums and validated ids only
+        run: ./scripts/ci/sentry-relay-no-payload-logging.test.sh
 
       # The provider probe's whole value is the reason code it reports. Routes
       # errors arrive as a JSON array, and reading them as an object turned a
