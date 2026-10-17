@@ -1212,6 +1212,39 @@ describe('a wrapper is what wrapUrls inserted, not any `<` (F-19)', () => {
   })
 })
 
+describe('a credential marker in the first kept path segment (found while reviewing the F-02 fix)', () => {
+  it('redacts an invite code whether or not the slash survived the tail cut', async () => {
+    discordAnswering(savedMessage)
+    await call(
+      eventAlertBody({
+        event: {
+          exception: {
+            values: [
+              {
+                type: 'E',
+                value: 'v',
+                stacktrace: {
+                  frames: [
+                    // Taking the last three segments drops the leading slash,
+                    // so the credential-path rule saw `r/AbCdEfGhIj/…` and
+                    // matched nothing — the code was published verbatim.
+                    { filename: '/home/u/r/AbCdEfGhIj/file.ts', function: 'f', lineno: 1, colno: 1, in_app: true },
+                    { filename: 'src/r/ZyXwVuTsRq/other.ts', function: 'g', lineno: 2, colno: 1, in_app: true },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      }),
+      {},
+    )
+    const raw = discordCalls[0].init.body
+    assert.ok(!raw.includes('AbCdEfGhIj'), 'an invite code in the first kept segment leaked')
+    assert.ok(!raw.includes('ZyXwVuTsRq'))
+  })
+})
+
 describe('the 429 retry is only taken when Discord asked for it (F-08)', () => {
   it('a 429 with no retry_after anywhere is rate_limited, never an instant retry', async () => {
     discordAnswering(() => new Response('{}', { status: 429, headers: { 'content-type': 'application/json' } }))

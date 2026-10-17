@@ -349,8 +349,11 @@ function frameLine(frame) {
     .slice(-3)
     .map((seg) => (seg.length > FILE_SEGMENT_CAP ? '…' : seg))
   // Scrubbed as one string: the credential-path rule needs `/r/<value>` across
-  // two segments, so a per-segment scrub would miss it.
-  let file = scrub(segments.join('/'))
+  // two segments, so a per-segment scrub would miss it. The leading slash is
+  // restored for the same rule's sake — taking the last three segments drops
+  // it, and `r/AbCdEfGhIj/file.ts` then matched no rule at all, publishing an
+  // invite code that `/r/AbCdEfGhIj/file.ts` would have redacted.
+  let file = scrub(`/${segments.join('/')}`).replace(/^\//, '')
   // Left-truncate — after the scrub, so this cut can only split a label or a
   // run no rule matched; the basename is the part that locates the defect.
   if (file.length > 120) file = `…${file.slice(-119)}`
