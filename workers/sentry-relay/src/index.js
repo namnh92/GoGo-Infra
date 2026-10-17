@@ -189,26 +189,43 @@ function cutAtRunBoundary(s) {
 // a single `@` and no dot is the classic quadratic case.
 const RE_EMAIL = /[^\s@<>()]{1,64}@[^\s@<>()]{1,64}\.[a-z]{2,24}/gi
 const RE_JWT = /eyJ[\w-]{1,512}\.[\w-]{1,512}\.[\w-]{1,512}/g
-// A long base64url-ish run that is not a name (RE_NAME). Still aggressive on
-// purpose: a hashed bundle name carries a digit and goes.
+// A long base64url-ish run. Which runs survive it depends on the position
+// (RE_RANDOM_MARK, RE_NAME below). Still aggressive on purpose: a hashed
+// bundle name carries a digit and goes everywhere.
 const RE_TOKEN_RUN = /[A-Za-z0-9_-]{20,}/g
 /**
- * What makes a run a name rather than a token: letters only, or letter words
- * joined by single `_` or `-`. A digit is the evidence of randomness — the
- * client redactor's own test is "a letter and a digit" (ADR-0011 D-9) — and a
- * doubled or edge separator is not how a human writes a name. Testing the
- * separators themselves treated `get_notification_preferences` and
+ * The strict test, and the default: a 20+ run with a digit, an underscore or
+ * a hyphen is a token; a letters-only run survives, as it has since Scrub V1.
+ * This is the rule every relayed string had before Astra F-27, restored for
+ * free text by owner decision 2026-10-17 (shape D-5, rev 2.4).
+ */
+const RE_RANDOM_MARK = /[0-9_-]/
+const isPlainWord = (run) => !RE_RANDOM_MARK.test(run)
+/**
+ * The name test, applied ONLY in a name position — a frame's `filename` and
+ * `function`, and the path-template tags `transaction` / `route` / `screen`
+ * (scrubPathTemplate). What makes a run a name rather than a token: letters
+ * only, or letter words joined by single `_` or `-`. A digit is the evidence
+ * of randomness — the client redactor's own test is "a letter and a digit"
+ * (ADR-0011 D-9) — and a doubled or edge separator is not how a human writes
+ * a name. The strict test treated `get_notification_preferences` and
  * `sentry-discord-relay-worker` as random and printed `[token]` for exactly
- * the names an alert exists to carry (Astra F-27). What this admits that the
- * old tests caught: in text, a secret of 20+ characters with no digit and
- * well-formed separators — about 3 % of random base64url, none of hex — on
- * top of the letters-only runs the old token test already admitted; in a
- * path template, any 16+ segment that is a name, letters-only included (the
- * old segment test had no digit condition) — bounded there because all three
- * clients send templates (`[param]`, `:param`, Nest patterns) whose ids are
- * UUIDs or numbers. An edge separator still fails the test, so the
- * leading-underscore private convention (`_handleNotificationPress`, 20+)
- * stays `[token]`.
+ * the names an alert exists to carry (Astra F-27).
+ *
+ * What the exemption admits, in a name position only: a secret of 20+
+ * characters with no digit and well-formed separators — ≈ 2.2 % of 22-char
+ * and ≈ 0.06 % of 43-char random base64url, none of hex — on top of the
+ * letters-only runs the strict test already admits; and in a path template,
+ * any 16+ segment that is a name, letters-only included (the old segment test
+ * had no digit condition) — bounded there because all three clients send
+ * templates (`[param]`, `:param`, Nest patterns) whose ids are UUIDs or
+ * numbers. Free text — title, culprit, exception type and value, the fallback
+ * message, environment, rule, every other tag — is where a user-typed or
+ * attacker-influenced secret actually lands and carries no name worth that,
+ * so it keeps the strict test; a relayed field added later is strict unless
+ * its scrub call deliberately passes `names: true`. An edge separator still
+ * fails the name test, so the leading-underscore private convention
+ * (`_handleNotificationPress`, 20+) stays `[token]` in every position.
  */
 const RE_NAME = /^[A-Za-z]+(?:[_-][A-Za-z]+)*$/
 const isName = (run) => RE_NAME.test(run)
@@ -242,18 +259,23 @@ export function firstLine(value) {
 }
 
 /**
- * Scrub V1. Applied to every relayed string. `keepLongRuns` exempts only the
- * token-run rule (rev 2.1: the `release` field/tag is the deploy SHA by
- * contract — ADR-0012a D-1 / ADR-0011 D-3 — and would otherwise always print
- * as `[token]`; every other rule and the caps still apply to it).
+ * Scrub V1. Applied to every relayed string. Two options, both opt-in, both
+ * narrowing the token-run rule only — every other rule and the caps always
+ * apply: `keepLongRuns` switches the rule off (rev 2.1: the `release`
+ * field/tag is the deploy SHA by contract — ADR-0012a D-1 / ADR-0011 D-3 —
+ * and would otherwise always print as `[token]`); `names` marks a name
+ * position, where a run that is a name survives (RE_NAME) instead of only a
+ * letters-only run (RE_RANDOM_MARK). The default is the strict test, so a
+ * field someone relays later fails toward redaction (rev 2.4).
  */
-export function scrub(value, { keepLongRuns = false } = {}) {
+export function scrub(value, { keepLongRuns = false, names = false } = {}) {
   const whole = String(value).normalize('NFC').replace(RE_CONTROL, '')
   let s = whole.length > SCRUB_INPUT_CAP ? cutAtRunBoundary(whole) : whole
   s = s.replace(RE_EMAIL, '[email]')
   s = s.replace(RE_JWT, '[token]')
   if (!keepLongRuns) {
-    s = s.replace(RE_TOKEN_RUN, (run) => (isName(run) ? run : '[token]'))
+    const keep = names ? isName : isPlainWord
+    s = s.replace(RE_TOKEN_RUN, (run) => (keep(run) ? run : '[token]'))
   }
   s = s.replace(RE_CRED_PATH, '$1[redacted]')
   s = s.replace(RE_CRED_QUERY, '$1[redacted]')
@@ -266,7 +288,9 @@ export function scrub(value, { keepLongRuns = false } = {}) {
  * Path-template rule for transaction / route / screen tags: a segment that is
  * a UUID, a ≥16-char base64url run that is not a name, or a pure number of
  * ≥6 digits is an id. A screen called `NotificationSettings` is a name, not
- * an id (Astra F-27; RE_NAME above).
+ * an id (Astra F-27; RE_NAME above). These three tags are name positions
+ * end to end: the joined template is scrubbed with `names: true` too, or a
+ * 20+ kebab segment the segment test kept would be eaten by the run rule.
  *
  * Control characters and the query/fragment come off BEFORE classification
  * (Sol F-01). A segment reading `123<control>456` or `123456?view=map` is not
@@ -287,7 +311,7 @@ export function scrubPathTemplate(value) {
       return seg
     })
     .join('/')
-  return scrub(templated)
+  return scrub(templated, { names: true })
 }
 
 /* ─────────────────── embed building (shape D-5 table, D-6) ───────────────── */
@@ -411,11 +435,13 @@ function frameLine(frame) {
   // restored for the same rule's sake — taking the last three segments drops
   // it, and `r/AbCdEfGhIj/file.ts` then matched no rule at all, publishing an
   // invite code that `/r/AbCdEfGhIj/file.ts` would have redacted.
-  let file = scrub(`/${segments.join('/')}`).replace(/^\//, '')
+  let file = scrub(`/${segments.join('/')}`, { names: true }).replace(/^\//, '')
   // Left-truncate — after the scrub, so this cut can only split a label or a
   // run no rule matched; the basename is the part that locates the defect.
   if (file.length > 120) file = `…${file.slice(-119)}`
-  const fn = truncate(scrub(str(f.function, '?')), 80)
+  // A frame's file and function are the two name positions of a frame line
+  // (rev 2.4): `get_notification_preferences` is what the line exists to say.
+  const fn = truncate(scrub(str(f.function, '?'), { names: true }), 80)
   const line = Number.isInteger(f.lineno) ? `:${f.lineno}` : ''
   const col = Number.isInteger(f.colno) ? `:${f.colno}` : ''
   const mark = f.in_app === true ? '▸' : '·'

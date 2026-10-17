@@ -14,6 +14,9 @@ const cases = JSON.parse(readFileSync(fileURLToPath(new URL('./scrub-cases.json'
 
 const FNS = {
   scrub: (s) => scrub(s),
+  // A name position (frame filename, frame function, the path rule's joined
+  // scrub) opts in; everything else is the strict default (rev 2.4).
+  'scrub-name': (s) => scrub(s, { names: true }),
   'scrub-release': (s) => scrub(s, { keepLongRuns: true }),
   path: (s) => scrubPathTemplate(s),
 }

@@ -1,9 +1,10 @@
 # ADR 0013 — The Sentry → Discord alert relay runs on a Cloudflare Worker
 
 **Status:** proposed — 2026-10-17 (SA shape: Fable, `dev/handoffs/sa-shape-infra-221-sentry-discord-relay.fable.md`
-rev 2.3; Astra round 1 `changes-required` F-01…F-21, all dispositioned in §7 of that file; Astra's confirm round on
+rev 2.4; Astra round 1 `changes-required` F-01…F-21, all dispositioned in §7 of that file; Astra's confirm round on
 rev 2.2 `changes-required` F-22…F-27, dispositioned in §8 of that file — rev 2.3 answers it: the Discord deadline
-under D-4, the frame marker pre-pass, the cut's whitespace and the name test under D-5; a delta confirm is pending.
+under D-4, the frame marker pre-pass, the cut's whitespace and the name test under D-5; rev 2.4 narrows that name test
+to name positions by owner decision 2026-10-17; a delta confirm is pending.
 Rev 2.2 answered Sol's confirm round on PR #233 — the scrub cut, frame segments, URL wrappers and the Tags field,
 recorded under D-5/D-6 below)
 **Issue:** GoGo-Infra#221 (context #219, #208)
@@ -102,11 +103,23 @@ newest 8 frames of that exception as `filename · function · line:col · in_app
 there is no exception, the event's Sentry URL, and `issue_id` / `event_id`. Every string passes Scrub V1 (email,
 JWT, long token runs, invite paths `/r/ /l/ /invite/ /share-links/`, credential query keys, coordinate pairs,
 phone numbers → labels) and a length cap; `transaction`, `route` and `screen` additionally get path-template
-treatment, so an id in a path becomes `[id]`. A long run is a token, and a long path segment an id, only when it is
-**not a name** — letters, or letter words joined by single `_`/`-`; a digit, a doubled or an edge separator is what
-marks it random, the client redactor's own test (ADR-0011 D-9). So `get_notification_preferences` and a screen called
+treatment, so an id in a path becomes `[id]`. The long-run rule is positional (rev 2.4). In **free text** — title,
+culprit, exception type and value, the fallback message, environment, rule, every other tag — a 20+ run with a digit,
+`_` or `-` is a token and only a letters-only run survives, the rule every string had before Astra F-27. In a **name
+position** — a frame's `filename` and `function`, and the `transaction`/`route`/`screen` tags — a run survives when it
+is a name: letters, or letter words joined by single `_`/`-`; a digit, a doubled or an edge separator is what marks it
+random, the client redactor's own test (ADR-0011 D-9). So `get_notification_preferences` in a frame and a screen called
 `NotificationSettings` leave intact while `user_1a2b3c4d5e6f7g8h` does not (rev 2.3; the earlier test took the
-separator itself as evidence and printed `[token]` for the names an alert exists to carry).
+separator itself as evidence and printed `[token]` for the names an alert exists to carry). **Owner decision
+2026-10-17:** rev 2.3 had applied that name test to every field, which let a digit-free secret with well-formed
+separators through anywhere — P(no digit) for a 12-char share code 13.0 % (below the 20-char threshold, never caught
+either way), a 22-char invite code 2.38 %, a 43-char session token 0.07 % — and the owner kept the exemption only where
+a name is what the field carries, because a title, culprit, exception value or log message is where a user-typed or
+attacker-influenced secret lands and holds no name worth that. Measured exactly, free text admits 1.04 % of 22-char
+and 0.013 % of 43-char runs again (letters-only, as it always did) instead of 2.15 % / 0.059 %; a name position keeps
+2.15 % / 0.059 %. The strict rule is the code's default; a name position opts in, so a field relayed later fails
+toward redaction. Accepted: a 20+ snake/kebab name in `culprit` or an exception value prints `[token]` there and
+survives in the frame line.
 
 Never: `user`, `request`, `contexts`, `breadcrumbs`, `sdk`, `extra`, `modules`, `fingerprint`, `_meta`,
 `mechanism.data`, `abs_path`, frame variables, and — owner decision 2026-10-17 — **no source lines**

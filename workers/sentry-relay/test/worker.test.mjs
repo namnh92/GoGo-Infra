@@ -1485,6 +1485,181 @@ describe('static names survive the scrub (Astra F-27)', () => {
   })
 })
 
+describe('the name exemption is positional (owner decision 2026-10-17, rev 2.4)', () => {
+  // A digit-free run of 20+ with a well-formed separator is what F-27's name
+  // test admitted that the pre-F-27 rule caught. The owner kept that
+  // admission only where a name is what the field carries — a frame's file
+  // and function, the transaction / route / screen tags — and restored the
+  // strict rule everywhere else: title, culprit, exception type and value,
+  // the fallback message, environment, rule, every other tag. Asserted
+  // through the serialised Discord body, not scrub(): a field whose scrub
+  // call silently gained the name option would pass a scrub() test.
+  const SEP_RUN = 'qwrtpsdfghjk-lzxcvbnmQWRT' // 25 chars, no digit, one `-`
+  // 24 letters and nothing else: survives in free text under the strict rule
+  // as it did before F-27 — the accepted admission the shape's D-5 line
+  // quantifies (≈ 1.04 % of 22-char base64url, ≈ 0.013 % of 43-char).
+  const LETTER_RUN = 'qwrtpsdfghjklzxcvbnmQWRT'
+
+  const postedBodyRaw = async (eventOverrides, rule) => {
+    discordAnswering(savedMessage)
+    const res = await call(eventAlertBody({ event: eventOverrides, rule }), {})
+    assert.equal(res.status, 200)
+    return discordCalls[0].init.body
+  }
+
+  it('a digit-free separator run is [token] in title, culprit, exception type and value', async () => {
+    const raw = await postedBodyRaw({
+      title: `t ${SEP_RUN}`,
+      culprit: `c ${SEP_RUN}`,
+      exception: {
+        values: [
+          {
+            type: `E_${SEP_RUN}`,
+            value: `v ${SEP_RUN}`,
+            stacktrace: { frames: [{ filename: 'a.ts', function: 'f', lineno: 1, colno: 1, in_app: true }] },
+          },
+        ],
+      },
+    })
+    assert.ok(!raw.includes(SEP_RUN), 'the run survived in a free-text field')
+    assert.ok(!raw.includes('qwrtpsdfghjk'), 'a fragment of the run survived')
+  })
+
+  it('a digit-free separator run is [token] in the fallback message', async () => {
+    const raw = await postedBodyRaw({ exception: undefined, logentry: { formatted: `msg ${SEP_RUN}` } })
+    assert.ok(!raw.includes(SEP_RUN), 'the run survived in the fallback message')
+  })
+
+  it('a digit-free separator run is [token] in the rule, environment and every non-path tag', async () => {
+    const raw = await postedBodyRaw(
+      {
+        environment: `dev ${SEP_RUN}`,
+        tags: [
+          ['environment', `dev ${SEP_RUN}`],
+          ['level', `error ${SEP_RUN}`],
+          ['handled', `h ${SEP_RUN}`],
+          ['browser.name', `b ${SEP_RUN}`],
+          ['os.name', `o ${SEP_RUN}`],
+          ['device.family', `d ${SEP_RUN}`],
+        ],
+      },
+      `rule ${SEP_RUN}`,
+    )
+    assert.ok(!raw.includes(SEP_RUN), 'the run survived in the rule, environment or a tag')
+  })
+
+  it("the same run survives in a frame's function and filename and in the screen, route and transaction tags (accepted)", async () => {
+    const raw = await postedBodyRaw({
+      tags: [
+        ['screen', `/${SEP_RUN}`],
+        ['route', `/settings/${SEP_RUN}`],
+        ['transaction', `GET /v1/${SEP_RUN}/:id`],
+      ],
+      exception: {
+        values: [
+          {
+            type: 'E',
+            value: 'v',
+            stacktrace: {
+              frames: [{ filename: `src/features/${SEP_RUN}/index.ts`, function: SEP_RUN, lineno: 1, colno: 1, in_app: true }],
+            },
+          },
+        ],
+      },
+    })
+    const embed = JSON.parse(raw).embeds[0]
+    const stack = embed.fields.find((f) => f.name === 'Stack').value
+    const tags = embed.fields.find((f) => f.name === 'Tags').value
+    assert.ok(stack.includes(`${SEP_RUN}/index.ts`), 'the filename segment was redacted in a name position')
+    assert.ok(stack.includes(`  ${SEP_RUN}`), 'the function was redacted in a name position')
+    assert.ok(tags.includes(`screen=/${SEP_RUN}`), 'the screen tag was redacted')
+    assert.ok(tags.includes(`route=/settings/${SEP_RUN}`), 'the route tag was redacted')
+    assert.ok(tags.includes(`transaction=GET /v1/${SEP_RUN}/:id`), 'the transaction tag was redacted')
+  })
+
+  it('the real names still reach Discord in their name positions, and not through a free-text field', async () => {
+    // The F-27 suite already pins these; this one makes the position explicit
+    // so a reviewer can see the names are read from the Stack and Tags fields.
+    const raw = await postedBodyRaw({
+      title: 'plain title',
+      culprit: 'plain culprit',
+      tags: [['screen', '/NotificationSettings'], ['route', '/settings/notification-settings']],
+      exception: {
+        values: [
+          {
+            type: 'E',
+            value: 'v',
+            stacktrace: {
+              frames: [
+                {
+                  filename: 'src/features/notification-settings/preferences.ts',
+                  function: 'get_notification_preferences',
+                  lineno: 1,
+                  colno: 1,
+                  in_app: true,
+                },
+              ],
+            },
+          },
+        ],
+      },
+    })
+    const embed = JSON.parse(raw).embeds[0]
+    const stack = embed.fields.find((f) => f.name === 'Stack').value
+    const tags = embed.fields.find((f) => f.name === 'Tags').value
+    assert.ok(stack.includes('notification-settings/preferences.ts'), 'directory segment redacted')
+    assert.ok(stack.includes('get_notification_preferences'), 'function redacted')
+    assert.ok(tags.includes('screen=/NotificationSettings'), 'screen redacted')
+    assert.ok(tags.includes('route=/settings/notification-settings'), 'route redacted')
+  })
+
+  it('a snake_case name in the culprit is [token] there while the same function survives in the frame', async () => {
+    // culprit is Sentry's `path in function`; the owner classified it as free
+    // text. The name an alert needs still lands one line down, in the Stack.
+    const raw = await postedBodyRaw({
+      culprit: 'app/notifications.ts in get_notification_preferences',
+      exception: {
+        values: [
+          {
+            type: 'E',
+            value: 'v',
+            stacktrace: {
+              frames: [{ filename: 'app/notifications.ts', function: 'get_notification_preferences', lineno: 1, colno: 1, in_app: true }],
+            },
+          },
+        ],
+      },
+    })
+    const embed = JSON.parse(raw).embeds[0]
+    assert.ok(embed.description.includes('app/notifications.ts in \\[token\\]'), `culprit kept the name: ${embed.description}`)
+    assert.ok(embed.fields.find((f) => f.name === 'Stack').value.includes('get_notification_preferences'))
+  })
+
+  it('a digit-bearing run is [token] / [id] in both positions', async () => {
+    const DIGIT_RUN = 'qwrtpsdfghjk7lzxcvbnmQWRT'
+    const raw = await postedBodyRaw({
+      title: `t ${DIGIT_RUN}`,
+      tags: [['screen', `/${DIGIT_RUN}`]],
+      exception: {
+        values: [
+          {
+            type: 'E',
+            value: 'v',
+            stacktrace: { frames: [{ filename: `src/${DIGIT_RUN}.ts`, function: DIGIT_RUN, lineno: 1, colno: 1, in_app: true }] },
+          },
+        ],
+      },
+    })
+    assert.ok(!raw.includes(DIGIT_RUN))
+    assert.ok(!raw.includes('qwrtpsdfghjk7'))
+  })
+
+  it('a letters-only run of 24 survives in free text — the admission that predates F-27, unchanged', async () => {
+    const raw = await postedBodyRaw({ title: `t ${LETTER_RUN}` })
+    assert.ok(raw.includes(LETTER_RUN))
+  })
+})
+
 describe('the cut backs over whitespace before it drops a run (Astra F-24a)', () => {
   // `RE_GEO` allows whitespace around the comma, so `lat , lng` is a pair the
   // rule redacts — and when character 400 falls in that whitespace the slice
