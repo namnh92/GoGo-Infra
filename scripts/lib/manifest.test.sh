@@ -61,11 +61,12 @@ fi
 # The default output must stay backend-only now that a third namespace exists.
 # --- store signing material (GoGo-Infra#231) --------------------------------
 #
-# The keystore and the App Store Connect key are the two credentials whose loss
-# or leak is not recoverable by rotation: one is the identity every installed
-# Android copy checks an update against, the other uploads builds as us. They
-# are `ci` rows for the same reason as the Sentry upload token, and this pins
-# that the reason holds — nothing renders them anywhere.
+# Both upload as us: the App Store Connect key to TestFlight, the Android
+# keystore to Play (an *upload* key — Play App Signing re-signs releases with
+# the key Google holds, so neither is the signature an installed copy verifies,
+# and both are replaceable). A leak is still someone shipping builds as GoGo.
+# They are `ci` rows for the same reason as the Sentry upload token, and this
+# pins that the reason holds — nothing renders them anywhere.
 
 store_rows="$(python3 "$READER" prod --namespace ci --consumer pipeline | awk -F'\t' '$1 ~ /^store\// { print $1 }')"
 if [[ "$(echo "$store_rows" | grep -c .)" == 8 ]]; then

@@ -201,14 +201,19 @@ runbook, including what is unrecoverable, is in
 | What | Account | Created where | Kill switch | SSM row |
 | --- | --- | --- | --- | --- |
 | App Store Connect API key (role App Manager) | Apple Developer Program — owner's Apple account | App Store Connect → Users and Access → Integrations → App Store Connect API | Revoke the key there; uploads stop, the published app is untouched | `store/apple-asc-key` + `store/apple-asc-key-id` + `store/apple-asc-issuer-id` |
-| Android release keystore | GoGo's own — not an account | `keytool` on the owner's machine, once | none — see below | `store/android-keystore` + `…-keystore-password` + `…-key-alias` + `…-key-password` |
+| Android **upload** keystore | GoGo's own — not an account | `keytool` on the owner's machine (PKCS12, RSA-2048), once | Play Console → App integrity → request an upload key reset | `store/android-keystore` + `…-keystore-password` + `…-key-alias` + `…-key-password` |
 | Play Developer API service account (release management on the GoGo app only) | Google Cloud project + Play Console, owner's account | Google Cloud IAM, then invited in Play Console → Users and permissions | Delete the key in Google Cloud IAM, or remove the account's Play permission | `store/play-service-account` |
 
-The keystore has **no kill switch and no rotation**: it is the signature every installed Android copy
-checks an update against, so revoking it would end updates for those installs and replacing it makes
-a different app as far as Play is concerned. The SSM row is a working copy; the owner's own off-machine
-backup is the backup. The Apple key and the Play key are both replaceable — create the new one, ship
-one build with it, then revoke or delete the old.
+All three are replaceable. The Android keystore is the **upload key**: Play App Signing — mandatory for
+apps created since August 2021 — means Google holds the app signing key and re-signs every release, so
+losing the upload key is a Play Console reset rather than the end of updates. Keep a backup anyway: the
+reset is support-mediated. The Apple key and the Play service-account key are replaced the usual way —
+create the new one, ship one build with it, then revoke or delete the old.
+
+Two consequences worth writing down before the Play account exists: the Maps certificate SHA-1 to
+register (GoGo-MobileApp#351 AC-4) is the **app signing key's**, from Play Console → App integrity, not
+this keystore's; and if the owner opts out of Play App Signing at account creation, this keystore
+becomes the app signing key and the row turns irreplaceable. Confirm which on GoGo-Infra#231.
 
 Not stored: an Apple team id (an App Store Connect API key authenticates without one and fastlane
 reads the team from it), and no Apple ID password or session cookie anywhere — the API key exists so

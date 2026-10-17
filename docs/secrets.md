@@ -364,20 +364,37 @@ before any value is read, so a typo stops the lane instead of starting it half-c
 process and `exec` replaces the shell, so nothing outlives the lane — no `export` in your shell, no
 `.env`, nothing written into `android/` or `ios/`.
 
-**Two of these are not recoverable by rotation.** Treat them differently from every other row here:
+**What each one costs if it is lost or leaked** — read this before the commands:
 
 | | Lost | Leaked |
 | --- | --- | --- |
-| `store/android-keystore` (+ its two passwords) | Every installed Android copy checks an update against this signature. Without it there is no way to ship an update to those installs short of a Play App Signing key reset. | Anyone can sign an artifact that Android accepts as ours. |
+| `store/android-keystore` (+ its passwords) — the **upload key** | Recoverable: Play Console → request an upload key reset, then sign with the new one. Updates to installed copies are not affected, because Play re-signs every release with the **app signing key** it holds. | Someone who also reaches the Play account can upload builds as us. Reset the upload key; nothing already installed is at risk. |
 | `store/apple-asc-key` | Create another key in App Store Connect; nothing is lost. | Anyone can upload builds as us until the key is revoked. |
 | `store/play-service-account` | Create another key for the same service account. | Anyone can publish to our Play tracks until the key is deleted in Google Cloud IAM. |
 
-So: the SSM row is a working copy, not the backup. The keystore must also exist in the owner's own
-backup, off this machine and off this repository.
+**The keystore here is the upload key, not the signature installed copies verify.** Play App Signing
+is mandatory for apps created on Play since August 2021, so GoGo's **app signing key is generated and
+held by Google**; what this keystore does is authenticate uploads. That is the whole reason the row is
+recoverable, and it has two consequences the lanes depend on:
+
+- A lost or compromised upload key is a Play Console reset, not the end of updates. Keep a backup
+  anyway — a reset is support-mediated and slow — but do not treat this row as irreplaceable.
+- The certificate SHA-1 to register for Maps (GoGo-MobileApp#351 AC-4) is the **app signing key's**,
+  from Play Console → Test and release → App integrity — *not* this keystore's. A build installed
+  from any Play track carries Google's signature, so registering the upload key's SHA-1 leaves the map
+  grey with `Authorization failure` in logcat.
+
+**Confirm this at account creation.** The Play Console account does not exist yet (GoGo-MobileApp#21,
+owner). If the owner opts out of Play App Signing, or imports an existing app signing key, this table
+inverts: the keystore then *is* the signature installed copies check, loss ends updates for them, and
+the row must be treated as irreplaceable. Say which it is on #231 when the account exists.
 
 ### Creating and storing them
 
-The owner creates every value; nothing here generates one.
+The owner creates every value; nothing here generates one. Every command below writes to `prod`, so
+`put.sh` asks for typed confirmation — it reads that answer from the terminal, not from stdin, so the
+redirections here deliver the file rather than being eaten as the answer (fixed on #232, Sol F-02; the
+interactive branch reads a single line and cannot take a multi-line key at all).
 
 1. **App Store Connect API key** — App Store Connect → Users and Access → Integrations → App Store
    Connect API → generate a key with role *App Manager*. The `.p8` downloads **once**. Then, with the
@@ -389,19 +406,35 @@ The owner creates every value; nothing here generates one.
    ./scripts/secrets/put.sh prod store/apple-asc-issuer-id   # prompts: the issuer UUID
    ```
 
-2. **Android release keystore** — generated once, then never again for this app:
+2. **Android upload keystore** — generated once:
 
    ```bash
-   keytool -genkeypair -v -keystore gogo-release.jks -alias gogo \
-     -keyalg RSA -keysize 4096 -validity 10000
-   base64 -i gogo-release.jks | ./scripts/secrets/put.sh prod store/android-keystore
+   keytool -genkeypair -v -keystore gogo-upload.p12 -storetype PKCS12 -alias gogo \
+     -keyalg RSA -keysize 2048 -validity 10000
+   base64 -i gogo-upload.p12 | ./scripts/secrets/put.sh prod store/android-keystore
    ./scripts/secrets/put.sh prod store/android-keystore-password
    ./scripts/secrets/put.sh prod store/android-key-alias        # `gogo` above
-   ./scripts/secrets/put.sh prod store/android-key-password
+   ./scripts/secrets/put.sh prod store/android-key-password     # same value as the store password
    ```
 
-   Back up `gogo-release.jks` and its passwords outside this machine **before** deleting the local
-   file.
+   Two details that the obvious command gets wrong:
+
+   - **PKCS12, not JKS.** `keytool` has defaulted to PKCS12 since JDK 9 and writes PKCS12 whatever
+     the file is called, so a `.jks` name is a lie about the format. PKCS12 has **one** password —
+     `keytool` refuses a key password that differs from the store password — so both rows carry the
+     same value, and `keytool -keypasswd` does not apply. The two rows stay separate because
+     fastlane reads both names, and because a future JKS keystore could differ.
+   - **RSA-2048, not 4096.** Play requires at least 2048. A Standard-tier SSM parameter holds 4 KiB
+     and `put.sh` pins that tier; base64 of a 4096-bit keystore lands close to or over that ceiling,
+     so `put.sh` would refuse it (it now says so in bytes rather than failing inside `aws`).
+
+   Verify the round trip before deleting anything local, and keep a backup off this machine:
+
+   ```bash
+   ./scripts/secrets/get.sh prod store/android-keystore | base64 -d > /tmp/rt.p12
+   keytool -list -v -keystore /tmp/rt.p12 -storetype PKCS12   # same SHA-256 fingerprint
+   rm -f /tmp/rt.p12
+   ```
 
 3. **Play service account** — Google Cloud → IAM → service account, then Play Console → Users and
    permissions → invite it with *release management* on the GoGo app only. Download the JSON key:
@@ -419,9 +452,12 @@ Readiness reports them as a group: `validate.sh prod --strict --include-planned`
   App Store Connect. Revoking is also the kill switch — it stops uploads without touching the app.
 - **Play service account key:** create a new key, store it, upload once, then delete the old key in
   Google Cloud IAM. Removing the account's Play permission is the kill switch.
-- **Keystore:** not rotated. A new keystore is a new app signature, which Play treats as a different
-  app. Only the passwords can change (`keytool -storepasswd`, `keytool -keypasswd`), and the
-  keystore row must be re-uploaded afterwards because the file changes.
+- **Upload keystore:** rotated through Play, not locally. Generate a new keystore, then Play Console →
+  Test and release → App integrity → *request upload key reset* and upload its certificate; releases
+  signed with the old one are refused once the reset takes effect. Re-upload both the keystore row and
+  its password rows. The **app signing key** is Google's and is not rotated by us at all. Changing
+  only the password (`keytool -storepasswd`, which for PKCS12 changes the single password) also means
+  re-uploading the keystore row, because the file changes.
 
 ### Who may read them
 

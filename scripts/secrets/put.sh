@@ -123,6 +123,17 @@ fi
 
 [[ -n "$value" ]] || die "empty value refused"
 
+# Standard-tier parameters hold 4 KiB, and the request below pins that tier. An
+# oversize value otherwise fails inside `aws` with a message about the API, not
+# about the file the operator just piped in — and the base64 of a release
+# keystore sits close enough to the ceiling to matter (GoGo-Infra#231, Sol F-04).
+value_bytes="$(printf '%s' "$value" | wc -c | tr -d ' ')"
+if (( value_bytes > 4096 )); then
+  die "value is ${value_bytes} bytes; a Standard-tier parameter holds 4096.
+       Shrink it (an RSA-2048 keystore instead of 4096) or move this row to the
+       Advanced tier deliberately — it is billed per parameter per month."
+fi
+
 # The value goes to the CLI in a file, not in an argument.
 #
 # The header above promises the value never reaches a command line, and until

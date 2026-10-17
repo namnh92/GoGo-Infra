@@ -32,6 +32,10 @@ cat >"${SANDBOX}/aws" <<'STUB'
 #!/usr/bin/env bash
 [[ -n "${CALLS:-}" ]] || { echo "stub: CALLS unset" >&2; exit 97; }
 echo "aws $*" >>"$CALLS"
+# GoGo-Infra#231, Sol F-01: a later fetch must not inherit an earlier secret.
+for v in SENTRY_AUTH_TOKEN ASC_KEY_CONTENT ASC_KEY_ID ASC_ISSUER_ID; do
+  [[ -n "${!v:-}" ]] && echo "aws-inherited $v" >>"$CALLS"
+done
 case "$1 $2" in
   "sts get-caller-identity") echo '{}' ;;
   "ssm get-parameter")
@@ -136,6 +140,11 @@ if grep -qF "$VALUE" "${SANDBOX}/out" || grep -qF "$VALUE" "$CALLS"; then
   bad "no value of the set is printed or passed as an argument" "found in output or aws argv"
 else
   ok "no value of the set is printed or passed as an argument"
+fi
+if grep -q "^aws-inherited" "$CALLS"; then
+  bad "no fetch inherits a credential already fetched" "$(grep '^aws-inherited' "$CALLS")"
+else
+  ok "no fetch inherits a credential already fetched"
 fi
 
 refuses "no -- separator" "usage: exec-with.sh" dev sentry/mobile-auth-token child extra

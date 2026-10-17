@@ -109,6 +109,12 @@ fi
 confirm_prod "$ENVIRONMENT" "hand ${PARAM_PATHS[*]} to a command"
 require_aws
 
+# Fetch everything first, hold it unexported, and export only once every read
+# has succeeded. Exporting inside the loop would put the first credential into
+# the environment of the `aws` process that fetches the second — and of whatever
+# credential helper or plugin that process starts (GoGo-Infra#231, Sol F-01).
+# Shell variables are not inherited; exported ones are.
+VALUES=()
 for ((i = 0; i < ${#PARAM_PATHS[@]}; i++)); do
   full_path="$(ssm_prefix "$ENVIRONMENT" "${NAMESPACES[i]:-backend}")/${PARAM_PATHS[i]}"
 
@@ -121,8 +127,13 @@ for ((i = 0; i < ${#PARAM_PATHS[@]}; i++)); do
   fi
   [[ -n "$value" && "$value" != "None" ]] || die "${full_path} is empty"
 
-  export "${ENV_VARS[i]}=${value}"
+  VALUES+=("$value")
   unset value
 done
 unset full_path
+
+for ((i = 0; i < ${#PARAM_PATHS[@]}; i++)); do
+  export "${ENV_VARS[i]}=${VALUES[i]}"
+done
+unset VALUES
 exec "$@"
