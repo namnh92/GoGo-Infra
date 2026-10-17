@@ -307,11 +307,16 @@ describe('delivery (shape D-4/D-8)', () => {
     assert.equal(discordCalls[0].url, `${WEBHOOKS.DISCORD_WEBHOOK_CMS}?wait=true`)
   })
 
-  it('a 2xx without a saved message id is discord_failed 502 (F-08)', async () => {
-    discordAnswering(() => new Response('', { status: 204 }))
+  it('a 2xx without a saved message id is 502 to Sentry, discord_unconfirmed (F-08, SA F-31)', async () => {
+    // `new Response('', { status: 204 })` used to stand here — a null-body
+    // status with a body throws inside the fake, so the test exercised the
+    // thrown-fetch path and never the branch it named. A 200 with an empty
+    // body reaches it: Discord answered, the answer carries no message.
+    discordAnswering(() => new Response('', { status: 200 }))
     const res = await call(eventAlertBody(), {})
     assert.equal(res.status, 502)
-    assert.equal(logged.at(-1).outcome, 'discord_failed')
+    assert.equal(logged.at(-1).outcome, 'discord_unconfirmed')
+    assert.equal(logged.at(-1).discord_status, 200)
   })
 
   it('refuses to follow a redirect: 3xx is 502 discord_redirect (F-20)', async () => {
@@ -1679,5 +1684,294 @@ describe('the cut backs over whitespace before it drops a run (Astra F-24a)', ()
     // The cut cannot tell a finished word from the first half of a pair, so
     // the word goes; the `…` says something was cut.
     assert.equal(scrub(`${'x'.repeat(394)} abcd  more`), `${'x'.repeat(394)}…`)
+  })
+})
+
+/* ───── regressions from the SA find round on PR #233 @312610c (F-28, F-31, F-32, F-33, F-34, F-37, F-41) ───── */
+
+describe('a control character is a boundary and only the first line leaves, in every field (SA F-28, P0)', () => {
+  // Control characters were deleted — a splice, not a separator — so the
+  // two-line message `OTP send failed⏎0912345678` became one word, the phone
+  // rule's left boundary saw a letter, and eleven digits (below the token
+  // rule) were published. And firstLine() had been applied to the exception
+  // value and the fallback message but never to `title`, which for a message
+  // event is the whole logged text. Both halves now live in scrub() itself.
+  const LF = String.fromCharCode(10)
+  const TAB = String.fromCharCode(9)
+  const SOH = String.fromCharCode(1)
+  const LSEP = String.fromCharCode(0x2028)
+  const PHONE = '0912345678'
+
+  const postedBodyRaw = async (eventOverrides, rule) => {
+    discordAnswering(savedMessage)
+    const res = await call(eventAlertBody({ event: eventOverrides, rule }), {})
+    assert.equal(res.status, 200)
+    return discordCalls[0].init.body
+  }
+
+  it('a phone number on the second line of the title leaves in no field', async () => {
+    const raw = await postedBodyRaw({ title: `OTP send failed${LF}${PHONE}` })
+    assert.ok(!raw.includes(PHONE), 'the phone number on line two was published')
+    assert.match(JSON.parse(raw).embeds[0].title, /OTP send failed$/)
+  })
+
+  it('…and on the second line of the culprit, type, value, rule, environment, release, every tag and a frame', async () => {
+    const two = (head) => `${head}${LF}${PHONE}`
+    const raw = await postedBodyRaw(
+      {
+        title: two('t'),
+        culprit: two('c'),
+        environment: two('dev'),
+        release: two('gogo-be@abc'),
+        exception: {
+          values: [
+            {
+              type: two('E'),
+              value: two('v'),
+              stacktrace: { frames: [{ filename: two('a.ts'), function: two('f'), lineno: 1, colno: 1, in_app: true }] },
+            },
+          ],
+        },
+        tags: [
+          ['environment', two('dev')],
+          ['release', two('rel')],
+          ['transaction', two('/x')],
+          ['browser.name', two('b')],
+          ['os.name', two('o')],
+          ['device.family', two('d')],
+          ['screen', two('/s')],
+          ['route', two('/r2')],
+          ['handled', two('h')],
+          ['level', two('error')],
+        ],
+      },
+      two('rule'),
+    )
+    assert.ok(!raw.includes(PHONE), 'the second line of some field was published')
+  })
+
+  it('a control character between a letter and a phone number is a boundary the phone rule sees', async () => {
+    const raw = await postedBodyRaw({ title: `failed${TAB}${PHONE}`, culprit: `failed${SOH}${PHONE}` })
+    assert.ok(!raw.includes(PHONE))
+    const embed = JSON.parse(raw).embeds[0]
+    assert.ok(embed.title.includes('\\[phone\\]'), `title: ${embed.title}`)
+    assert.ok(embed.description.includes('\\[phone\\]'), `description: ${embed.description}`)
+  })
+
+  it('a path-template segment split by a control or a line terminator is [id] whole, never a fragment', async () => {
+    // Joining `123<NUL>456` into `123456` was Sol F-01's fix and the same
+    // splice; cutting at the terminator would publish `123`. The segment is
+    // replaced whole instead.
+    // Asserted on the Tags value: the fixture's release SHA contains `123456`.
+    const raw = await postedBodyRaw({ tags: [['transaction', `/plans/123${LSEP}456/edit`], ['screen', `/s/123${LF}456`]] })
+    const tags = JSON.parse(raw).embeds[0].fields.find((f) => f.name === 'Tags').value
+    assert.ok(!tags.includes('123'), `a fragment of the id was published: ${tags}`)
+    const hostile = new RegExp(`[${String.fromCharCode(0)}-${String.fromCharCode(0x1f)}${LSEP}${String.fromCharCode(0x2029)}]`)
+    for (const line of tags.split(String.fromCharCode(10))) assert.ok(!hostile.test(line), 'a control or terminator reached the Tags field')
+    assert.match(tags, /transaction=\/plans\/\\\[id\\\]\/edit/)
+    assert.match(tags, /screen=\/s\/\\\[id\\\]$/m)
+  })
+})
+
+describe('the credential-path markers are case-insensitive (SA F-32)', () => {
+  // `RE_CRED_PATH` had no `i` and the frame pre-pass compared markers
+  // case-sensitively, while `RE_CRED_QUERY` had `gi`: `/R/AbCdEfGhIj` and
+  // `/INVITE/AbCdEfGhIj` were published — ten characters, below the token
+  // rule — and `?CODE=AbCdEfGhIj` was redacted.
+  const CODE = 'AbCdEfGhIj'
+  const postedBodyRaw = async (eventOverrides) => {
+    discordAnswering(savedMessage)
+    const res = await call(eventAlertBody({ event: eventOverrides }), {})
+    assert.equal(res.status, 200)
+    return discordCalls[0].init.body
+  }
+
+  for (const marker of ['R', 'L', 'INVITE', 'SHARE-LINKS']) {
+    it(`/${marker}/<code> in a title and an exception value is redacted`, async () => {
+      const raw = await postedBodyRaw({
+        title: `GET /${marker}/${CODE} failed`,
+        exception: {
+          values: [{ type: 'E', value: `at /${marker}/${CODE}`, stacktrace: { frames: [{ filename: 'a.ts', function: 'f', lineno: 1, colno: 1, in_app: true }] } }],
+        },
+      })
+      assert.ok(!raw.includes(CODE), `the code after /${marker}/ was published`)
+    })
+
+    it(`/${marker}/<code> in a frame path, deep and in the kept tail, is seen by the pre-pass`, async () => {
+      const raw = await postedBodyRaw({
+        exception: {
+          values: [
+            {
+              type: 'E',
+              value: 'v',
+              stacktrace: {
+                frames: [
+                  { filename: `/${marker}/${CODE}/src/app.js`, function: 'f', lineno: 1, colno: 1, in_app: true },
+                  { filename: `src/${marker}/${CODE}.tsx`, function: 'g', lineno: 2, colno: 2, in_app: true },
+                ],
+              },
+            },
+          ],
+        },
+      })
+      assert.ok(!raw.includes(CODE), `the code after /${marker}/ was published from a frame`)
+    })
+  }
+})
+
+describe('the release exemption admits a SHA, not any run (SA F-33)', () => {
+  // `keepLongRuns` switched the token rule off for the whole field, and the
+  // code never checked the contract it was justified by: a forged release —
+  // the DSN is public — carried a 22-character run through untested. The
+  // release position now keeps a run only when it is letters-only (the floor
+  // every field has) or a lowercase hex run of a SHA's length.
+  const FORGED = 'Ab12Cd34Ef56Gh78Ij90Kl'
+  const SHA = '5658159abcdef0123456789abcdef012345678'
+
+  it('a forged 22-character run with digits is [token] in the Release field and the release tag', async () => {
+    discordAnswering(savedMessage)
+    await call(eventAlertBody({ event: { release: FORGED, tags: [['release', FORGED]] } }), {})
+    const raw = discordCalls[0].init.body
+    assert.ok(!raw.includes(FORGED), 'a forged release run was published')
+    const fields = JSON.parse(raw).embeds[0].fields
+    assert.equal(fields.find((f) => f.name === 'Release').value, '\\[token\\]')
+    assert.match(fields.find((f) => f.name === 'Tags').value, /release=\\\[token\\\]/)
+  })
+
+  it('the deploy SHA still survives in both, bare and as gogo-be@<sha>', async () => {
+    discordAnswering(savedMessage)
+    await call(eventAlertBody({ event: { release: `gogo-be@${SHA}`, tags: [['release', SHA]] } }), {})
+    const fields = JSON.parse(discordCalls[0].init.body).embeds[0].fields
+    // `@` is markdown-escaped on the way out (D-6); the SHA itself is whole.
+    assert.equal(fields.find((f) => f.name === 'Release').value, `gogo-be\\@${SHA}`)
+    assert.match(fields.find((f) => f.name === 'Tags').value, new RegExp(`release=${SHA}`))
+  })
+})
+
+describe('the Tags field is one line per key, bounded by the allowlist (SA F-34)', () => {
+  it('forty thousand `environment` pairs inside 1 MiB produce one line carrying the last value, in time', async () => {
+    // Before: one line per pair, no dedupe, no cap, and a fitting loop that
+    // rebuilt the whole join once per dropped line.
+    const tags = Array.from({ length: 40000 }, (_, i) => ['environment', `e${i % 10}`])
+    const body = eventAlertBody({ event: { tags } })
+    assert.ok(Buffer.byteLength(body) < 1048576, 'the body must stay under the length guard to reach the builder')
+    discordAnswering(savedMessage)
+    const started = Date.now()
+    const res = await call(body, {})
+    assert.equal(res.status, 200)
+    assert.ok(Date.now() - started < 2000, 'forty thousand tag pairs must not take seconds')
+    const value = JSON.parse(discordCalls[0].init.body).embeds[0].fields.find((f) => f.name === 'Tags').value
+    assert.equal(value, 'environment=e9')
+  })
+
+  it('the last value for a key wins and keeps the position of its first appearance', async () => {
+    discordAnswering(savedMessage)
+    await call(eventAlertBody({ event: { tags: [['handled', 'no'], ['environment', 'a'], ['level', 'error'], ['environment', 'b']] } }), {})
+    const value = JSON.parse(discordCalls[0].init.body).embeds[0].fields.find((f) => f.name === 'Tags').value
+    assert.equal(value, 'handled=no\nenvironment=b\nlevel=error')
+  })
+})
+
+describe('a project id that arrives as a decimal string is still routed (SA F-37)', () => {
+  // The id's type is read from Sentry's docs, not captured. As a string it
+  // failed Number.isInteger, every alert took the unknown_project branch,
+  // Sentry's tab showed 204 — a success — and every channel went quiet.
+  it('"4512201628254209" posts to the BE webhook and logs BE', async () => {
+    discordAnswering(savedMessage)
+    const res = await call(eventAlertBody({ project: String(PROJECT_BE) }), {})
+    assert.equal(res.status, 200)
+    assert.equal(discordCalls[0].url, `${WEBHOOKS.DISCORD_WEBHOOK_BE}?wait=true`)
+    assert.equal(logged.at(-1).project, 'BE')
+  })
+
+  for (const [label, project] of [
+    ['a non-decimal string', 'abc'],
+    ['a padded string', ` ${PROJECT_BE}`],
+    ['a non-integer number', PROJECT_BE + 0.5],
+    ['a decimal string outside the map', '999'],
+    ['a prototype property name', 'constructor'],
+  ]) {
+    it(`${label} is unknown_project, never a default channel`, async () => {
+      discordAnswering(savedMessage)
+      const res = await call(eventAlertBody({ project }), {})
+      assert.equal(res.status, 204)
+      assert.equal(discordCalls.length, 0)
+      assert.equal(logged.at(-1).outcome, 'unknown_project')
+    })
+  }
+})
+
+describe('a completed 2xx whose answer cannot be read is discord_unconfirmed, not discord_failed (SA F-31)', () => {
+  // Both are 502 to Sentry (D-4: a 2xx with no message id is not a save the
+  // relay can vouch for), but A-4 has to count how many of those 502s were
+  // false — the message may well be in the channel. A request that never
+  // completed stays discord_failed.
+  it('a 200 with a body that is not JSON', async () => {
+    discordAnswering(() => new Response('not json', { status: 200 }))
+    const res = await call(eventAlertBody(), {})
+    assert.equal(res.status, 502)
+    assert.deepEqual([logged.at(-1).outcome, logged.at(-1).discord_status], ['discord_unconfirmed', 200])
+  })
+
+  it('a 200 whose body is read past the deadline (the read throws)', async () => {
+    discordAnswering(() => ({
+      status: 200,
+      ok: true,
+      headers: new Headers(),
+      json: async () => {
+        throw new Error('aborted at the deadline')
+      },
+    }))
+    const res = await call(eventAlertBody(), {})
+    assert.equal(res.status, 502)
+    assert.deepEqual([logged.at(-1).outcome, logged.at(-1).discord_status], ['discord_unconfirmed', 200])
+  })
+
+  it('a request that never completed is still discord_failed with no status', async () => {
+    discordAnswering(new Error('connection reset'))
+    const res = await call(eventAlertBody(), {})
+    assert.equal(res.status, 502)
+    assert.deepEqual([logged.at(-1).outcome, logged.at(-1).discord_status], ['discord_failed', null])
+  })
+})
+
+describe('the 6000 total is always met: fields blank in a stated order after the description floor (SA F-41)', () => {
+  const synthetic = () => ({
+    title: 'T'.repeat(256),
+    description: 'D'.repeat(100),
+    fields: ['Environment', 'Release', 'Rule', 'Tags', 'Stack'].map((name) => ({ name, value: 'v'.repeat(1024), inline: true })),
+    footer: { text: `issue 1 · event ${'e'.repeat(32)}` },
+  })
+  const totalOf = (embed) =>
+    embed.title.length + embed.description.length + embed.footer.text.length + embed.fields.reduce((n, f) => n + f.name.length + f.value.length, 0)
+
+  it('when the description floor cannot absorb the excess, Tags then Stack are blanked and the total is under the limit', () => {
+    // Before: the description went to `…` and the over-limit embed was
+    // returned; Discord answered 400 and the relay reported discord_failed.
+    const embed = synthetic()
+    assert.ok(totalOf(embed) > 4000)
+    fitTotal(embed, 4000)
+    assert.ok(totalOf(embed) <= 4000, `total ${totalOf(embed)}`)
+    assert.equal(embed.description, '…')
+    const value = (name) => embed.fields.find((f) => f.name === name).value
+    assert.equal(value('Tags'), '…')
+    assert.equal(value('Stack'), '…')
+    assert.equal(value('Rule').length, 1024, 'Rule is blanked only after Tags and Stack')
+    assert.equal(value('Release').length, 1024)
+    assert.equal(value('Environment').length, 1024)
+  })
+
+  it('with every field blanked the embed is under any limit the title and footer leave', () => {
+    const embed = synthetic()
+    fitTotal(embed, 400)
+    assert.ok(totalOf(embed) <= 400, `total ${totalOf(embed)}`)
+    for (const f of embed.fields) assert.equal(f.value, '…')
+  })
+
+  it('an embed already under the limit is untouched', () => {
+    const embed = synthetic()
+    const before = JSON.stringify(embed)
+    fitTotal(embed, 6000)
+    assert.equal(JSON.stringify(embed), before)
   })
 })

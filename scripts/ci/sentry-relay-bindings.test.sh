@@ -17,13 +17,45 @@
 # below always runs, on an inline fixture, so CI proves the check catches what
 # it claims to catch from the day the guard ships.
 #
+# The skip is allowed only when the relay is genuinely absent from Terraform.
+# A skip that cannot be told from "the module landed under another name" is
+# no guard (SA F-36), so two states fail instead of skipping: the module
+# directory exists without a readable main.tf, or anything under terraform/
+# or config/*.tfvars mentions `sentry_relay_host` / `cloudflare-sentry-relay`
+# while there is no module main.tf to check.
+#
 #   ./scripts/ci/sentry-relay-bindings.test.sh            module + self-test
 #   ./scripts/ci/sentry-relay-bindings.test.sh <main.tf>  that file only
 
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-MODULE="${REPO_ROOT}/terraform/modules/cloudflare-sentry-relay/main.tf"
+MODULE_REL="terraform/modules/cloudflare-sentry-relay/main.tf"
+MODULE="${REPO_ROOT}/${MODULE_REL}"
+RELAY_REF='sentry_relay_host|cloudflare-sentry-relay'
+
+# relay_references <root> — files under <root>/terraform and <root>/config/*.tfvars
+# that mention the relay, one per line.
+relay_references() {
+  {
+    [[ -d "$1/terraform" ]] && grep -rlE "$RELAY_REF" "$1/terraform"
+    [[ -d "$1/config" ]] && grep -lE "$RELAY_REF" "$1"/config/*.tfvars 2>/dev/null
+  } | sort -u
+}
+
+# module_state <root> — present | unreadable | referenced | absent
+module_state() {
+  local dir="$1/terraform/modules/cloudflare-sentry-relay"
+  if [[ -r "$dir/main.tf" ]]; then
+    echo present
+  elif [[ -e "$dir" ]]; then
+    echo unreadable
+  elif [[ -n "$(relay_references "$1")" ]]; then
+    echo referenced
+  else
+    echo absent
+  fi
+}
 
 # block <file> <resource-type> <resource-name> — that resource's body, located
 # only after every HCL comment form is stripped (same approach as
@@ -103,22 +135,65 @@ fi
 
 failures=0
 
-if [[ -f "$MODULE" ]]; then
-  if out="$(check "$MODULE")"; then
-    echo "  ok    the relay script ignores bindings, keeps secrets, logs nothing, serves no workers.dev"
-  else
-    printf '  FAIL  %s\n%s\n' "$MODULE" "$out"
+case "$(module_state "$REPO_ROOT")" in
+  present)
+    if out="$(check "$MODULE")"; then
+      echo "  ok    the relay script ignores bindings, keeps secrets, logs nothing, serves no workers.dev"
+    else
+      printf '  FAIL  %s\n%s\n' "$MODULE" "$out"
+      failures=$((failures + 1))
+    fi
+    ;;
+  unreadable)
+    echo "  FAIL  $(dirname "$MODULE_REL")/ exists but ${MODULE_REL} is missing or unreadable —"
+    echo "        the module landed under another file name or shape, and a skip here would guard nothing"
     failures=$((failures + 1))
-  fi
-else
-  echo "  skip  ${MODULE#"${REPO_ROOT}"/} does not exist yet — it lands in PR-2 of GoGo-Infra#221"
-  echo "        (this guard fails hard the moment the module exists without its controls;"
-  echo "        the self-test below runs regardless)"
-fi
+    ;;
+  referenced)
+    echo "  FAIL  terraform/ or config/*.tfvars references the relay (${RELAY_REF}) while ${MODULE_REL}"
+    echo "        does not exist — nothing to check, so this is not a skip:"
+    relay_references "$REPO_ROOT" | sed "s|^${REPO_ROOT}/|          |"
+    failures=$((failures + 1))
+    ;;
+  absent)
+    echo "  skip  ${MODULE_REL} does not exist yet — it lands in PR-2 of GoGo-Infra#221"
+    echo "        (nothing under terraform/ or config/*.tfvars mentions the relay; this guard fails"
+    echo "        hard the moment it does, or the module exists without its controls; the"
+    echo "        self-test below runs regardless)"
+    ;;
+esac
 
 # Self-test on an inline fixture: every mutation must make the check fail.
 SCRATCH="$(mktemp -d)"
 trap 'rm -rf "$SCRATCH"' EXIT
+
+# The skip decision itself, on scratch roots: a skip is only ever printed for
+# `absent`, and each of the other three states is told apart (SA F-36).
+expect_state() { # expect_state <name> <root> <expected>
+  local got
+  got="$(module_state "$2")"
+  if [[ "$got" == "$3" ]]; then
+    echo "  ok    module_state: $1 → $3"
+  else
+    echo "  FAIL  module_state: $1 → $got (expected $3)"
+    failures=$((failures + 1))
+  fi
+}
+mkdir -p "$SCRATCH/absent/terraform/modules" "$SCRATCH/absent/config"
+printf 'cms_host = "x"\n' >"$SCRATCH/absent/config/dev.tfvars"
+expect_state "no module, no reference" "$SCRATCH/absent" absent
+mkdir -p "$SCRATCH/unreadable/terraform/modules/cloudflare-sentry-relay"
+printf 'variable "host" {}\n' >"$SCRATCH/unreadable/terraform/modules/cloudflare-sentry-relay/variables.tf"
+expect_state "module directory without main.tf" "$SCRATCH/unreadable" unreadable
+mkdir -p "$SCRATCH/ref-tfvars/terraform/modules" "$SCRATCH/ref-tfvars/config"
+printf 'sentry_relay_host = "sentry-relay-dev.example"\n' >"$SCRATCH/ref-tfvars/config/dev.tfvars"
+expect_state "tfvars names the host, no module" "$SCRATCH/ref-tfvars" referenced
+mkdir -p "$SCRATCH/ref-root/terraform/environments/dev"
+printf 'module "sentry_relay" {\n  source = "../../modules/cloudflare-sentry-relay"\n}\n' >"$SCRATCH/ref-root/terraform/environments/dev/main.tf"
+expect_state "root wiring names the module, no module" "$SCRATCH/ref-root" referenced
+mkdir -p "$SCRATCH/present/terraform/modules/cloudflare-sentry-relay"
+printf 'resource "x" "y" {}\n' >"$SCRATCH/present/terraform/modules/cloudflare-sentry-relay/main.tf"
+expect_state "module main.tf present" "$SCRATCH/present" present
 
 FIXTURE="${SCRATCH}/fixture.tf"
 cat >"$FIXTURE" <<'EOF'

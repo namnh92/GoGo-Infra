@@ -236,8 +236,9 @@ verifies an HMAC signature, keeps a closed list of fields (title, culprit, excep
 the newest 8 frames as file · function · line:col · in_app, the allowed tags, environment, release, rule, the
 Sentry link, issue and event ids), scrubs every value, and posts one embed. **No source lines** (owner decision
 2026-10-17), no `user`, `request`, `contexts` or `breadcrumbs`. A Discord failure is answered to Sentry as 502 on
-purpose, so it lands on the integration's *Webhook Requests* tab and feeds the circuit breaker that emails the
-owner organisation — that tab is the delivery detector.
+purpose, so it lands on the integration's *Webhook Requests* tab — that tab, read by a person, is the delivery
+detector and the only one: Sentry's circuit breaker counts only its own 5 s hard timeout, so the relay's 502s never
+trip it or the email it would send (ADR-0013 D-4).
 
 Credentials, when they exist (`docs/sentry-discord-relay.md` is the runbook, including which leak is revoked
 where): the integration's Client Secret and three Discord channel webhook URLs, all SecureString under

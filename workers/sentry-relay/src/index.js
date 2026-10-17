@@ -10,10 +10,16 @@
  *
  * A Discord failure is answered to Sentry as 502 on purpose. Sentry does not
  * retry an issue-alert webhook, so the message is lost either way — but a
- * non-2xx lands on the integration's Webhook Requests tab and feeds Sentry's
- * per-integration circuit breaker, which emails the owner org when it opens.
- * That tab and that email are the delivery detector; this Worker keeps no
- * state and no queue (shape D-4/D-8).
+ * non-2xx lands on the integration's Webhook Requests tab, which is the
+ * delivery detector. It is the only one: Sentry's per-integration circuit
+ * breaker counts nothing but its own 5 s hard timeout as an error
+ * (`utils/sentry_apps/circuit_breaker.py:26-28`), so a 502 answered inside
+ * the budget never trips it and its owner email never fires for this relay
+ * (shape D-4/D-8, rev 2.5). This Worker keeps no state and no queue.
+ *
+ * Every answer to Sentry is a bare status: `new Response(null, …)` and nothing
+ * else. The response body would be the Worker's second egress — into Sentry's
+ * own request log — and the no-payload-logging guard pins that it stays empty.
  *
  * Logging: `logStatus` below is the only function that may call console.*,
  * and it emits enums and regex-validated identifiers only — never a title, a
@@ -107,6 +113,7 @@ const LEVEL_COLOUR = {
 const OUTCOMES = new Set([
   'posted',
   'discord_failed',
+  'discord_unconfirmed',
   'discord_redirect',
   'webhook_rejected',
   'rate_limited',
@@ -237,7 +244,11 @@ const CRED_MARKERS = new Set(['r', 'l', 'invite', 'share-links'])
 // so no code can wear it (ADR-0011 D-9, oracle C-24) — and it is the basename
 // of exactly the frames an invite-code bug produces. Kept, with its extension.
 const RE_ROUTE_PARAM = /^\[[A-Za-z]+\](?:\.[A-Za-z0-9]+)?$/
-const RE_CRED_PATH = /(\/(?:r|l|invite|share-links)\/)[A-Za-z0-9_-]+/g
+// Case-insensitive, like the query rule next to it and the webhook-URL guard's
+// host match: `/R/AbCdEfGhIj` and `/INVITE/AbCdEfGhIj` were published while
+// `?CODE=AbCdEfGhIj` was redacted — ten characters, below the token rule, so
+// nothing else caught them (SA F-32).
+const RE_CRED_PATH = /(\/(?:r|l|invite|share-links)\/)[A-Za-z0-9_-]+/gi
 const RE_CRED_QUERY = /([?&](?:code|invite|token|slug|guest|lat|lng|latitude|longitude)=)[^&#\s]*/gi
 const RE_GEO = /-?\d{1,3}\.\d{3,}\s*,\s*-?\d{1,3}\.\d{3,}/g
 // Boundaries on both sides. Without the left one the rule fires on ten digits
@@ -245,13 +256,41 @@ const RE_GEO = /-?\d{1,3}\.\d{3,}\s*,\s*-?\d{1,3}\.\d{3,}/g
 // still fires on a SHA that merely *starts* with them (Sol F-17) — the digits
 // of `gogo-be@0123456789abcdef…` are not a phone number.
 const RE_PHONE = /(?<![A-Za-z0-9])(?:\+84|0)\d{9,10}(?![A-Za-z0-9])/g
-const RE_CONTROL = /[\u0000-\u001F\u007F]/g
+/**
+ * C0 and C1 controls plus DEL. A run of them becomes ONE SPACE, never nothing:
+ * deleting them spliced the neighbours together, so a two-line message
+ * `OTP send failed<LF>0912345678` became the one word
+ * `OTP send failed0912345678`, the phone rule's left boundary saw a letter,
+ * and the number was published — eleven digits, below the token rule, so no
+ * other rule saw it either (SA F-28, P0). A control character is a boundary,
+ * the same boundary the whitespace it usually is already makes; the halves of
+ * a run split by one are two runs, exactly as if split by a space.
+ */
+const RE_CONTROL_RUN = /[\u0000-\u001F\u007F-\u009F]+/g
 /**
  * Every line terminator, not just LF. A value whose second line is separated by
  * a bare CR (or U+2028, which JSON carries literally) would otherwise reach
  * Discord whole when only its first line was meant to (Sol F-04).
  */
 const RE_LINE_BREAK = /[\n\r\u0085\u2028\u2029]/
+/**
+ * A path-template segment that carries a control or a line terminator is not
+ * a segment any router produced: it is replaced whole, not joined and not
+ * cut. Joining `123<NUL>456` into `123456` was Sol F-01's fix and is the
+ * splice F-28 names; cutting at the terminator would publish `123`, a
+ * fragment (the F-18 class). Fail toward redaction instead.
+ */
+const RE_HOSTILE_SEGMENT = /[\u0000-\u001F\u007F-\u009F\u2028\u2029]/
+/**
+ * A hex run of a SHA's length. The one shape the `release` position admits
+ * past the token rule: a release is `gogo-be@<40-hex>` (ADR-0012a D-1), the
+ * CMS deployed SHA (ADR-0011 D-3) or Mobile's `<bundle>@<version>+<build>`,
+ * which carries no 20+ run at all. The exemption used to switch the rule off
+ * for the whole field, so a forged release — the DSN is public — carried any
+ * 22-character run through untested (SA F-33).
+ */
+const RE_HEX_SHA = /^[0-9a-f]{7,40}$/
+const isPlainWordOrSha = (run) => isPlainWord(run) || RE_HEX_SHA.test(run)
 
 /** The first line of a value, under every line-terminator convention. */
 export function firstLine(value) {
@@ -259,24 +298,25 @@ export function firstLine(value) {
 }
 
 /**
- * Scrub V1. Applied to every relayed string. Two options, both opt-in, both
- * narrowing the token-run rule only — every other rule and the caps always
- * apply: `keepLongRuns` switches the rule off (rev 2.1: the `release`
- * field/tag is the deploy SHA by contract — ADR-0012a D-1 / ADR-0011 D-3 —
- * and would otherwise always print as `[token]`); `names` marks a name
- * position, where a run that is a name survives (RE_NAME) instead of only a
- * letters-only run (RE_RANDOM_MARK). The default is the strict test, so a
- * field someone relays later fails toward redaction (rev 2.4).
+ * Scrub V1. Applied to every relayed string, and every relayed string is ONE
+ * LINE: the first line is taken here, before anything else, so no caller can
+ * forget it — `title` had been forgotten, and a message-event title carries
+ * the whole logged text, both lines of it (SA F-28). Two options, both
+ * opt-in, both narrowing the token-run rule only — every other rule and the
+ * caps always apply: `release` admits a hex run of a SHA's length (RE_HEX_SHA;
+ * rev 2.1 exempted the field from the rule outright, rev 2.5 narrows it to
+ * the shape a release has); `names` marks a name position, where a run that
+ * is a name survives (RE_NAME) instead of only a letters-only run
+ * (RE_RANDOM_MARK). The default is the strict test, so a field someone relays
+ * later fails toward redaction (rev 2.4).
  */
-export function scrub(value, { keepLongRuns = false, names = false } = {}) {
-  const whole = String(value).normalize('NFC').replace(RE_CONTROL, '')
+export function scrub(value, { release = false, names = false } = {}) {
+  const whole = firstLine(String(value).normalize('NFC')).replace(RE_CONTROL_RUN, ' ')
   let s = whole.length > SCRUB_INPUT_CAP ? cutAtRunBoundary(whole) : whole
   s = s.replace(RE_EMAIL, '[email]')
   s = s.replace(RE_JWT, '[token]')
-  if (!keepLongRuns) {
-    const keep = names ? isName : isPlainWord
-    s = s.replace(RE_TOKEN_RUN, (run) => (keep(run) ? run : '[token]'))
-  }
+  const keep = release ? isPlainWordOrSha : names ? isName : isPlainWord
+  s = s.replace(RE_TOKEN_RUN, (run) => (keep(run) ? run : '[token]'))
   s = s.replace(RE_CRED_PATH, '$1[redacted]')
   s = s.replace(RE_CRED_QUERY, '$1[redacted]')
   s = s.replace(RE_GEO, '[geo]')
@@ -292,19 +332,23 @@ export function scrub(value, { keepLongRuns = false, names = false } = {}) {
  * end to end: the joined template is scrubbed with `names: true` too, or a
  * 20+ kebab segment the segment test kept would be eaten by the run rule.
  *
- * Control characters and the query/fragment come off BEFORE classification
- * (Sol F-01). A segment reading `123<control>456` or `123456?view=map` is not
- * literally a run of digits, so it would survive classification and then be
- * published as the bare id once the control was stripped. The query is dropped
- * rather than relayed: it is not part of a route template, and in a transaction
- * name it is exactly where ids and codes live.
+ * The query/fragment comes off BEFORE classification (Sol F-01): `123456?view=map`
+ * is not literally a run of digits, so it would survive classification and
+ * then be published as the bare id. The query is dropped rather than relayed:
+ * it is not part of a route template, and in a transaction name it is exactly
+ * where ids and codes live. A segment carrying a control character or a line
+ * terminator is classified `[id]` whole (RE_HOSTILE_SEGMENT): Sol F-01's first
+ * fix joined `123<NUL>456` into `123456` by deleting the control, which is
+ * the splice SA F-28 names, and a space there would read `123 456` as a kept
+ * segment. Nothing hostile survives to the joined scrub, so its first-line
+ * cut has nothing to cut.
  */
 export function scrubPathTemplate(value) {
-  const cleaned = String(value).normalize('NFC').replace(RE_CONTROL, '')
-  const path = cleaned.split(/[?#]/)[0]
+  const path = String(value).normalize('NFC').split(/[?#]/)[0]
   const templated = path
     .split('/')
     .map((seg) => {
+      if (RE_HOSTILE_SEGMENT.test(seg)) return '[id]'
       if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(seg)) return '[id]'
       if (/^[A-Za-z0-9_-]{16,}$/.test(seg) && !isName(seg)) return '[id]'
       if (/^\d{6,}$/.test(seg)) return '[id]'
@@ -381,19 +425,29 @@ const TAG_ALLOWLIST = new Set([
 ])
 const PATH_TEMPLATE_TAGS = new Set(['transaction', 'route', 'screen'])
 
-/** `tags` arrives as [[k, v], …]; an object is tolerated, anything else is empty. */
+/**
+ * `tags` arrives as [[k, v], …]; an object is tolerated, anything else is
+ * empty. One line per allowlisted key, the last value wins, in the order the
+ * keys first appeared — so the list is at most TAG_ALLOWLIST.size lines by
+ * construction, and the dedupe runs on the raw values BEFORE any scrub. A
+ * signed body carrying `environment` forty thousand times fits inside the
+ * 1 MiB limit; it used to produce forty thousand scrubbed lines and a fitting
+ * loop that rebuilt the join once per dropped line (SA F-34).
+ */
 function allowedTags(raw) {
   const pairs = Array.isArray(raw)
     ? raw.filter((p) => Array.isArray(p) && p.length >= 2)
     : raw && typeof raw === 'object'
       ? Object.entries(raw)
       : []
-  const out = []
+  const last = new Map()
   for (const [k, v] of pairs) {
     if (typeof k !== 'string' || !TAG_ALLOWLIST.has(k) || typeof v !== 'string') continue
-    const scrubbed = PATH_TEMPLATE_TAGS.has(k)
-      ? scrubPathTemplate(v)
-      : scrub(v, { keepLongRuns: k === 'release' })
+    last.set(k, v)
+  }
+  const out = []
+  for (const [k, v] of last) {
+    const scrubbed = PATH_TEMPLATE_TAGS.has(k) ? scrubPathTemplate(v) : scrub(v, { release: k === 'release' })
     out.push(`${k}=${capWrapped(wrapUrls(escapeMarkdown(scrubbed)), 120)}`)
   }
   return out
@@ -427,7 +481,8 @@ function frameLine(frame) {
   // placeholder (RE_ROUTE_PARAM). The full path is never handed to scrub(),
   // whose 400-character cut would eat it; this loop is linear.
   for (let i = 0; i + 1 < all.length; i += 1) {
-    if (CRED_MARKERS.has(all[i]) && !RE_ROUTE_PARAM.test(all[i + 1])) all[i + 1] = '[redacted]'
+    // Case-folded: `/INVITE/<code>` is the same marker (SA F-32).
+    if (CRED_MARKERS.has(all[i].toLowerCase()) && !RE_ROUTE_PARAM.test(all[i + 1])) all[i + 1] = '[redacted]'
   }
   const segments = all.slice(-3).map((seg) => (seg.length > FILE_SEGMENT_CAP ? '…' : seg))
   // Scrubbed as one string: the credential-path rule needs `/r/<value>` across
@@ -496,7 +551,9 @@ export function stackBlock(event, limit = FIELD_VALUE_MAX) {
  * The Tags value is a join of lines each already capped without breaking a
  * wrapper; the generic field cap cut through one anyway, in the join (Sol
  * F-06). So the field is fitted by whole lines and says how many it left out.
- * One line is at most 134 characters, so at least one always fits.
+ * One line is at most 134 characters, so at least one always fits; and there
+ * are at most TAG_ALLOWLIST.size lines (allowedTags dedupes by key), so the
+ * rebuild-per-dropped-line loop below is bounded by a constant (SA F-34).
  */
 function joinTagLines(lines, limit = FIELD_VALUE_MAX) {
   for (let kept = lines.length; kept >= 0; kept -= 1) {
@@ -508,10 +565,23 @@ function joinTagLines(lines, limit = FIELD_VALUE_MAX) {
 }
 
 /**
+ * Fields are blanked to `…` in this order once the description is at its
+ * floor: the ones a reader can recover from the Sentry link first, the ones
+ * that say which deploy and where last.
+ */
+const FIELD_DROP_ORDER = ['Tags', 'Stack', 'Rule', 'Release', 'Environment']
+
+/**
  * Discord's 6000-character total is ours to enforce, not Discord's to reject:
- * shrink the description first, it is the only free-text block. Through
- * buildEmbed() the component caps sum to about 3100, so this is a guard that
- * no event reaches; `max` is a parameter so the test can (Sol F-14).
+ * shrink the description first, it is the only free-text block; when it is
+ * down to `…` and the total is still over, blank field values in
+ * FIELD_DROP_ORDER, each to `…`. The floor alone could not always fasten the
+ * belt — it returned an over-limit embed, Discord answered 400 and the relay
+ * reported `discord_failed`, while ADR-0013 said Discord never rejects for
+ * size (SA F-41). With every field at `…` the total is the title, the footer
+ * and the field names: under 400, so this always terminates under the limit.
+ * Through buildEmbed() the component caps sum to about 3100, so this is a
+ * guard that no event reaches; `max` is a parameter so the test can (Sol F-14).
  */
 export function fitTotal(embed, max = EMBED_TOTAL_MAX) {
   const total = () =>
@@ -522,20 +592,28 @@ export function fitTotal(embed, max = EMBED_TOTAL_MAX) {
   if (total() > max) {
     embed.description = truncate(embed.description, Math.max(1, embed.description.length - (total() - max)))
   }
+  for (const name of FIELD_DROP_ORDER) {
+    if (total() <= max) break
+    const field = embed.fields.find((f) => f.name === name && f.value !== '…')
+    if (field) field.value = '…'
+  }
   return embed
 }
 
-/** The thrown exception's type and first-line value, or the log message. */
+/**
+ * The thrown exception's type and value, or the log message. Every value is
+ * one line: scrub() takes the first line of whatever it is handed.
+ */
 function headline(event) {
   const values = Array.isArray(event.exception?.values) ? event.exception.values : []
   const thrown = values.length ? values[values.length - 1] : null
   if (thrown && typeof thrown === 'object') {
     const type = text(thrown.type, 80)
-    const value = text(firstLine(str(thrown.value)), 200)
+    const value = text(thrown.value, 200)
     if (type || value) return `${type}${type && value ? ': ' : ''}${value}`
   }
   const message = str(event.logentry?.formatted) || str(event.logentry?.message) || str(event.message)
-  if (message) return `message: ${text(firstLine(message), 300)}`
+  if (message) return `message: ${text(message, 300)}`
   return ''
 }
 
@@ -567,7 +645,7 @@ export function buildEmbed(event, triggeredRule, projectLabel) {
     if (value) embed.fields.push({ name, value: truncate(value, FIELD_VALUE_MAX), inline })
   }
   field('Environment', text(event.environment, 64))
-  field('Release', text(event.release, 100, { keepLongRuns: true }))
+  field('Release', text(event.release, 100, { release: true }))
   field('Rule', text(triggeredRule, 100))
   field('Tags', joinTagLines(allowedTags(event.tags)))
   const stack = stackBlock(event)
@@ -614,6 +692,13 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
  * One POST, `?wait=true` so a 2xx carries the saved message (F-08), redirects
  * refused (F-20), at most one 429 retry (F-17). Everything else is a drop that
  * the caller answers to Sentry as 502 (F-06).
+ *
+ * Two outcomes behind that 502 are kept apart for A-4 (SA F-31): a request
+ * that never completed (`discord_failed` — thrown fetch, timeout, deadline
+ * passed, or a status Discord answered that is not a save) and a request that
+ * completed with a 2xx whose answer could not be read or carried no message
+ * id (`discord_unconfirmed`) — the message may well be in the channel, and the
+ * 502 Sentry sees for it is a false failure A-4 has to count.
  *
  * The deadline is absolute (Astra F-22): every attempt's timeout is the
  * smaller of DISCORD_TIMEOUT_MS and what is left before t0 +
@@ -668,7 +753,7 @@ export async function postToDiscord(webhookUrl, body, t0) {
     }
     if (message && typeof message.id === 'string' && /^[0-9]+$/.test(message.id))
       return { outcome: 'posted', status: response.status }
-    return { outcome: 'discord_failed', status: response.status }
+    return { outcome: 'discord_unconfirmed', status: response.status }
   }
   return { outcome: 'discord_failed', status: response.status }
 }
@@ -713,7 +798,18 @@ async function relay(parsed, resource, env, t0) {
 
   const data = parsed?.data && typeof parsed.data === 'object' ? parsed.data : {}
   const event = data.event && typeof data.event === 'object' ? data.event : {}
-  const channel = Number.isInteger(event.project) ? PROJECT_CHANNEL[event.project] : undefined
+  // The project id's type is read from Sentry's docs, not captured. If it ever
+  // arrives as the string "4512201628254209", an integer-only check sends
+  // every alert down the unknown_project branch: 204 to Sentry, a success on
+  // its tab, nothing in any channel, and nothing to notice it by (SA F-37). A
+  // decimal string is coerced; the lookup is still the closed map, keyed by
+  // its own properties only.
+  const projectKey = Number.isInteger(event.project)
+    ? String(event.project)
+    : typeof event.project === 'string' && /^[0-9]{1,20}$/.test(event.project)
+      ? event.project
+      : null
+  const channel = projectKey !== null && Object.hasOwn(PROJECT_CHANNEL, projectKey) ? PROJECT_CHANNEL[projectKey] : undefined
   if (!channel) {
     logStatus('unknown_project', resource, 'unknown', null, null, null)
     return new Response(null, { status: 204 })

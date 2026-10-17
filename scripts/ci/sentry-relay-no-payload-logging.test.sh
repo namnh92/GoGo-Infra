@@ -16,7 +16,12 @@
 #   3. every logStatus( call site passes, for each argument, either a quoted
 #      member of the D-9 enums, or one of the allowed identifiers
 #      (resource, projectLabel, safeIssueId, safeEventId, discordStatus,
-#      status, null).
+#      status, null);
+#   4. every `new Response(` in the Worker passes `null` as its body. The
+#      response is the Worker's second egress — into Sentry's own request log
+#      on the Webhook Requests tab, a destination no D-7 addendum covers — and
+#      "the body is never echoed" (shape D-3) had no guard while the logging
+#      invariant had two (SA F-35).
 #
 # With no argument it checks the shipped Worker and then proves itself: each
 # mutation of a copy must make the check fail. With an argument it checks that
@@ -71,7 +76,7 @@ for name in ("event", "payload", "body", "frames", "title", "tags", "headers", "
 
 # 3. call sites pass enums or the allowed identifiers only.
 ENUMS = {
-    "posted", "discord_failed", "discord_redirect", "webhook_rejected",
+    "posted", "discord_failed", "discord_unconfirmed", "discord_redirect", "webhook_rejected",
     "rate_limited", "unknown_project", "ignored", "bad_signature", "no_secret",
     "not_provisioned", "malformed", "relay_error", "too_large", "not_found",
     "event_alert", "installation", "other", "BE", "CMS", "MOBILE", "unknown",
@@ -86,6 +91,17 @@ for call in re.finditer(r"logStatus\s*\(([^)]*)\)", before + after):
                 failures.append(f"call site passes a literal outside the enums: {arg}")
         elif arg not in ALLOWED_IDENTS:
             failures.append(f"call site passes a disallowed expression: {arg}")
+
+# 4. every answer to Sentry is a bare status: the first argument of every
+#    `new Response(` is the literal `null`. Lexical, like check 1, so a body
+#    built any other way (`new Response(text, …)`, `new Response(JSON…`) is
+#    refused whatever it would have contained.
+responses = list(re.finditer(r"\bnew\s+Response\s*\(\s*([^,)]*?)\s*[,)]", src))
+if not responses:
+    failures.append("missing: no `new Response(` found — the Worker must answer with one")
+for r in responses:
+    if r.group(1) != "null":
+        failures.append(f"a Response carries a body: new Response({r.group(1)!r}, …)")
 
 for f in failures:
     print(f"  missing/violation: {f}")
@@ -160,6 +176,15 @@ mutate "a call site passing a literal outside the enums" \
 mutate "no logStatus at all" \
   'function logStatus' \
   'function logStatusGone'
+mutate "a Response that echoes the parsed body" \
+  'new Response\(null, \{ status: 500 \}\)' \
+  'new Response(JSON.stringify(parsed), { status: 500 })'
+mutate "a Response that carries a text body" \
+  'new Response\(null, \{ status: 400 \}\)' \
+  'new Response("malformed", { status: 400 })'
+mutate "a Response built without the literal null" \
+  'new Response\(null, \{ status: 404 \}\)' \
+  'new Response(body, { status: 404 })'
 
 if [[ "$failures" -gt 0 ]]; then
   echo "${failures} relay logging check(s) failed."
