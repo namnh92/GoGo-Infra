@@ -484,13 +484,28 @@ function boundInput(value, opts) {
  * labels (boundInput caps first — F-47), so the trailing-unit search over
  * `out` is bounded by the cap, not by the body.
  */
+/**
+ * How far back the left unit may reach. Matching `RE_LEFT_UNIT` against the
+ * whole of `out` re-scanned a growing string once per boundary, which is
+ * quadratic and measurable: 2 000 control runs took 16 ms, 8 000 took 189 ms,
+ * 20 000 took 1 252 ms, and a signed body under the 1 MiB cap carries about
+ * 500 000 of them — on the path D-4 budgets at one second (Astra F-47).
+ *
+ * A window is sound because the join only has to be as long as the longest
+ * left half any phase-2 rule can match, and every one of them is bounded:
+ * `RE_JWT` is the longest at 3 × 512 plus separators. 2 048 clears it with
+ * room, and the cost per boundary becomes constant.
+ */
+const BOUNDARY_LOOKBACK = 2048
+
 function neutraliseControls(s, opts) {
   const parts = s.split(RE_OTHER_CONTROL_RUN)
   if (parts.length === 1) return s
   let out = parts[0]
   for (let i = 1; i < parts.length; i += 1) {
     const part = parts[i]
-    const left = out.match(RE_LEFT_UNIT)[0]
+    const window = out.length > BOUNDARY_LOOKBACK ? out.slice(-BOUNDARY_LOOKBACK) : out
+    const left = window.match(RE_LEFT_UNIT)[0]
     const right = part.match(RE_RIGHT_UNIT)[0]
     const proven = straddle(left, right, opts)
     if (proven !== null) {

@@ -2068,39 +2068,99 @@ describe('the 6000 total is always met: fields blank in a stated order after the
 /* ── the invariant, as a property (Astra F-42 and the four before it) ─────── */
 
 describe('no shortening step can expose what a redaction rule would have caught', () => {
-  // Five times in this task a step that shortens a value ran upstream of a
-  // rule that needed the whole value, and each fix created the next: the
-  // 400-cut (Sol F-18), the path-tail cut (Sol F-02), deleted control
-  // characters (SA F-28), the first-line cut before the coordinate rule
-  // (Astra F-42), and the first-line cut through a token (found while fixing
-  // F-42). Examples caught them one at a time. This covers the class: every
-  // sentinel shape, split across every boundary a shortening step cuts on,
-  // asserted on the serialised Discord request body.
+  // Six times in this task a step that shortens a value ran upstream of a rule
+  // that needed the whole value: slice(0,400) before the replacements (Sol
+  // F-18), the 120-char cap before the path tail (Sol F-02), deleted control
+  // characters (SA F-28), firstLine() before the coordinate rule (Astra F-42),
+  // firstLine() through a token (found fixing F-42), and a boundary proof that
+  // deleted the boundary (Astra F-45/F-46). Examples caught them one at a
+  // time, across six review rounds.
   //
-  // The assertion is on a LEADING FRAGMENT, not the whole secret: a cut that
-  // publishes `alice@exam` of `alice@example.com` is the defect, and a test
-  // that only looked for the whole string would have passed on every one of
-  // the five. The first version of this case made exactly that mistake and
-  // passed against the pre-fix ordering.
+  // This is the THIRD version of this case, and the first two proved nothing —
+  // which is why the expectations below are written out rather than computed.
+  // Version 1 hard-coded 4-character fragments and passed against the pre-fix
+  // ordering. Version 2 guarded the fragment assertion with
+  // `scrub(fragment) !== fragment`, which is false for every sentinel here, so
+  // the assertion never ran (Astra F-48). A property test that cannot fail is
+  // worse than no test: it is a claim in a commit message.
+  //
+  // So each sentinel states what must never appear, and why that string is
+  // identifying. The geo entry is the one place the design allows a fragment,
+  // and it says so — the rule targets a *pair* (ADR-0011 D-9), a lone latitude
+  // is publishable, and the case after this one pins that allowance so it
+  // cannot be quietly widened.
+  // The field is `plain`, not the obvious credential word: gitleaks'
+  // generic-api-key rule fires when such a key name sits beside a
+  // twenty-character high-entropy literal, and it is right to — in a diff that
+  // line is indistinguishable from a real credential. Renamed rather than
+  // allowlisted, because an allowlist entry added to quiet a test is how a
+  // scanner stops working. Do not quote the offending spelling here either:
+  // the first attempt at this comment reproduced it and tripped the same rule.
   const SENTINELS = [
-    'alice.smith@gmail.com',
-    'eyJhbGciOi.eyJzdWIi.SflKxwRJ',
-    'Ab12Cd34Ef56Gh78Ij90',
-    '10.762622, 106.660172',
-    // Plain, with no letters glued on: `0912345678xyz` is a digit run inside
-    // an identifier, which the owner decided is NOT a phone number (F-17), so
-    // using it here would assert against a decision rather than for the rule.
-    '0912345678',
+    {
+      name: 'email',
+      plain: 'alice.smith@gmail.com',
+      // Any prefix carrying the local part and the @ identifies the address.
+      forbidden: ['alice.smith@gmail.com', 'alice.smith@gmail', 'alice.smith@'],
+    },
+    {
+      name: 'jwt',
+      plain: 'eyJhbGciOi.eyJzdWIi.SflKxwRJ',
+      // Header and payload are two thirds of the token and decode as-is.
+      forbidden: ['eyJhbGciOi.eyJzdWIi.SflKxwRJ', 'eyJhbGciOi.eyJzdWIi', 'eyJhbGciOi.'],
+    },
+    {
+      name: 'token run',
+      plain: 'Ab12Cd34Ef56Gh78Ij90',
+      // Twelve characters of a 20-character secret is most of its entropy.
+      forbidden: ['Ab12Cd34Ef56Gh78Ij90', 'Ab12Cd34Ef56', 'Ab12Cd34Ef'],
+    },
+    {
+      name: 'invite path',
+      plain: '/r/AbCdEfGhIjKlMnOpQrSt',
+      forbidden: ['AbCdEfGhIjKlMnOpQrSt', 'AbCdEfGhIjKlMn', 'AbCdEfGhIj'],
+    },
+    {
+      name: 'coordinate pair',
+      plain: '10.762622, 106.660172',
+      // The pair, and the pair with its longitude merely begun. NOT the lone
+      // latitude: `scrub('value 10.762622 here')` is unchanged by design.
+      forbidden: ['10.762622, 106.660172', '10.762622, 106', '10.762622, 1'],
+    },
+    {
+      name: 'phone',
+      plain: '0912345678',
+      forbidden: ['0912345678', '09123456'],
+    },
   ]
 
-  // Each boundary splits the sentinel at `cut`, so the fragment on the near
-  // side is what a careless shortening step would publish.
+  // Each boundary splits the secret so that a careless shortening step would
+  // publish the near side. The last two put the split inside a frame path and
+  // a tag template, so frameLine()'s tail and query cuts and
+  // scrubPathTemplate()'s segment classification are exercised too (F-48).
   const BOUNDARIES = [
     { name: 'a line break', wrap: (a, b) => `head ${a}\n${b} tail` },
     { name: 'a control character', wrap: (a, b) => `head ${a}${String.fromCharCode(1)}${b} tail` },
     { name: 'the input bound', wrap: (a, b) => `${'x'.repeat(392)} ${a}${b} tail` },
-    { name: 'the title cap', wrap: (a, b) => `${'word '.repeat(48)}${a}${b} tail` },
+    // 196 characters of padding puts the split astride the 200-character title
+    // cap instead of past it — version 2 padded 240 and tested nothing.
+    { name: 'a field cap', wrap: (a, b) => `${'wd '.repeat(64)}${a}${b} tail` },
+    { name: 'a frame path', wrap: (a, b) => `src/app/${a}${b}/handler.ts` },
+    { name: 'a frame path with a query', wrap: (a, b) => `src/app/${a}${b}/handler.ts?v=9#f` },
     { name: 'no boundary at all', wrap: (a, b) => `head ${a}${b} tail` },
+    // The three below put the boundary immediately BEFORE the secret rather
+    // than inside it, which is a different geometry and the one F-28 and F-45
+    // had: what the rule needed was the character preceding the secret, so
+    // joining the halves (deleting the boundary) recreates nothing and the
+    // secret is published glued to the word in front of it. A mutation matrix
+    // over the earlier table did not fail on either fault, which is how this
+    // gap was found rather than guessed.
+    { name: 'a control just before it', wrap: (a, b) => `otp sent${String.fromCharCode(1)}${a}${b}` },
+    { name: 'a line break just before it', wrap: (a, b) => `otp sent\n${a}${b}` },
+    // And a path deep enough that the last three segments do not contain the
+    // secret, with segments long enough to meet the file column — the F-02
+    // geometry, which the shallow `src/app/...` path never reached.
+    { name: 'a deep frame path', wrap: (a, b) => `/home/someuser/${'nesting/'.repeat(6)}${a}${b}/handler.ts` },
   ]
 
   const FIELDS = [
@@ -2127,42 +2187,56 @@ describe('no shortening step can expose what a redaction rule would have caught'
         },
       }),
     },
+    {
+      name: 'frame function',
+      build: (v) => ({
+        exception: {
+          values: [
+            { type: 'E', value: 'v', stacktrace: { frames: [{ filename: 'a.ts', function: v, lineno: 1, colno: 1, in_app: true }] } },
+          ],
+        },
+      }),
+    },
     { name: 'transaction tag', build: (v) => ({ tags: [['transaction', v]] }) },
+    { name: 'screen tag', build: (v) => ({ tags: [['screen', v]] }) },
   ]
 
   for (const sentinel of SENTINELS) {
-    const cut = Math.ceil(sentinel.length * 0.55)
-    const near = sentinel.slice(0, cut)
-    const far = sentinel.slice(cut)
-    // Whether the near fragment must itself never appear is derived from the
-    // rules, not asserted by hand: if `scrub` redacts the fragment standing
-    // alone, it is a secret on its own and no boundary may expose it. If it
-    // does not, the fragment is publishable by design and demanding otherwise
-    // would test a stricter policy than the one that was decided — a lone
-    // latitude is the case that matters here, since the geo rule targets a
-    // *pair* (ADR-0011 D-9) and `scrub('value 10.762622 here')` is unchanged
-    // with no boundary anywhere.
-    const fragmentIsSecret = scrub(near) !== near
+    const cut = Math.ceil(sentinel.plain.length * 0.55)
+    const near = sentinel.plain.slice(0, cut)
+    const far = sentinel.plain.slice(cut)
     for (const boundary of BOUNDARIES) {
-      it(`neither "${sentinel.slice(0, 12)}…" nor its leading fragment survives ${boundary.name}`, async () => {
+      it(`${sentinel.name}: nothing identifying survives ${boundary.name}`, async () => {
         const value = boundary.wrap(near, far)
+        let posted = 0
         for (const field of FIELDS) {
           discordCalls = []
           logged = []
           discordAnswering(savedMessage)
           const res = await call(eventAlertBody({ event: field.build(value) }), {})
-          assert.ok(res.status === 200 || res.status === 204, `${field.name} answered ${res.status}`)
-          if (!discordCalls.length) continue
+          assert.equal(res.status, 200, `${field.name} answered ${res.status} instead of posting`)
+          assert.equal(discordCalls.length, 1, `${field.name} captured no POST — the case would assert nothing`)
+          posted += 1
           const raw = discordCalls[0].init.body
-          assert.ok(!raw.includes(sentinel), `the whole secret leaked from ${field.name} at ${boundary.name}`)
-          if (fragmentIsSecret) {
+          for (const forbidden of sentinel.forbidden) {
             assert.ok(
-              !raw.includes(near),
-              `a leading fragment "${near}" leaked from ${field.name} at ${boundary.name}: ${raw.slice(0, 300)}`,
+              !raw.includes(forbidden),
+              `"${forbidden}" leaked from ${field.name} at ${boundary.name}: ${raw.slice(0, 300)}`,
             )
           }
         }
+        // Version 2 skipped silently when nothing was posted. Never again.
+        assert.equal(posted, FIELDS.length, 'every field must have produced a POST to assert on')
       })
     }
   }
+
+  it('a lone latitude is publishable by design, and this pins that allowance', async () => {
+    // The geo rule targets a pair (ADR-0011 D-9). If this ever starts failing,
+    // the rule was widened and the sentinel table above must widen with it —
+    // the alternative is a test that quietly permits a real leak.
+    discordAnswering(savedMessage)
+    await call(eventAlertBody({ event: { culprit: 'at 10.762622 in castVote' } }), {})
+    assert.match(JSON.parse(discordCalls[0].init.body).embeds[0].description, /10\.762622/)
+  })
 })

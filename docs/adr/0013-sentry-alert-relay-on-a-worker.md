@@ -2,7 +2,7 @@
 
 **Status:** proposed — becomes accepted at merge; the session that merges PR #233 writes the merge SHA and the
 CODEOWNER date into this line (shape §5 step 6). SA shape: Fable,
-`dev/handoffs/sa-shape-infra-221-sentry-discord-relay.fable.md` rev 2.8 (workspace file). Every review round on the
+`dev/handoffs/sa-shape-infra-221-sentry-discord-relay.fable.md` rev 2.9 (workspace file). Every review round on the
 shape and on PR #233 — Astra rounds 1 and 2 on the shape, Sol rounds 1 and 2 on the code, the SA find round on the code and Astra's confirm round on it — and the owner's
 decisions of 2026-10-18 are dispositioned item by item in that file's §7 and §8; the decisions below are the result,
 not the history.
@@ -216,8 +216,14 @@ asserted on the serialised Discord request body.
 
 Two boundaries cannot be settled by ordering alone — a line break and a control run are where a phase-2 rule cannot
 reach, since the email, JWT, token-run and phone patterns all exclude whitespace. Each therefore proves itself:
-join the runs either side, put the join back through phase 2, and act on the answer. If it redacts, the boundary
-was interrupting one secret; if it does not, the runs are two things and ordinary multi-line text is untouched.
+join the runs either side (over comma-linked units, so a coordinate pair joins back to the pair it is), put the
+join back through phase 2, and act on the answer. If it redacts, the boundary was interrupting one secret and
+**both sides** are replaced — the boundary itself stays, because removing it published a phone number whose right
+boundary was the separator, and let a coordinate label swallow the line break so a name from line two was
+published (both P0, found in review). `RE_GEO` takes horizontal whitespace only for the same reason: no phase-2
+rule may cross the one boundary the shortening phase cuts on. The proof's lookback is bounded at 2 048 characters,
+above the longest left half any rule can match, because scanning the whole value per boundary was quadratic and
+measurable.
 
 The phone rule needs a non-alphanumeric boundary on **both** sides. Without the right one it redacts a release
 SHA that merely begins with ten digits. The accepted consequence: a digit run glued to letters is treated as an
@@ -305,7 +311,8 @@ accepted loss includes the channel, not only individual messages: a webhook that
 drops every **relay** message for that project until a person reads the tab (D-4; rev 2.5) — the stack traces, not
 the alerts, because the native action still posts (D-7). The one message the retry never carries is the
 `discord_unconfirmed` one — answered 200 so that a probable save is not posted four times (owner decision 2026-10-18,
-D-4) — so the loss also includes, with no tab row, the rare unconfirmed message Discord did not in fact save; its
+D-4) — so the loss also includes, behind a 200 row carrying no failure indication, the rare unconfirmed message
+Discord did not in fact save; its
 `discord_unconfirmed` status line is the only trace.
 
 **D-11 · The privacy addendum is accepted before the first `webhook` action exists.** ADR-0011 D-7 requires a dated

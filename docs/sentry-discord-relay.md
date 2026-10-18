@@ -153,7 +153,8 @@ record, not a lost alert · A-4 every request 2xx on the Webhook Requests tab ex
 Sentry's own retries of them (a 502 is retried three times, five minutes apart, each a new row), the response time per
 cell recorded against the 850 ms deadline, `posted` / `discord_failed` / `discord_unconfirmed` counted — and every
 `discord_unconfirmed` line checked against the channel: relay message present means the 200 was right, absent means a
-relay message lost with no tab row, recorded beside the native message that did arrive (the loss the owner accepted,
+relay message lost while the tab still shows a 200 with no failure indication, recorded beside the native message
+that did arrive (the loss the owner accepted,
 ADR-0013 D-4) — and `wrangler tail` showing status lines only · A-5 no source line,
 no `user`/`request`/`breadcrumbs` in a delivered message · A-6 a hostile title renders escaped, pings nobody,
 unfurls nothing, and the stack is still visible · A-7 `check-worker-subdomain.sh gogo-dev-sentry-relay` → `false,
