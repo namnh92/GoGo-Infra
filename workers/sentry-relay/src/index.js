@@ -202,6 +202,20 @@ const SCRUB_INPUT_CAP = 400
 // Disjoint classes (`[^\s,]`, `\s`, `,`), so the parse is unique and linear;
 // `\S+` inside the starred group would be exponential on `a,a,a,…,a X`.
 const RE_TRAILING_UNIT = /(?:[^\s,]+\s*,\s*)*[^\s,]*$/
+/**
+ * The two halves a boundary proof joins (neutraliseControls, cutAtLineBoundary):
+ * the text a phase-2 rule could have matched on ONE line up to the boundary,
+ * and from it. A unit is a run, or runs joined by commas with horizontal
+ * whitespace around them — RE_GEO's shape — plus the horizontal whitespace
+ * touching the boundary, so `10.762622 <LF>, 106.660172` joins back to the
+ * pair it is. A bare run was too narrow: the rev 2.8 proof joined `1` and
+ * `06.660172` out of `10.762622, 1<SOH>06.660172`, matched nothing, and
+ * published both halves (found in rev 2.9). Same disjoint classes as
+ * RE_TRAILING_UNIT, so no exponential path; neither crosses a line
+ * terminator, exactly as RE_GEO no longer does.
+ */
+const RE_LEFT_UNIT = /(?:[^\s,]+[^\S\n]*,[^\S\n]*)*[^\s,]*[^\S\n]*$/
+const RE_RIGHT_UNIT = /^[^\S\n]*[^\s,]*(?:[^\S\n]*,[^\S\n]*[^\s,]+)*/
 
 /**
  * The first SCRUB_INPUT_CAP characters, cut back to a run boundary, marked.
@@ -275,7 +289,12 @@ const RE_ROUTE_PARAM = /^\[[A-Za-z]+\](?:\.[A-Za-z0-9]+)?$/
 // nothing else caught them (SA F-32).
 const RE_CRED_PATH = /(\/(?:r|l|invite|share-links)\/)[A-Za-z0-9_-]+/gi
 const RE_CRED_QUERY = /([?&](?:code|invite|token|slug|guest|lat|lng|latitude|longitude)=)[^&#\s]*/gi
-const RE_GEO = /-?\d{1,3}\.\d{3,}\s*,\s*-?\d{1,3}\.\d{3,}/g
+// Horizontal whitespace only around the comma: `\s*` spanned a line break,
+// so `10.762622,<LF>106.660172 Alice Nguyen` became `[geo] Alice Nguyen` —
+// the label swallowed the one boundary phase 3 cuts on, and a name from line
+// two was published (Astra F-46, P0). A pair split by a line break is settled
+// by the phase-3 proof instead, like every other split secret (rev 2.9).
+const RE_GEO = /-?\d{1,3}\.\d{3,}[^\S\n]*,[^\S\n]*-?\d{1,3}\.\d{3,}/g
 // Boundaries on both sides. Without the left one the rule fires on ten digits
 // inside a 40-hex release SHA; without a non-alphanumeric right boundary it
 // still fires on a SHA that merely *starts* with them (Sol F-17) — the digits
@@ -295,14 +314,13 @@ const RE_CONTROL_RUN = /[\u0000-\u001F\u007F-\u009F]+/g
 /**
  * Phase 1 keeps line terminators and collapses every OTHER control run.
  *
- * A line terminator is a boundary two phases need: `RE_GEO`'s `\s*` spans one,
- * so `10.762622,<LF>106.660172` is still one coordinate pair in phase 2, and
- * phase 3 cuts the value at the first one that survives. Collapsing it to a
- * space in phase 1 (which `RE_CONTROL_RUN` would do, since LF is a control
- * character) would leave phase 3 nothing to cut on and publish line 2 whole.
- * Every other control run becomes a single space — a separator, never a
- * deletion: deleting them glued two lines into one word and destroyed the
- * phone rule's left boundary (SA F-28).
+ * A line terminator is the boundary phase 3 cuts on, and no phase-2 rule may
+ * cross one (RE_GEO used to; F-46). Collapsing it to a space in phase 1
+ * (which `RE_CONTROL_RUN` would do, since LF is a control character) would
+ * leave phase 3 nothing to cut on and publish line 2 whole. Every other
+ * control run becomes a single space — a separator, never a deletion:
+ * deleting them glued two lines into one word and destroyed the phone rule's
+ * left boundary (SA F-28).
  */
 const RE_LINE_BREAK_RUN = /[\n\r\u0085\u2028\u2029]+/g
 const RE_OTHER_CONTROL_RUN = /[\u0000-\u0009\u000B\u000C\u000E-\u001F\u007F-\u0084\u0086-\u009F]+/g
@@ -351,8 +369,9 @@ export function firstLine(value) {
  */
 export function scrub(value, { release = false, names = false } = {}) {
   // ── phase 1 · bound ──────────────────────────────────────────────────────
-  // Normalise, turn every control run into a boundary, cap at a whole-run
-  // edge. Nothing here removes a character a phase-2 rule might need.
+  // Normalise, cap at a whole-unit edge, then turn every control run into a
+  // boundary. A boundary leaves only inside a label, with every character it
+  // separated (rev 2.9, F-45).
   const bounded = boundInput(value, { release, names })
 
   // ── phase 2 · redact, on the whole bounded value ─────────────────────────
@@ -369,73 +388,115 @@ export function scrub(value, { release = false, names = false } = {}) {
  * Phase 3's one cut, and the one place the phase boundary is not enough on its
  * own.
  *
- * Only the first line of a value is relayed. A line break is also the one
- * boundary a phase-2 rule cannot reach across — `RE_EMAIL`, `RE_JWT`,
- * `RE_TOKEN_RUN` and `RE_PHONE` all exclude whitespace — so cutting there can
- * leave the first half of a secret behind, which is the F-18 class arriving at
- * a different boundary: `mail alice@exam<LF>ple.com` published `alice@exam`,
- * and `key Ab12Cd34Ef<LF>56Gh78Ij90` published `Ab12Cd34Ef`.
+ * Only the first line of a value is relayed. A line break is also a boundary
+ * no phase-2 rule reaches across — `RE_EMAIL`, `RE_JWT`, `RE_TOKEN_RUN` and
+ * `RE_PHONE` exclude whitespace, and `RE_GEO` stops at a terminator since
+ * rev 2.9 — so cutting there can leave the first half of a secret behind,
+ * which is the F-18 class arriving at a different boundary: `mail
+ * alice@exam<LF>ple.com` published `alice@exam`, and `key
+ * Ab12Cd34Ef<LF>56Gh78Ij90` published `Ab12Cd34Ef`.
  *
- * So the cut proves itself: join the runs on either side of the break and put
- * the join back through phase 2. If that changes it, the break was
- * interrupting something a rule would have caught, and the trailing run leaves
- * with the cut, marked. Two plain words either side of a break — the ordinary
+ * So the cut proves itself (straddle() below): join the units on either side
+ * of the break and put the join through phase 2 with a probe at the join
+ * point. If a redaction straddled it, the break was interrupting one secret,
+ * and the trailing unit leaves with the cut, marked `…`. What it must NOT
+ * emit is the redacted join: a character of line two that no rule matched
+ * would ride along (`alice@exam<LF>ple.com,foo` → `[email],foo`), and line
+ * two never leaves. Two plain words either side of a break — the ordinary
  * case — are untouched, which is why this is not the 400-cap's blunt rule.
  */
 function cutAtLineBoundary(redacted, opts) {
   const at = redacted.search(RE_LINE_BREAK)
   if (at === -1) return redacted
   const head = redacted.slice(0, at)
-  const leftRun = (head.match(/\S+$/) ?? [''])[0]
-  const rightRun = (redacted.slice(at + 1).match(/^\S+/) ?? [''])[0]
-  if (leftRun && rightRun) {
-    const joined = leftRun + rightRun
-    if (redactAll(joined, opts) !== joined) {
-      return `${head.slice(0, head.length - leftRun.length)}…`
-    }
+  const left = head.match(RE_LEFT_UNIT)[0]
+  const right = redacted.slice(at + 1).match(RE_RIGHT_UNIT)[0]
+  if (straddle(left, right, opts) !== null) {
+    return `${head.slice(0, head.length - left.length)}…`
   }
   return head
 }
 
 /**
- * Phase 1. The cap is a ceiling against an unbounded scan over a 1 MiB
- * attacker-controlled body (Sol F-05), and it drops whole runs — a cut that
- * left a fragment behind published a partial email (Sol F-18).
+ * The boundary proof phase 1 and phase 3 share: were the units either side
+ * of a boundary one secret? The join goes through phase 2 with a probe at the
+ * join point, and the answer is yes only when a redaction STRADDLED it — the
+ * match began before the join point and ended after it, and the replacement
+ * differs from the match (a kept run is not a redaction). Returns the
+ * redacted join on yes, null on no.
+ *
+ * "The join redacts" was the rev 2.8 test, and it was wrong: a query-key
+ * redaction elsewhere in `0912345678<SOH>x?token=a` authorised deleting the
+ * separator, the phone lost the right boundary that was protecting it, and
+ * `0912345678x?token=[redacted]` was published (Astra F-45, P0). With the
+ * probe, that join has no straddling match, the separator stays, and phase 2
+ * sees `[phone] x?token=[redacted]`.
  */
-function boundInput(value, opts) {
-  const normalised = neutraliseControls(String(value).normalize('NFC').replace(RE_LINE_BREAK_RUN, '\n'), opts)
-  return normalised.length > SCRUB_INPUT_CAP ? cutAtRunBoundary(normalised) : normalised
+function straddle(left, right, opts) {
+  if (!/\S/.test(left) || !/\S/.test(right)) return null
+  const probe = { at: left.length, straddled: false }
+  const redacted = redactAll(left + right, opts, probe)
+  return probe.straddled ? redacted : null
 }
 
 /**
- * Turn each control run into a separating space — after proving that the runs
- * it separates were not one secret.
+ * Phase 1. The cap is a ceiling against an unbounded scan over a 1 MiB
+ * attacker-controlled body (Sol F-05), and it drops whole units — a cut that
+ * left a fragment behind published a partial email (Sol F-18).
+ *
+ * The cap comes BEFORE the control proof (rev 2.9, Astra F-47): the proof
+ * used to run over the whole body, re-matching the growing output once per
+ * control run — 20,000 runs took 1.2 s, and a signed body under 1 MiB carries
+ * 500,000 — on the path D-4 budgets at one second. Everything ahead of the
+ * cap is one native pass (NFC, the terminator fold, the slice), so the proof
+ * now sees at most SCRUB_INPUT_CAP characters whatever the body holds. A
+ * control run counts toward the cap before it collapses, so a control-heavy
+ * value is cut shorter than it would have been — whole units still, marked;
+ * the unit regex treats a control as part of its run, since it is not `\s`.
+ */
+function boundInput(value, opts) {
+  const normalised = String(value).normalize('NFC').replace(RE_LINE_BREAK_RUN, '\n')
+  const capped = normalised.length > SCRUB_INPUT_CAP ? cutAtRunBoundary(normalised) : normalised
+  return neutraliseControls(capped, opts)
+}
+
+/**
+ * Turn each control run into a separating space — after proving that the
+ * units it separates were not one secret.
  *
  * The naive replacement is the same defect as the naive cut, at a third
  * boundary: `10.762622, 1<SOH>06.660172` became `10.762622, 1 06.660172`, and
- * `RE_GEO` cannot match across the space, so the latitude was published; a
+ * `RE_GEO` cannot match across the space, so both halves were published; a
  * filename `alice.smith@<SOH>gmail.com` published `alice.smith@`. Deleting the
  * control instead was SA F-28 (it glued two lines and killed the phone rule's
  * left boundary), so neither "remove" nor "replace" is safe on its own.
  *
- * So the same proof as `cutAtLineBoundary`: join the runs either side, put the
- * join through phase 2, and if that changes it, emit the redacted join — the
- * control was interrupting one secret. Otherwise emit the space, because the
- * runs really are two things.
+ * So the proof straddle() shares with `cutAtLineBoundary`, on units (the
+ * rev 2.8 proof joined bare runs, which is why the coordinate case above was
+ * still published — `1` + `06.660172` matches nothing). On a straddle the
+ * redacted join replaces the pair: the control vanishes INSIDE a label, and
+ * every character it separated is inside that label, so no rule is left
+ * wanting the boundary. Otherwise the space, because the units really are
+ * two things — and a redaction elsewhere in the join is phase 2's business,
+ * with the boundary intact (F-45).
+ *
+ * Linear in practice: the input is at most SCRUB_INPUT_CAP characters plus
+ * labels (boundInput caps first — F-47), so the trailing-unit search over
+ * `out` is bounded by the cap, not by the body.
  */
 function neutraliseControls(s, opts) {
   const parts = s.split(RE_OTHER_CONTROL_RUN)
   if (parts.length === 1) return s
   let out = parts[0]
   for (let i = 1; i < parts.length; i += 1) {
-    const left = (out.match(/[^\s]+$/) ?? [''])[0]
-    const right = (parts[i].match(/^[^\s]+/) ?? [''])[0]
-    const joined = left + right
-    const redactedJoin = left && right ? redactAll(joined, opts) : joined
-    if (left && right && redactedJoin !== joined) {
-      out = out.slice(0, out.length - left.length) + redactedJoin + parts[i].slice(right.length)
+    const part = parts[i]
+    const left = out.match(RE_LEFT_UNIT)[0]
+    const right = part.match(RE_RIGHT_UNIT)[0]
+    const proven = straddle(left, right, opts)
+    if (proven !== null) {
+      out = out.slice(0, out.length - left.length) + proven + part.slice(right.length)
     } else {
-      out = `${out} ${parts[i]}`
+      out = `${out} ${part}`
     }
   }
   return out
@@ -447,17 +508,41 @@ function neutraliseControls(s, opts) {
  * The order inside the phase matters only where one rule's label could hide
  * another's input: the credential-path and query rules replace a *value* after
  * a marker, so they run after the shape rules that would otherwise claim it.
+ *
+ * With a `probe` ({ at }) it also answers straddle()'s question: did a
+ * redaction cover the character position `at` from both sides? Offsets inside
+ * one rule's pass are in that pass's coordinates, so the test is made against
+ * the probe as it stands, the length shift of every match that ended at or
+ * before it is summed, and the probe moves after the pass. A replacement equal
+ * to its match (a kept run) is not a redaction and moves nothing.
  */
-function redactAll(bounded, { release, names }) {
-  let s = bounded
-  s = s.replace(RE_EMAIL, '[email]')
-  s = s.replace(RE_JWT, '[token]')
+function redactAll(bounded, { release, names }, probe = null) {
   const keep = release ? isPlainWordOrSha : names ? isName : isPlainWord
-  s = s.replace(RE_TOKEN_RUN, (run) => (keep(run) ? run : '[token]'))
-  s = s.replace(RE_CRED_PATH, '$1[redacted]')
-  s = s.replace(RE_CRED_QUERY, '$1[redacted]')
-  s = s.replace(RE_GEO, '[geo]')
-  s = s.replace(RE_PHONE, '[phone]')
+  const rules = [
+    [RE_EMAIL, () => '[email]'],
+    [RE_JWT, () => '[token]'],
+    [RE_TOKEN_RUN, (run) => (keep(run) ? run : '[token]')],
+    [RE_CRED_PATH, (match, marker) => `${marker}[redacted]`],
+    [RE_CRED_QUERY, (match, key) => `${key}[redacted]`],
+    [RE_GEO, () => '[geo]'],
+    [RE_PHONE, () => '[phone]'],
+  ]
+  let s = bounded
+  for (const [re, label] of rules) {
+    let shift = 0
+    s = s.replace(re, (match, ...rest) => {
+      // rest = [group…, offset, string]: the offset is always second from last.
+      const out = label(match, rest[0])
+      if (probe !== null && out !== match) {
+        const start = rest[rest.length - 2]
+        const end = start + match.length
+        if (start < probe.at && probe.at < end) probe.straddled = true
+        else if (end <= probe.at) shift += out.length - match.length
+      }
+      return out
+    })
+    if (probe !== null) probe.at += shift
+  }
   return s
 }
 
@@ -605,8 +690,13 @@ function frameLine(frame) {
   // published the user's home path and cut the file name off, which is the
   // opposite of both intents. And the scheme match was case-sensitive, so
   // `HTTPS://internal.host/src/app.js` kept its host.
+  // `split` rather than `.replace(/[?#].*$/, '')`: `.` stops at a line
+  // terminator and `$` is end-of-input only, so a filename of many `?` with a
+  // terminator after them backtracked once per `?` before the segment cap —
+  // 80,000 of them took 9.5 s (the F-47 class, rev 2.9). The path rule next
+  // door already strips the same way.
   const all = str(f.filename)
-    .replace(/[?#].*$/, '')
+    .split(/[?#]/)[0]
     .replace(/^(?:file|https?):\/\/[^/]*/i, '')
     .split('/')
     .filter(Boolean)
