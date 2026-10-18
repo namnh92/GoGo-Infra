@@ -2064,3 +2064,105 @@ describe('the 6000 total is always met: fields blank in a stated order after the
     assert.equal(JSON.stringify(embed), before)
   })
 })
+
+/* ── the invariant, as a property (Astra F-42 and the four before it) ─────── */
+
+describe('no shortening step can expose what a redaction rule would have caught', () => {
+  // Five times in this task a step that shortens a value ran upstream of a
+  // rule that needed the whole value, and each fix created the next: the
+  // 400-cut (Sol F-18), the path-tail cut (Sol F-02), deleted control
+  // characters (SA F-28), the first-line cut before the coordinate rule
+  // (Astra F-42), and the first-line cut through a token (found while fixing
+  // F-42). Examples caught them one at a time. This covers the class: every
+  // sentinel shape, split across every boundary a shortening step cuts on,
+  // asserted on the serialised Discord request body.
+  //
+  // The assertion is on a LEADING FRAGMENT, not the whole secret: a cut that
+  // publishes `alice@exam` of `alice@example.com` is the defect, and a test
+  // that only looked for the whole string would have passed on every one of
+  // the five. The first version of this case made exactly that mistake and
+  // passed against the pre-fix ordering.
+  const SENTINELS = [
+    'alice.smith@gmail.com',
+    'eyJhbGciOi.eyJzdWIi.SflKxwRJ',
+    'Ab12Cd34Ef56Gh78Ij90',
+    '10.762622, 106.660172',
+    // Plain, with no letters glued on: `0912345678xyz` is a digit run inside
+    // an identifier, which the owner decided is NOT a phone number (F-17), so
+    // using it here would assert against a decision rather than for the rule.
+    '0912345678',
+  ]
+
+  // Each boundary splits the sentinel at `cut`, so the fragment on the near
+  // side is what a careless shortening step would publish.
+  const BOUNDARIES = [
+    { name: 'a line break', wrap: (a, b) => `head ${a}\n${b} tail` },
+    { name: 'a control character', wrap: (a, b) => `head ${a}${String.fromCharCode(1)}${b} tail` },
+    { name: 'the input bound', wrap: (a, b) => `${'x'.repeat(392)} ${a}${b} tail` },
+    { name: 'the title cap', wrap: (a, b) => `${'word '.repeat(48)}${a}${b} tail` },
+    { name: 'no boundary at all', wrap: (a, b) => `head ${a}${b} tail` },
+  ]
+
+  const FIELDS = [
+    { name: 'title', build: (v) => ({ title: v }) },
+    { name: 'culprit', build: (v) => ({ culprit: v }) },
+    {
+      name: 'exception value',
+      build: (v) => ({
+        exception: {
+          values: [
+            { type: 'E', value: v, stacktrace: { frames: [{ filename: 'a.ts', function: 'f', lineno: 1, colno: 1, in_app: true }] } },
+          ],
+        },
+      }),
+    },
+    { name: 'fallback message', build: (v) => ({ exception: undefined, logentry: { formatted: v } }) },
+    {
+      name: 'frame filename',
+      build: (v) => ({
+        exception: {
+          values: [
+            { type: 'E', value: 'v', stacktrace: { frames: [{ filename: v, function: 'f', lineno: 1, colno: 1, in_app: true }] } },
+          ],
+        },
+      }),
+    },
+    { name: 'transaction tag', build: (v) => ({ tags: [['transaction', v]] }) },
+  ]
+
+  for (const sentinel of SENTINELS) {
+    const cut = Math.ceil(sentinel.length * 0.55)
+    const near = sentinel.slice(0, cut)
+    const far = sentinel.slice(cut)
+    // Whether the near fragment must itself never appear is derived from the
+    // rules, not asserted by hand: if `scrub` redacts the fragment standing
+    // alone, it is a secret on its own and no boundary may expose it. If it
+    // does not, the fragment is publishable by design and demanding otherwise
+    // would test a stricter policy than the one that was decided — a lone
+    // latitude is the case that matters here, since the geo rule targets a
+    // *pair* (ADR-0011 D-9) and `scrub('value 10.762622 here')` is unchanged
+    // with no boundary anywhere.
+    const fragmentIsSecret = scrub(near) !== near
+    for (const boundary of BOUNDARIES) {
+      it(`neither "${sentinel.slice(0, 12)}…" nor its leading fragment survives ${boundary.name}`, async () => {
+        const value = boundary.wrap(near, far)
+        for (const field of FIELDS) {
+          discordCalls = []
+          logged = []
+          discordAnswering(savedMessage)
+          const res = await call(eventAlertBody({ event: field.build(value) }), {})
+          assert.ok(res.status === 200 || res.status === 204, `${field.name} answered ${res.status}`)
+          if (!discordCalls.length) continue
+          const raw = discordCalls[0].init.body
+          assert.ok(!raw.includes(sentinel), `the whole secret leaked from ${field.name} at ${boundary.name}`)
+          if (fragmentIsSecret) {
+            assert.ok(
+              !raw.includes(near),
+              `a leading fragment "${near}" leaked from ${field.name} at ${boundary.name}: ${raw.slice(0, 300)}`,
+            )
+          }
+        }
+      })
+    }
+  }
+})

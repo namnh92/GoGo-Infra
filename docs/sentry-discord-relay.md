@@ -33,7 +33,7 @@ delay=300)` on `RequestException`; not on 503, 504 or any 4xx) — and that retr
 | Status line `outcome` | Answer to Sentry | Sentry retries? | What it means |
 | --- | --- | --- | --- |
 | `posted` | 200 | no | Discord answered 2xx with a saved message id |
-| `discord_unconfirmed` | 200 | no | Discord answered 2xx but the relay could not read a message id inside its deadline — the message is probably in the channel, and it is answered 200 so the retry does not post it up to four times (owner decision 2026-10-18, ADR-0013 D-4). **If Discord did not in fact save it, the relay's message is lost with no row on the tab**; the native message still arrives, and this line is the only trace — A-4 checks each one against the channel |
+| `discord_unconfirmed` | 200 | no | Discord answered 2xx but the relay could not read a message id inside its deadline — the message is probably in the channel, and it is answered 200 so the retry does not post it up to four times (owner decision 2026-10-18, ADR-0013 D-4). **If Discord did not in fact save it, the relay's message is lost and the tab still shows a 200 with no failure indication** (Astra F-44) — a success, not an absent row; the native message still arrives, and this line is the only trace — A-4 checks each one against the channel |
 | `discord_failed` | 502 | yes, ×3 | the request never completed (timeout, network, deadline, or a Discord status that is not a save) — usually delivered by the retry |
 | `rate_limited` | 502 | yes, ×3 | a 429 whose `retry_after` did not fit the budget — usually delivered by the retry |
 | `webhook_rejected` | 502 | yes, ×3 | 401/403/404: a revoked or wrong URL — repeats on the tab three more times until the URL is fixed (the A-10 signal) |

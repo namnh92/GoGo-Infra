@@ -32,7 +32,14 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MODULE_REL="terraform/modules/cloudflare-sentry-relay/main.tf"
 MODULE="${REPO_ROOT}/${MODULE_REL}"
-RELAY_REF='sentry_relay_host|cloudflare-sentry-relay'
+# What counts as "the relay exists in Terraform somewhere". The first two
+# identifiers assume the module keeps its planned name and variable; Astra's
+# F-36 case is `terraform/modules/relay/main.tf` wiring up the Worker under a
+# different name, where neither appears. A Terraform file that reaches for the
+# Worker's own source path or its script name is the relay whatever the module
+# is called, so both are searched too — the guard then fails rather than
+# printing a green skip over an unguarded script.
+RELAY_REF='sentry_relay_host|cloudflare-sentry-relay|workers/sentry-relay|gogo-[a-z]+-sentry-relay'
 
 # relay_references <root> — files under <root>/terraform and <root>/config/*.tfvars
 # that mention the relay, one per line.

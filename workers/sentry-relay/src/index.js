@@ -293,6 +293,20 @@ const RE_PHONE = /(?<![A-Za-z0-9])(?:\+84|0)\d{9,10}(?![A-Za-z0-9])/g
  */
 const RE_CONTROL_RUN = /[\u0000-\u001F\u007F-\u009F]+/g
 /**
+ * Phase 1 keeps line terminators and collapses every OTHER control run.
+ *
+ * A line terminator is a boundary two phases need: `RE_GEO`'s `\s*` spans one,
+ * so `10.762622,<LF>106.660172` is still one coordinate pair in phase 2, and
+ * phase 3 cuts the value at the first one that survives. Collapsing it to a
+ * space in phase 1 (which `RE_CONTROL_RUN` would do, since LF is a control
+ * character) would leave phase 3 nothing to cut on and publish line 2 whole.
+ * Every other control run becomes a single space — a separator, never a
+ * deletion: deleting them glued two lines into one word and destroyed the
+ * phone rule's left boundary (SA F-28).
+ */
+const RE_LINE_BREAK_RUN = /[\n\r\u0085\u2028\u2029]+/g
+const RE_OTHER_CONTROL_RUN = /[\u0000-\u0009\u000B\u000C\u000E-\u001F\u007F-\u0084\u0086-\u009F]+/g
+/**
  * Every line terminator, not just LF. A value whose second line is separated by
  * a bare CR (or U+2028, which JSON carries literally) would otherwise reach
  * Discord whole when only its first line was meant to (Sol F-04).
@@ -336,8 +350,106 @@ export function firstLine(value) {
  * later fails toward redaction (rev 2.4).
  */
 export function scrub(value, { release = false, names = false } = {}) {
-  const whole = firstLine(String(value).normalize('NFC')).replace(RE_CONTROL_RUN, ' ')
-  let s = whole.length > SCRUB_INPUT_CAP ? cutAtRunBoundary(whole) : whole
+  // ── phase 1 · bound ──────────────────────────────────────────────────────
+  // Normalise, turn every control run into a boundary, cap at a whole-run
+  // edge. Nothing here removes a character a phase-2 rule might need.
+  const bounded = boundInput(value, { release, names })
+
+  // ── phase 2 · redact, on the whole bounded value ─────────────────────────
+  const redacted = redactAll(bounded, { release, names })
+
+  // ── phase 3 · shorten ────────────────────────────────────────────────────
+  // Only now, and only ever after phase 2. The caps in text(), frameLine() and
+  // the stack ladder are phase 3 too, which is why they all run on scrub()'s
+  // output and never before it.
+  return cutAtLineBoundary(redacted, { release, names })
+}
+
+/**
+ * Phase 3's one cut, and the one place the phase boundary is not enough on its
+ * own.
+ *
+ * Only the first line of a value is relayed. A line break is also the one
+ * boundary a phase-2 rule cannot reach across — `RE_EMAIL`, `RE_JWT`,
+ * `RE_TOKEN_RUN` and `RE_PHONE` all exclude whitespace — so cutting there can
+ * leave the first half of a secret behind, which is the F-18 class arriving at
+ * a different boundary: `mail alice@exam<LF>ple.com` published `alice@exam`,
+ * and `key Ab12Cd34Ef<LF>56Gh78Ij90` published `Ab12Cd34Ef`.
+ *
+ * So the cut proves itself: join the runs on either side of the break and put
+ * the join back through phase 2. If that changes it, the break was
+ * interrupting something a rule would have caught, and the trailing run leaves
+ * with the cut, marked. Two plain words either side of a break — the ordinary
+ * case — are untouched, which is why this is not the 400-cap's blunt rule.
+ */
+function cutAtLineBoundary(redacted, opts) {
+  const at = redacted.search(RE_LINE_BREAK)
+  if (at === -1) return redacted
+  const head = redacted.slice(0, at)
+  const leftRun = (head.match(/\S+$/) ?? [''])[0]
+  const rightRun = (redacted.slice(at + 1).match(/^\S+/) ?? [''])[0]
+  if (leftRun && rightRun) {
+    const joined = leftRun + rightRun
+    if (redactAll(joined, opts) !== joined) {
+      return `${head.slice(0, head.length - leftRun.length)}…`
+    }
+  }
+  return head
+}
+
+/**
+ * Phase 1. The cap is a ceiling against an unbounded scan over a 1 MiB
+ * attacker-controlled body (Sol F-05), and it drops whole runs — a cut that
+ * left a fragment behind published a partial email (Sol F-18).
+ */
+function boundInput(value, opts) {
+  const normalised = neutraliseControls(String(value).normalize('NFC').replace(RE_LINE_BREAK_RUN, '\n'), opts)
+  return normalised.length > SCRUB_INPUT_CAP ? cutAtRunBoundary(normalised) : normalised
+}
+
+/**
+ * Turn each control run into a separating space — after proving that the runs
+ * it separates were not one secret.
+ *
+ * The naive replacement is the same defect as the naive cut, at a third
+ * boundary: `10.762622, 1<SOH>06.660172` became `10.762622, 1 06.660172`, and
+ * `RE_GEO` cannot match across the space, so the latitude was published; a
+ * filename `alice.smith@<SOH>gmail.com` published `alice.smith@`. Deleting the
+ * control instead was SA F-28 (it glued two lines and killed the phone rule's
+ * left boundary), so neither "remove" nor "replace" is safe on its own.
+ *
+ * So the same proof as `cutAtLineBoundary`: join the runs either side, put the
+ * join through phase 2, and if that changes it, emit the redacted join — the
+ * control was interrupting one secret. Otherwise emit the space, because the
+ * runs really are two things.
+ */
+function neutraliseControls(s, opts) {
+  const parts = s.split(RE_OTHER_CONTROL_RUN)
+  if (parts.length === 1) return s
+  let out = parts[0]
+  for (let i = 1; i < parts.length; i += 1) {
+    const left = (out.match(/[^\s]+$/) ?? [''])[0]
+    const right = (parts[i].match(/^[^\s]+/) ?? [''])[0]
+    const joined = left + right
+    const redactedJoin = left && right ? redactAll(joined, opts) : joined
+    if (left && right && redactedJoin !== joined) {
+      out = out.slice(0, out.length - left.length) + redactedJoin + parts[i].slice(right.length)
+    } else {
+      out = `${out} ${parts[i]}`
+    }
+  }
+  return out
+}
+
+/**
+ * Phase 2. Every rule, in this order, on the whole bounded value.
+ *
+ * The order inside the phase matters only where one rule's label could hide
+ * another's input: the credential-path and query rules replace a *value* after
+ * a marker, so they run after the shape rules that would otherwise claim it.
+ */
+function redactAll(bounded, { release, names }) {
+  let s = bounded
   s = s.replace(RE_EMAIL, '[email]')
   s = s.replace(RE_JWT, '[token]')
   const keep = release ? isPlainWordOrSha : names ? isName : isPlainWord
@@ -348,6 +460,7 @@ export function scrub(value, { release = false, names = false } = {}) {
   s = s.replace(RE_PHONE, '[phone]')
   return s
 }
+
 
 /**
  * Path-template rule for transaction / route / screen tags: a segment that is

@@ -2,8 +2,8 @@
 
 **Status:** proposed — becomes accepted at merge; the session that merges PR #233 writes the merge SHA and the
 CODEOWNER date into this line (shape §5 step 6). SA shape: Fable,
-`dev/handoffs/sa-shape-infra-221-sentry-discord-relay.fable.md` rev 2.7 (workspace file). Every review round on the
-shape and on PR #233 — Astra rounds 1 and 2, Sol rounds 1 and 2, the SA find round on the code — and the owner's
+`dev/handoffs/sa-shape-infra-221-sentry-discord-relay.fable.md` rev 2.8 (workspace file). Every review round on the
+shape and on PR #233 — Astra rounds 1 and 2 on the shape, Sol rounds 1 and 2 on the code, the SA find round on the code and Astra's confirm round on it — and the owner's
 decisions of 2026-10-18 are dispositioned item by item in that file's §7 and §8; the decisions below are the result,
 not the history.
 **Issue:** GoGo-Infra#221 (context #219, #208)
@@ -138,9 +138,9 @@ answered 2xx, the relay could not read a message id, the message is probably in 
 four relay copies of one message. **Decided 2026-10-18 (shape rev 2.7, Q-8 = a), by the owner in session and ahead
 of the acceptance count rev 2.6 had planned to decide it on: `discord_unconfirmed` answers 200.** No retry, no
 duplicate. The cost is the owner's and is written here so that nobody later reads that 200 as a save: when the branch
-is taken and Discord did *not* in fact save the message, the relay's message is lost — no row on the Webhook Requests
-tab, no retry — and the only trace is the relay's own `discord_unconfirmed` status line in `wrangler tail`, which A-4
-correlates against the channel; the native message for that issue still arrives (D-7). What the retry does for each
+is taken and Discord did *not* in fact save the message, the relay's message is lost — and the row Sentry keeps is a
+**200 with no failure indication**, not an absent row (Astra F-44): the tab shows a success, so the only trace of the
+loss is the relay's own `discord_unconfirmed` status line in `wrangler tail`, which A-4 correlates against the channel; the native message for that issue still arrives (D-7). What the retry does for each
 answer that stays: `rate_limited` and `discord_failed` get another attempt five minutes later, which usually delivers;
 `webhook_rejected` and `discord_redirect` repeat three more times on the tab until the webhook URL is fixed; a
 `relay_error` 500 is retried the same way; 503, every 4xx and 204 are final. In code the map is one set,
@@ -200,27 +200,24 @@ shape is driven through each permitted field — title, culprit, exception type 
 function, the fallback message, environment, release and every allowed tag — and the body must contain none of
 them (`workers/sentry-relay/test/worker.test.mjs`). Scrub V1 has its own case file (`test/scrub-cases.json`).
 
-Two ordering rules inside that are load-bearing, and both were wrong in the first draft. The query string comes off
-a path **before** segments are classified, or `/plans/123456?view=map` is not "a run of digits" and the id is
-published; and a segment carrying a control character or a line terminator is `[id]` whole — joining
-`/plans/123<control>456` into `123456` by deleting the control was the first fix and is the same splice the P0 above
-names, while cutting at the terminator would publish `123`, a fragment (rev 2.5). And
-a frame's path is reduced to its last three segments **before** any length cap, or a long absolute path keeps
-`/home/<user>/private/…` and loses the file name — publishing the one part nobody wanted and dropping the part
-that locates the defect. Before even that, the segment after any `r`/`l`/`invite`/`share-links` segment — unless it is a
-route-template placeholder such as `[inviteCode].tsx`, the invite screen's own frame — is replaced over the **whole**
-path: the tail cut had dropped the marker with the head, so `/r/AbCdEfGhIj/src/app.js` left as
-`AbCdEfGhIj/src/app.js` with nothing for the credential-path rule to match (rev 2.3). A third rule came from the
-confirm round: the scrubber reads at most the first 400 characters of a value (a bounded surface, since a signed
-body may be 1 MiB), and that cut is **not a slice** — a
-slice keeps a prefix, and an email, token or coordinate pair straddling character 400 survived as a fragment no
-rule matches, inside the field cap once earlier runs had collapsed to labels. The cut trims trailing whitespace,
-moves back to the last whitespace boundary, takes any comma-joined run with it (a coordinate pair is `lat, lng` — or
-`lat , lng`, and with the cut in that whitespace a bare latitude once survived; rev 2.3), and is marked `…`; a
-whitespace-free value over 400 characters therefore shows as `…`, never as a prefix. For the same reason a frame
-path segment longer than the 120-character file column is dropped whole as `…` rather than cut: three such
-segments stay under the scrubber's 400, so the basename always survives, and the joined path is still scrubbed
-as one string because the credential-path rule needs `/r/<value>` across two segments.
+**The redaction pipeline has three phases and one invariant** (shape rev 2.8, owner decision 2026-10-18).
+(1) *Bound*: NFC, line terminators kept as `\n`, every other control run neutralised, the input capped at a
+whole-run edge. (2) *Redact*: every rule, on the whole bounded value. (3) *Shorten*: first line, path tail, length
+caps, the stack ladder, the Discord limits. **No step in phase 3 can change what a phase-2 rule would have
+matched.**
+
+That invariant is written here because its absence produced the same defect five times, each fix creating the next:
+`slice(0, 400)` before the replacements published a partial email; the 120-character cap before the path tail kept
+`/home/<user>/private/…` and dropped the file name; deleting control characters glued two lines and destroyed the
+phone rule's left boundary, publishing a phone number; `firstLine()` before the coordinate rule published a
+latitude; and `firstLine()` through a token published `alice@exam`. Four reviewers found them one at a time. A
+property-style test now covers the class: every sentinel shape against every boundary a shortening step cuts on,
+asserted on the serialised Discord request body.
+
+Two boundaries cannot be settled by ordering alone — a line break and a control run are where a phase-2 rule cannot
+reach, since the email, JWT, token-run and phone patterns all exclude whitespace. Each therefore proves itself:
+join the runs either side, put the join back through phase 2, and act on the answer. If it redacts, the boundary
+was interrupting one secret; if it does not, the runs are two things and ordinary multi-line text is untouched.
 
 The phone rule needs a non-alphanumeric boundary on **both** sides. Without the right one it redacts a release
 SHA that merely begins with ten digits. The accepted consequence: a digit run glued to letters is treated as an
