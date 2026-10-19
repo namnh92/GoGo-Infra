@@ -24,6 +24,13 @@ fail() {
 
 # A sandbox whose `aws` and `pnpm` record what they were asked rather than
 # doing it, so the argument checks can run with no account and no network.
+# The prod confirmation must be asked for, not assumed: an inherited
+# GOGO_ASSUME_YES=1 from the developer's shell would make the positive cell pass
+# without a terminal ever being consulted, and the refusal cells fail against
+# correct code (GoGo-Infra#236, Sol F-01). Cleared once here; the cells that
+# mean to test the bypass still pass it as their own command prefix.
+unset GOGO_ASSUME_YES
+
 SANDBOX="$(mktemp -d)"
 trap 'rm -rf "$SANDBOX"' EXIT
 # Exported, or the stubs below inherit an empty CALLS, write nowhere, and the
