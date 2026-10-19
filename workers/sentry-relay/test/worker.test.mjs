@@ -2242,15 +2242,21 @@ describe('no shortening step can expose what a redaction rule would have caught'
           assert.equal(discordCalls.length, 1, `${field.name} captured no POST — the case would assert nothing`)
           posted += 1
           const raw = discordCalls[0].init.body
-          // Assert against the body with Discord's markdown escaping undone,
-          // as well as the raw body. `escapeMarkdown` escapes `@`, so an email
-          // reaches the channel as `alice.smith\@gmail.com` and a raw
-          // `includes('alice.smith@gmail.com')` is false EVEN WHEN IT LEAKS.
-          // That is why the email sentinel never fired in versions 1, 2 or 3
-          // of this case (Astra F-48): the other sentinels contain no escaped
-          // character, which is why the mutation matrix caught faults through
-          // them and nothing through this one.
-          const plainBody = raw.replace(/\\([\\*_~`|>[\]@])/g, '$1')
+          // Assert against the strings Discord will actually render, not the
+          // wire bytes. TWO layers of escaping sit between them, and missing
+          // either one is how this case failed to fire four times running:
+          // `escapeMarkdown` turns `@` into `\@`, and then JSON encoding turns
+          // that backslash into `\\`. Undoing only the markdown layer leaves
+          // `alice.smith\@`, which does not contain `alice.smith@` — so the
+          // email sentinel, the one Astra's F-49 counterexample uses, still
+          // could not fail. Parse the body, collect every string in it, then
+          // undo the markdown escaping.
+          const rendered = []
+          ;(function walk(v) {
+            if (typeof v === 'string') rendered.push(v)
+            else if (v && typeof v === 'object') Object.values(v).forEach(walk)
+          })(JSON.parse(raw))
+          const plainBody = rendered.join('\n').replace(/\\([\\*_~`|>[\]@])/g, '$1')
           for (const forbidden of sentinel.forbidden) {
             for (const [label, body] of [
               ['the body', raw],
