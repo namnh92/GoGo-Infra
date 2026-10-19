@@ -47,6 +47,30 @@ def sentry_dsn(environment, value):
     raise ValueError("EXPO_PUBLIC_SENTRY_DSN must be a Sentry DSN (https://<key>@<host>/<project>) or the literal off")
 
 
+# GoGo-Infra#237, GoGo-MobileApp#363 (MMP-001). An Adjust app token identifies
+# one app in the Adjust dashboard and ships in the binary — config, not a
+# credential, but kept SecureString like the Maps client keys. Adjust documents
+# no format beyond a placeholder, so the check is the dotenv-safe shape only.
+# Same rule as the DSN: dev may build without one (Adjust off, warned);
+# staging/prod need a token or the literal `off`, so a store build cannot drop
+# its second MMP by omission.
+ADJUST_TOKEN = re.compile(r"[A-Za-z0-9]{6,64}")
+ADJUST_OFF = "off"
+ADJUST_PLATFORMS = ("ios", "android")
+
+
+def adjust_token(environment, platform, value):
+    """The value written as ADJUST_<PLATFORM>_APP_TOKEN, or ValueError."""
+    name = f"/gogo/{environment}/mobile/adjust/{platform}-app-token"
+    if value is None:
+        if environment == "dev":
+            return ""
+        raise ValueError(f"{name} is required for {environment} builds")
+    if value == ADJUST_OFF or ADJUST_TOKEN.fullmatch(value):
+        return value
+    raise ValueError(f"ADJUST_{platform.upper()}_APP_TOKEN must be letters and digits (6-64) or the literal off")
+
+
 def https_url(value):
     parsed = urlparse(value)
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
@@ -54,7 +78,7 @@ def https_url(value):
     return value.rstrip("/")
 
 
-def mobile_values(environment, identifier, api_url, web_url, apns_mode, dsn=""):
+def mobile_values(environment, identifier, api_url, web_url, apns_mode, dsn="", adjust=None):
     if environment not in FLAVORS or apns_mode not in ("development", "production"):
         raise ValueError("Invalid environment or APNs signing mode")
     return {
@@ -65,6 +89,9 @@ def mobile_values(environment, identifier, api_url, web_url, apns_mode, dsn=""):
         "ONESIGNAL_CONFIG_ENV": environment,
         "ONESIGNAL_APNS_MODE": apns_mode,
         "EXPO_PUBLIC_SENTRY_DSN": dsn,
+        "ADJUST_IOS_APP_TOKEN": (adjust or {}).get("ios", ""),
+        "ADJUST_ANDROID_APP_TOKEN": (adjust or {}).get("android", ""),
+        "ADJUST_CONFIG_ENV": environment,
     }
 
 
@@ -124,9 +151,18 @@ def main():
         raw_dsn = None
     except (RuntimeError, ValueError, KeyError):
         parser.exit(1, "Cannot read this environment's Sentry DSN from SSM; check AWS session/path.\n")
+    raw_adjust = {}
+    for platform in ADJUST_PLATFORMS:
+        try:
+            raw_adjust[platform] = read_parameter(args, f"/gogo/{args.environment}/mobile/adjust/{platform}-app-token")
+        except ParameterMissing:
+            raw_adjust[platform] = None
+        except (RuntimeError, ValueError, KeyError):
+            parser.exit(1, "Cannot read this environment's Adjust app tokens from SSM; check AWS session/path.\n")
     try:
         dsn = sentry_dsn(args.environment, raw_dsn)
-        values = mobile_values(args.environment, identifier, args.api_url, args.web_url, args.apns_mode, dsn)
+        adjust = {platform: adjust_token(args.environment, platform, value) for platform, value in raw_adjust.items()}
+        values = mobile_values(args.environment, identifier, args.api_url, args.web_url, args.apns_mode, dsn, adjust)
         write_env(args.out, values)
     except ValueError as error:
         parser.exit(1, f"Invalid mobile configuration ({error}); no output updated.\n")
@@ -134,6 +170,9 @@ def main():
         parser.exit(1, "Invalid mobile configuration; no output updated.\n")
     if raw_dsn is None:
         print("warning: no Sentry DSN for dev; crash reporting is off in this build", file=sys.stderr)
+    for platform, value in raw_adjust.items():
+        if value is None:
+            print(f"warning: no Adjust {platform} app token for dev; Adjust is off on {platform} in this build", file=sys.stderr)
     print(f"Wrote {args.out}: {args.environment}, {len(values)} public variables, mode 0600")
 
 
