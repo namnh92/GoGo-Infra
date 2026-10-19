@@ -42,12 +42,18 @@ class MobileEnvTest(unittest.TestCase):
 DSN = "https://0123456789abcdef0123456789abcdef@o0.ingest.us.sentry.io/1"
 
 
+SECURE_STRINGS = ("/mobile/adjust/",)
+
+
 def ssm(values):
     """A stand-in for `aws ssm get-parameter`: `values` maps name -> value, or
-    -> None for ParameterNotFound, or -> "DENIED" for any other failure."""
+    -> None for ParameterNotFound, or -> "DENIED" for any other failure. Like
+    SSM, a SecureString read without --with-decryption returns ciphertext."""
     def run(command, **_kwargs):
         name = command[command.index("--name") + 1]
         value = values.get(name)
+        if value not in (None, "DENIED") and any(part in name for part in SECURE_STRINGS) and "--with-decryption" not in command:
+            value = "AQICAHh0ciphertextBlob=="
         if value is None:
             return subprocess.CompletedProcess(command, 254, "", "An error occurred (ParameterNotFound)")
         if value == "DENIED":
@@ -122,6 +128,7 @@ class MainTest(unittest.TestCase):
             out = Path(directory) / ".env"
             argv = ["mobile-env.py", environment, "--api-url", "https://api.example.com", "--web-url", "https://go.example.com", "--apns-mode", "development", "--out", str(out)]
             stdout, stderr = io.StringIO(), io.StringIO()
+            self.stdout = stdout
             code = 0
             with mock.patch.object(sys, "argv", argv), mock.patch.object(module.subprocess, "run", ssm(parameters)), \
                     contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
@@ -178,11 +185,10 @@ class MainTest(unittest.TestCase):
         self.assertIn("ADJUST_CONFIG_ENV=dev\n", text)
 
     def test_never_prints_a_token(self):
-        stdout = io.StringIO()
-        with contextlib.redirect_stdout(stdout):
-            code, _, stderr = self.run_main("dev", {**self.app_id("dev"), **self.adjust("dev")})
+        code, _, stderr = self.run_main("dev", {**self.app_id("dev"), **self.adjust("dev")})
         self.assertEqual(code, 0)
-        self.assertNotIn(TOKEN, stdout.getvalue())
+        self.assertIn("Wrote", self.stdout.getvalue())
+        self.assertNotIn(TOKEN, self.stdout.getvalue())
         self.assertNotIn(TOKEN, stderr)
 
     def test_dev_without_tokens_builds_with_adjust_off_and_says_so(self):

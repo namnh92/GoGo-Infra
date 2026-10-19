@@ -120,7 +120,9 @@ class ParameterMissing(Exception):
 def read_parameter(args, name):
     """The parameter's value. ParameterMissing only when SSM says it does not
     exist; any other failure (session, permission) is not "absent" and stops."""
-    command = ["aws", "ssm", "get-parameter", "--region", args.region, "--name", name, "--output", "json"]
+    # --with-decryption: the Adjust tokens are SecureString, and without it SSM
+    # answers with the ciphertext (GoGo-Infra#237). Harmless for a String.
+    command = ["aws", "ssm", "get-parameter", "--region", args.region, "--name", name, "--with-decryption", "--output", "json"]
     if args.profile:
         command += ["--profile", args.profile]
     result = subprocess.run(command, capture_output=True, text=True, timeout=30)
