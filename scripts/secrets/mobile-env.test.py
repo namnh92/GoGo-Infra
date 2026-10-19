@@ -109,9 +109,14 @@ class AdjustTokenTest(unittest.TestCase):
                     self.assertEqual(module.adjust_token(environment, platform, "off"), "off")
 
     def test_refuses_anything_else(self):
-        for value in ("OFF", "", "abc", "abc 123def", "abc$123def", "a" * 65, f"{TOKEN}\n"):
+        for value in ("OFF", "", "abc", "abcdef", "a" * 7, "a" * 33, "abc 123def", "abc$123def", f"{TOKEN}\n"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 module.adjust_token("dev", "ios", value)
+
+    def test_length_bounds(self):
+        for value in ("a" * 8, "a" * 32):
+            with self.subTest(length=len(value)):
+                self.assertEqual(module.adjust_token("prod", "ios", value), value)
 
     def test_only_dev_may_build_without_one(self):
         self.assertEqual(module.adjust_token("dev", "android", None), "")

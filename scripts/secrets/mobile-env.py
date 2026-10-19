@@ -50,11 +50,13 @@ def sentry_dsn(environment, value):
 # GoGo-Infra#237, GoGo-MobileApp#363 (MMP-001). An Adjust app token identifies
 # one app in the Adjust dashboard and ships in the binary — config, not a
 # credential, but kept SecureString like the Maps client keys. Adjust documents
-# no format beyond a placeholder, so the check is the dotenv-safe shape only.
+# no format beyond a placeholder; the shape is the shape (rev 1) D4 contract,
+# 8-32 letters and digits — the DEV tokens are 12 — so a six-character event
+# token pasted in by mistake is refused.
 # Same rule as the DSN: dev may build without one (Adjust off, warned);
 # staging/prod need a token or the literal `off`, so a store build cannot drop
 # its second MMP by omission.
-ADJUST_TOKEN = re.compile(r"[A-Za-z0-9]{6,64}")
+ADJUST_TOKEN = re.compile(r"[A-Za-z0-9]{8,32}")
 ADJUST_OFF = "off"
 ADJUST_PLATFORMS = ("ios", "android")
 
@@ -68,7 +70,7 @@ def adjust_token(environment, platform, value):
         raise ValueError(f"{name} is required for {environment} builds")
     if value == ADJUST_OFF or ADJUST_TOKEN.fullmatch(value):
         return value
-    raise ValueError(f"ADJUST_{platform.upper()}_APP_TOKEN must be letters and digits (6-64) or the literal off")
+    raise ValueError(f"ADJUST_{platform.upper()}_APP_TOKEN must be 8-32 letters and digits or the literal off")
 
 
 def https_url(value):

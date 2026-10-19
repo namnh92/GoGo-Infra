@@ -115,10 +115,11 @@ accepts a DSN or the literal `off` and refuses a staging/prod build without one.
 `mobile/adjust/*` (GoGo-Infra#237, GoGo-MobileApp#363) are the Adjust app tokens, one per
 platform. Config that ships in the binary, kept `SecureString` like the Maps keys. `mobile-env.py`
 renders them as `ADJUST_IOS_APP_TOKEN` / `ADJUST_ANDROID_APP_TOKEN` plus `ADJUST_CONFIG_ENV`, accepts
-letters and digits or the literal `off`, and — the same rule as the DSN — refuses a staging/prod
-build without one. Write them with `put.sh <env> adjust/ios-app-token` (stdin); the manifest puts
-them under `mobile/`. No other Adjust credential (event, S2S or API tokens) is declared: nothing
-calls one.
+8–32 letters and digits or the literal `off`, and — the same rule as the DSN — refuses a
+staging/prod build without one. Write them with `put.sh <env> adjust/ios-app-token` (stdin); the
+manifest puts them under `mobile/`. Event tokens are not SSM values (named constants in the app,
+per flavour, when events exist); the API/Report and S2S tokens are credentials nothing calls, so
+none is declared — if GoGo-BE ever needs one it goes under `backend/adjust/*`, never `mobile/`.
 
 `SecureString`, Standard tier. One parameter per independently permissioned value — a single
 JSON blob would force every consumer to hold every secret.
