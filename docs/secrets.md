@@ -96,6 +96,8 @@ open a pull request — see `docs/adr/0001`.
 /gogo/<env>/mobile/google/maps-ios-api-key      client key — ships in the app binary
 /gogo/<env>/mobile/google/maps-android-api-key  client key — ships in the app binary
 /gogo/<env>/mobile/sentry/dsn                   String — Sentry DSN or `off`, ships in the app binary (ADR-0011)
+/gogo/<env>/mobile/adjust/ios-app-token         Adjust app token or `off` — ships in the app binary (#237)
+/gogo/<env>/mobile/adjust/android-app-token     Adjust app token or `off` — ships in the app binary (#237)
 ```
 
 The `mobile` branch holds client keys. They are `SecureString` like everything else — public in
@@ -109,6 +111,15 @@ with a restriction behind it but config whose only power is to submit events to 
 project — the same reason `backend/observability/sentry-dsn` is a `String`. It is the only
 `mobile` value JavaScript reads (`EXPO_PUBLIC_SENTRY_DSN`), rendered by `mobile-env.py`, which
 accepts a DSN or the literal `off` and refuses a staging/prod build without one.
+
+`mobile/adjust/*` (GoGo-Infra#237, GoGo-MobileApp#363) are the Adjust app tokens, one per
+platform. Config that ships in the binary, kept `SecureString` like the Maps keys. `mobile-env.py`
+renders them as `ADJUST_IOS_APP_TOKEN` / `ADJUST_ANDROID_APP_TOKEN` plus `ADJUST_CONFIG_ENV`, accepts
+8–32 letters and digits or the literal `off`, and — the same rule as the DSN — refuses a
+staging/prod build without one. Write them with `put.sh <env> adjust/ios-app-token` (stdin); the
+manifest puts them under `mobile/`. Event tokens are not SSM values (named constants in the app,
+per flavour, when events exist); the API/Report and S2S tokens are credentials nothing calls, so
+none is declared — if GoGo-BE ever needs one it goes under `backend/adjust/*`, never `mobile/`.
 
 `SecureString`, Standard tier. One parameter per independently permissioned value — a single
 JSON blob would force every consumer to hold every secret.
