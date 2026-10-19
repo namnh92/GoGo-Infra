@@ -190,6 +190,45 @@ monthly plan + Seer contributors + PAYG budget ≤ $150, from the run-rate measu
 Center (GoGo-BE#695 manual items, #696 usage collector). Adjustment path, owner's choice: lower PAYG;
 fewer Seer contributors or Seer off; a lower plan tier at renewal (ADR-0012a D-4).
 
+### Store accounts and signing material (GoGo-Infra#231)
+
+Paired with the Fastlane lanes, GoGo-MobileApp#350 (iOS) and #351 (Android). The credentials live in
+SSM under `/gogo/ci/prod/store/…` — `prod` only, because there is one signing identity for the app
+that ships — and are read only by `scripts/secrets/exec-with.sh` on the owner's workstation. The
+runbook, including what is unrecoverable, is in
+[secrets.md → Store signing material](secrets.md#store-signing-material-gogo-infra231).
+
+| What | Account | Created where | Kill switch | SSM row |
+| --- | --- | --- | --- | --- |
+| App Store Connect API key (role App Manager) | Apple Developer Program — owner's Apple account | App Store Connect → Users and Access → Integrations → App Store Connect API | Revoke the key there; uploads stop, the published app is untouched | `store/apple-asc-key` + `store/apple-asc-key-id` + `store/apple-asc-issuer-id` |
+| Android **upload** keystore | GoGo's own — not an account | `keytool` on the owner's machine (PKCS12, RSA-2048), once | Play Console → App integrity → request an upload key reset | `store/android-keystore` + `…-keystore-password` + `…-key-alias` + `…-key-password` |
+| Play Developer API service account (release management on the GoGo app only) | Google Cloud project + Play Console, owner's account | Google Cloud IAM, then invited in Play Console → Users and permissions | Delete the key in Google Cloud IAM, or remove the account's Play permission | `store/play-service-account` |
+
+All three are replaceable. The Android keystore is the **upload key**: Play App Signing — mandatory for
+apps created since August 2021 — means Google holds the app signing key and re-signs every release, so
+losing the upload key is a Play Console reset rather than the end of updates. Keep a backup anyway: the
+reset is support-mediated. The Apple key and the Play service-account key are replaced the usual way —
+create the new one, ship one build with it, then revoke or delete the old.
+
+Two things worth writing down before the Play account exists. The Maps certificate SHA-1 to register
+(GoGo-MobileApp#351 AC-4) is the **app signing key's**, from Play Console → App integrity, not this
+keystore's. And the arrangement is decided at enrolment — intended: Google generates the app signing
+key and this keystore is a distinct upload key (the default for a new app, which cannot decline Play
+App Signing). If the owner instead imports an existing key as the app signing key, Google still holds
+and signs with it: this row stays a separate upload key, loss is still a reset, but compromise of the
+imported key is the worse case, since no upload-key reset retires it. Only an app created before August
+2021 that never enrolled has its keystore as the app signing key, irreplaceable — not GoGo's case.
+Record which arrangement was chosen on GoGo-Infra#231.
+
+Not stored: an Apple team id (an App Store Connect API key authenticates without one and fastlane
+reads the team from it), and no Apple ID password or session cookie anywhere — the API key exists so
+neither is needed.
+
+Values are written by the owner (`put.sh prod store/…`), as with every other credential here; the
+assistant supplies the command, never the value. As of 2026-10-17 none of the eight rows has a value
+yet: `validate.sh prod --strict --include-planned` reports `store_release_ios` and
+`store_release_android` as planned and names the missing rows.
+
 ### Sentry — alert notifications go to Discord (GoGo-Infra#219)
 
 Owner decision 2026-10-15: issue and monitor alerts for all three projects go to Discord, one channel per

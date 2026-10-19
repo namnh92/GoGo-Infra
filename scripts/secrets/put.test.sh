@@ -22,6 +22,13 @@ failures=0
 ok() { printf '  ok    %s\n' "$1"; }
 bad() { printf '  FAIL  %s\n        %s\n' "$1" "$2"; failures=$((failures + 1)); }
 
+# The prod confirmation must be asked for, not assumed: an inherited
+# GOGO_ASSUME_YES=1 from the developer's shell would make the positive cell pass
+# without a terminal ever being consulted, and the refusal cells fail against
+# correct code (GoGo-Infra#236, Sol F-01). Cleared once here; the cells that
+# mean to test the bypass still pass it as their own command prefix.
+unset GOGO_ASSUME_YES
+
 SANDBOX="$(mktemp -d)"
 trap 'rm -rf "$SANDBOX"' EXIT
 # Exported, or the stub inherits an empty CALLS and the assertions pass against a
@@ -172,6 +179,50 @@ if [[ $? -eq 0 ]] && grep -q 'put-parameter' "$CALLS" && ! grep -q 'add-tags-to-
   ok "an ordinary write does not tag"
 else
   bad "an ordinary write does not tag" "calls: $(tr '\n' ';' <"$CALLS")"
+fi
+
+# 6. Size (GoGo-Infra#231, Sol F-04). A Standard-tier parameter holds 4096
+# bytes and the request pins that tier. The refusal is local, so it comes
+# before require_aws like every other local refusal: an operator whose file is
+# too big learns that from the script, not after an STS round trip.
+declared_value="$VALUE"
+VALUE="$(head -c 4097 /dev/zero | tr '\0' a)"
+refuses "a value over 4096 bytes is refused before any AWS call" "4097 bytes" dev database/url
+VALUE="$(head -c 4096 /dev/zero | tr '\0' a)"
+run dev database/url
+if [[ $? -eq 0 ]] && grep -q 'put-parameter' "$CALLS"; then
+  ok "a value of exactly 4096 bytes is written"
+else
+  bad "a value of exactly 4096 bytes is written" "calls: $(tr '\n' ';' <"$CALLS"); out: $(cat "${SANDBOX}/out")"
+fi
+VALUE="$declared_value"
+
+# 7. The prod confirmation (GoGo-Infra#231, Sol F-02). put.sh reads the value
+# from stdin, so the confirmation has to come from the controlling terminal —
+# `put.sh prod store/apple-asc-key < AuthKey.p8` is the documented shape — and
+# a session with no terminal is refused with a message, before any `aws` call.
+# Through scripts/lib/tty-harness.py, so the result does not depend on the
+# terminal this suite happened to be started from (see exec-with.test.sh).
+HARNESS="${DIR}/../lib/tty-harness.py"
+
+: >"$CALLS"
+: >"$REQUESTS"
+printf '%s' "$VALUE" | PATH="${SANDBOX}:${PATH}" AWS_PROFILE=stub python3 "$HARNESS" answer prod -- "$SCRIPT" prod database/url >"${SANDBOX}/out" 2>&1
+status=$?
+if [[ $status -eq 0 ]] && grep -q 'put-parameter' "$CALLS" && grep -q '"Name": "/gogo/prod/backend/database/url"' "$REQUESTS" \
+   && grep -qF 'staff-one@example.com' "$REQUESTS"; then
+  ok "a prod write with the value on stdin takes its confirmation from the terminal"
+else
+  bad "a prod write with the value on stdin takes its confirmation from the terminal" "exit ${status}; calls: $(tr '\n' ';' <"$CALLS"); out: $(cat "${SANDBOX}/out")"
+fi
+
+: >"$CALLS"
+printf '%s' "$VALUE" | PATH="${SANDBOX}:${PATH}" AWS_PROFILE=stub python3 "$HARNESS" no-tty -- "$SCRIPT" prod database/url >"${SANDBOX}/out" 2>&1
+status=$?
+if [[ $status -ne 0 ]] && [[ ! -s "$CALLS" ]] && grep -q 'needs typed confirmation on a terminal' "${SANDBOX}/out"; then
+  ok "a prod write with no terminal is refused with a message, before any AWS call"
+else
+  bad "a prod write with no terminal is refused with a message, before any AWS call" "exit ${status}; calls: $(tr '\n' ';' <"$CALLS"); out: $(cat "${SANDBOX}/out")"
 fi
 
 echo

@@ -73,8 +73,10 @@ SSM value, a JSON array of address strings, validated here), which the
 environment reads from SSM (`cms/super-admin-email`, `cms/access-staff-emails`).
 No organisation-membership policy — a parallel `include` would admit people the
 list does not name. `require_mfa` adds Cloudflare MFA as a requirement and is
-mandatory outside dev; one-time PIN does not satisfy it, so staging and
-production need an MFA-capable identity provider first. `tests/` pins all of
+mandatory outside dev. The organisation has only the Cloudflare account-member
+method configured, not one-time PIN, and whether that satisfies Cloudflare's
+`mfa` rule is unverified — staging and production must confirm it or add an
+MFA-capable identity provider first (`docs/secrets.md`). `tests/` pins all of
 this offline (`terraform test`).
 
 ## The bit that will bite

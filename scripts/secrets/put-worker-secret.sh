@@ -43,9 +43,12 @@ command -v pnpm >/dev/null || die "pnpm is required (wrangler is a devDependency
 PARAM_NAMESPACE="$(param_namespace "$PARAM_PATH" "$ENVIRONMENT")"
 full_path="$(ssm_prefix "$ENVIRONMENT" "${PARAM_NAMESPACE:-backend}")/${PARAM_PATH}"
 
-if [[ "$ENVIRONMENT" == "prod" ]]; then
-  confirm_prod "put ${BINDING_NAME} on ${SCRIPT_NAME}"
-fi
+# GoGo-Infra#235: this passed one argument, so `env` became the action string and
+# `$2` was unbound — under `set -u` a prod run died on `$2: unbound variable`
+# instead of asking, and the `if` wrapper hid it by never letting dev reach the
+# call. The wrapper is gone too: confirm_prod gates on the environment itself,
+# which is how every other caller uses it.
+confirm_prod "$ENVIRONMENT" "put ${BINDING_NAME} on ${SCRIPT_NAME}"
 
 # --with-decryption is what makes this a SecureString read; the value exists
 # only in the pipe between these two commands.

@@ -24,6 +24,13 @@ fail() {
 
 # A sandbox whose `aws` and `pnpm` record what they were asked rather than
 # doing it, so the argument checks can run with no account and no network.
+# The prod confirmation must be asked for, not assumed: an inherited
+# GOGO_ASSUME_YES=1 from the developer's shell would make the positive cell pass
+# without a terminal ever being consulted, and the refusal cells fail against
+# correct code (GoGo-Infra#236, Sol F-01). Cleared once here; the cells that
+# mean to test the bypass still pass it as their own command prefix.
+unset GOGO_ASSUME_YES
+
 SANDBOX="$(mktemp -d)"
 trap 'rm -rf "$SANDBOX"' EXIT
 # Exported, or the stubs below inherit an empty CALLS, write nowhere, and the
@@ -140,6 +147,54 @@ if ! grep -rn 'type[[:space:]]*=[[:space:]]*"secret_text"' "${REPO}/terraform" >
   pass "no worker binding carries a secret through Terraform"
 else
   fail "no worker binding carries a secret through Terraform"
+fi
+
+# --- the prod confirmation (GoGo-Infra#235) ----------------------------------
+#
+# The call passed one argument, so `confirm_prod` read the action string as the
+# environment and `$2` was unbound: under `set -u` a prod run died on
+# `$2: unbound variable` instead of asking, and no test reached the line. The
+# terminal is made per case by scripts/lib/tty-harness.py (#231), because
+# confirm_prod reads its answer from /dev/tty — a test that ran the script
+# directly would block on a developer's keyboard or fail in CI.
+HARNESS="${DIR}/../lib/tty-harness.py"
+
+prod_run() { # prod_run <harness args...> -- <script> <script args...>
+  : >"$CALLS"
+  PATH="${SANDBOX}:/usr/bin:/bin" AWS_PROFILE=stub \
+    python3 "$HARNESS" "$@" 2>&1 </dev/null
+}
+
+ARGS=(share-link/worker-auth-token API_TOKEN gogo-share-link)
+
+out="$(prod_run answer prod -- "$SCRIPT" prod "${ARGS[@]}")"
+if [[ "$out" != *"unbound variable"* ]] && grep -q "wrangler" "$CALLS"; then
+  pass "a prod run asks for confirmation and proceeds when it is given"
+else
+  fail "a prod run asks for confirmation and proceeds when it is given: ${out}"
+fi
+
+out="$(prod_run answer no -- "$SCRIPT" prod "${ARGS[@]}")"
+if [[ "$out" == *"aborted"* ]] && ! grep -q "wrangler" "$CALLS"; then
+  pass "a wrong answer aborts before wrangler runs"
+else
+  fail "a wrong answer aborts before wrangler runs: ${out}"
+fi
+
+out="$(prod_run no-tty -- "$SCRIPT" prod "${ARGS[@]}")"
+if [[ "$out" == *"needs typed confirmation on a terminal"* ]] && ! grep -q "wrangler" "$CALLS"; then
+  pass "no terminal is refused with a message, not a shell error"
+else
+  fail "no terminal is refused with a message, not a shell error: ${out}"
+fi
+
+# dev must not be asked at all — that is confirm_prod's own gate, and the
+# removed `if` wrapper used to be what stood in for it.
+out="$(prod_run no-tty -- "$SCRIPT" dev "${ARGS[@]}")"
+if grep -q "wrangler" "$CALLS"; then
+  pass "dev runs with no terminal and no confirmation"
+else
+  fail "dev runs with no terminal and no confirmation: ${out}"
 fi
 
 echo

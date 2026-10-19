@@ -45,9 +45,12 @@ resource "cloudflare_workers_custom_domain" "cms" {
 # provider was declined in GoGo-Infra#67). When an MFA-capable identity provider
 # arrives, it is added as a `require` rule on this policy, not as another policy.
 #
-# require_mfa adds Cloudflare MFA as a requirement. One-time PIN does not
-# satisfy it, so an environment that sets it needs an MFA-capable identity
-# provider first (GoGo-Infra#67 scope, reopened at prod).
+# require_mfa adds Cloudflare MFA as a requirement. The organisation offers only
+# the Cloudflare account-member method and has no one-time PIN configured (owner
+# decision 2026-10-08, execution-policy.md §8); whether that method satisfies
+# Cloudflare's `mfa` rule has not been verified. So an environment that sets
+# this must confirm it, or add an MFA-capable identity provider first
+# (GoGo-Infra#67 scope, reopened at prod).
 locals {
   staff_emails   = [for e in tolist(jsondecode(var.staff_emails_json)) : tostring(e)]
   allowed_emails = distinct(concat(local.staff_emails, [var.super_admin_email]))
