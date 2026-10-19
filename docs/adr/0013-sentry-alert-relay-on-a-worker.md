@@ -215,15 +215,25 @@ property-style test now covers the class: every sentinel shape against every bou
 asserted on the serialised Discord request body.
 
 Two boundaries cannot be settled by ordering alone — a line break and a control run are where a phase-2 rule cannot
-reach, since the email, JWT, token-run and phone patterns all exclude whitespace. Each therefore proves itself:
-join the runs either side (over comma-linked units, so a coordinate pair joins back to the pair it is), put the
-join back through phase 2, and act on the answer. If it redacts, the boundary was interrupting one secret and
-**both sides** are replaced — the boundary itself stays, because removing it published a phone number whose right
-boundary was the separator, and let a coordinate label swallow the line break so a name from line two was
-published (both P0, found in review). `RE_GEO` takes horizontal whitespace only for the same reason: no phase-2
-rule may cross the one boundary the shortening phase cuts on. The proof's lookback is bounded at 2 048 characters,
-above the longest left half any rule can match, because scanning the whole value per boundary was quadratic and
-measurable.
+reach, since the email, JWT, token-run and phone patterns all exclude whitespace. The design's answer so far is that
+each boundary **proves itself**: join the runs either side (over comma-linked units, so a coordinate pair joins back
+to the pair it is), put the join back through phase 2, and act only on a match that **crosses the join point** — an
+unrelated redaction elsewhere in the joined text is not evidence about this boundary, and treating it as such
+published a phone number whose right boundary was the separator (Astra F-45). A control run and a first-line cut are
+not the same operation and do not behave the same way: the cut keeps the boundary and drops the trailing run, while
+a successful control proof consumes its separator. `RE_GEO` takes horizontal whitespace only so that no phase-2 rule
+can cross the one boundary the shortening phase cuts on, which is what let a coordinate label swallow a line break
+and publish a name from line two (Astra F-46).
+
+**This approach is not settled, and the ADR says so rather than implying otherwise.** Three P0s have come from it —
+F-45, F-46 and F-49 (the input cap removing the far half of a control-joined secret before the proof could see it) —
+each patch narrowing one geometry and exposing the next, because "did this boundary interrupt one secret" depends on
+context the local join does not have. The bound on the proof's work is the preceding 400-character input cap, not
+the longest match any rule can produce: the token-run, credential-path and query patterns are open-ended, so no
+"longest left half" figure can be claimed. A property-style test over every sentinel shape against every boundary
+geometry is what now reports the state, and on the head where this paragraph was written it reports three
+unfixed leaks at the cap-plus-control geometry. The alternative on the table — redact rather than prove whenever
+both sides of a boundary are token-shaped — is recorded in the shape's open questions.
 
 The phone rule needs a non-alphanumeric boundary on **both** sides. Without the right one it redacts a release
 SHA that merely begins with ten digits. The accepted consequence: a digit run glued to letters is treated as an

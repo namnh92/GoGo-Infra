@@ -2161,6 +2161,30 @@ describe('no shortening step can expose what a redaction rule would have caught'
     // secret, with segments long enough to meet the file column — the F-02
     // geometry, which the shallow `src/app/...` path never reached.
     { name: 'a deep frame path', wrap: (a, b) => `/home/someuser/${'nesting/'.repeat(6)}${a}${b}/handler.ts` },
+    // Astra F-48/F-49 named four geometries the table still missed, each the
+    // reason a real leak went unseen. They are written out rather than folded
+    // into the ones above, because what makes each dangerous is specific.
+    //
+    // A TAB, not SOH: it is an "other control" too, but it arrives in real
+    // text, and F-49's leak needed the input cap crossed AND a control-joined
+    // pair — the cap removed the far half before the proof could see it.
+    { name: 'a TAB just before it', wrap: (a, b) => `otp sent${String.fromCharCode(9)}${a}${b}` },
+    { name: 'a TAB inside it', wrap: (a, b) => `head ${a}${String.fromCharCode(9)}${b} tail` },
+    {
+      name: 'the input bound and a TAB together (F-49)',
+      wrap: (a, b) => `${'Ab12Cd34Ef56Gh78Ij90 '.repeat(18)}xx ${a}${String.fromCharCode(9)}${b}`,
+    },
+    // F-45's geometry: a redaction that fires somewhere else in the joined
+    // text, which a proof may mistake for evidence that the boundary was
+    // interrupting THIS secret.
+    {
+      name: 'an unrelated redaction beside it (F-45)',
+      wrap: (a, b) => `${a}${b}${String.fromCharCode(1)}x?token=abcdef`,
+    },
+    // Padding sized so the secret straddles the 200-character title cap rather
+    // than sitting entirely past it — 192 left only seven characters before the
+    // cap, shorter than every forbidden fragment, so the case asserted nothing.
+    { name: 'astride a field cap', wrap: (a, b) => `${'wd '.repeat(60)}${a}${b} tail` },
   ]
 
   const FIELDS = [
@@ -2218,11 +2242,25 @@ describe('no shortening step can expose what a redaction rule would have caught'
           assert.equal(discordCalls.length, 1, `${field.name} captured no POST — the case would assert nothing`)
           posted += 1
           const raw = discordCalls[0].init.body
+          // Assert against the body with Discord's markdown escaping undone,
+          // as well as the raw body. `escapeMarkdown` escapes `@`, so an email
+          // reaches the channel as `alice.smith\@gmail.com` and a raw
+          // `includes('alice.smith@gmail.com')` is false EVEN WHEN IT LEAKS.
+          // That is why the email sentinel never fired in versions 1, 2 or 3
+          // of this case (Astra F-48): the other sentinels contain no escaped
+          // character, which is why the mutation matrix caught faults through
+          // them and nothing through this one.
+          const plainBody = raw.replace(/\\([\\*_~`|>[\]@])/g, '$1')
           for (const forbidden of sentinel.forbidden) {
-            assert.ok(
-              !raw.includes(forbidden),
-              `"${forbidden}" leaked from ${field.name} at ${boundary.name}: ${raw.slice(0, 300)}`,
-            )
+            for (const [label, body] of [
+              ['the body', raw],
+              ['the body with markdown escaping undone', plainBody],
+            ]) {
+              assert.ok(
+                !body.includes(forbidden),
+                `"${forbidden}" leaked from ${field.name} at ${boundary.name} (${label}): ${body.slice(0, 300)}`,
+              )
+            }
           }
         }
         // Version 2 skipped silently when nothing was posted. Never again.
