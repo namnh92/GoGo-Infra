@@ -223,14 +223,17 @@ a finding for the SA role, not an accepted limit and not a script defect:
   (`setX(); router.push()`), misattributing silently. Mechanism (owner, 2026-10-20): a **mount-time scope write** —
   Mobile `screenTagLayout`, a React Navigation `screenLayout` on every navigator, renders a writer before each screen's
   subtree, so by React's commit order the container's screen (already moved at dispatch; unreadable → `unknown`; no
-  state → no write) reaches the native queue before any layout effect, `componentDidMount` or native view mount of
-  the new screen. The settled write stays for non-mount changes. **Residual, accepted by the owner 2026-10-20, not
-  promised:** a native call made *during render* of the new screen precedes every layout effect and still carries the
-  previous screen. Re-measured on the next clean relay run.
+  state → no write) reaches the native queue before any layout effect or `componentDidMount` of the new screen. The
+  settled write stays for non-mount changes. **Residuals, accepted by the owner 2026-10-20, not promised — both
+  precede every layout effect and still carry the previous screen:** (a) a native call made *during render* of the new
+  screen; (b) a crash *inside a native view* while React mounts it (mutation phase; Sol F-06, PR #349 round 3),
+  coverable only by a native-side write, which the owner declined. The layout-effect cell is re-measured on the next
+  clean relay run.
 
-The outstanding cells are therefore three — the same three Mobile ADR 0010 lists — all measured on the relay run and
-all holding the merge of PR #230 and GoGo-MobileApp PR #349: the launch window above, the mount-commit rejection and
-the native mount. Nothing else on the native/SDK path is recorded as a remaining limit.
+The outstanding cells are therefore three — the same three Mobile ADR 0010 lists — all awaiting measurement on the
+next clean relay run (run `r341-20261019T1350Z` is BLOCKED by deviation: signals only) and all holding the merge of
+PR #230 and GoGo-MobileApp PR #349: the launch window above, the mount-commit rejection and the native mount. The only
+limits recorded on the native/SDK path are the native mount's two residuals (a) and (b) above.
 
 ## Alternatives rejected
 
