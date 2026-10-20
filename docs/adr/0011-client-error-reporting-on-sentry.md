@@ -2,7 +2,9 @@
 
 **Status:** accepted — 2026-10-14; D-2 and D-9 amended, D-12 added 2026-10-16, its in-run cells listed in full 2026-10-17 (GoGo-Infra#229,
 oracle v2; Astra A-F-01/A-F-03/F-03/F-04/F-05 on PR #230). Owner decision 2026-10-16 on the native launch window (D-12 *Launch*): not
-accepted, measured on the relay device run, merge of PR #230 and GoGo-MobileApp PR #349 held until then.
+accepted, measured on the relay device run, merge of PR #230 and GoGo-MobileApp PR #349 held until then. Relay cells measured
+2026-10-20 (composed run, owner-accepted): the launch window carries no `screen` — an accepted limit, SA-341-01 (owner Q-R4,
+2026-10-20), distinct from the refused stale tag; the mount-commit rejection and the native mount PASS on both devices.
 **Issue:** GoGo-Infra#208; consumers GoGo-MobileApp#336, GoGo-CMS#238, GoGo-WebApp#44 (blocked: no app yet)
 **Requirement authority:** owner decisions 2026-10-08 (Sentry for crash reporting, Crashlytics dropped) and
 2026-10-14 (plan Business + Seer AI; projects `gogo-mobile`, `gogo-cms` created; SA shape first). SA shape
@@ -191,16 +193,26 @@ value set that leaves a device is therefore the declared list plus `unknown`; Di
 `data.tags`.
 
 *Launch.* The client seeds the launch template (`/`) at initialization, before anything renders (Mobile: `initSentry`),
-so an event before the first navigation effect carries `/` rather than nothing — or, on iOS, the previous run's value:
-the native scope outlives the process (GoGo-MobileApp#336 relay, launch 2 carried a launch-1 tag). What remains is the
-window between the native SDK starting and the seed reaching the native scope; an iOS native crash there may still
-carry the previous run's screen. That window is **not accepted** — owner decision 2026-10-16 on Astra F-03 (PR #230),
-recorded in `execution-policy.md` §8: no dated exception, no native patch. It is measured on the relay device run — an
-iOS native crash raised in the interval between the native SDK starting and the `/` seed reaching the native scope —
-and **the merge of GoGo-Infra PR #230 and GoGo-MobileApp PR #349 waits for that measurement**. Android has no measured
-occurrence. A crash report captured in an earlier run is written with that run's scope at crash time and is not
-rewritten by the seed; the relay run checks it (launch 3 delivers launch 2's crash with launch 2's crash-time screen,
-not `/`). Attribution inside a run is each client's ADR (Mobile ADR 0010): an error the app reports itself carries the
+so a JS error before the first navigation effect, and a native crash after the seed reached the native scope, carry `/`
+rather than nothing. **The live native scope of a new process starts empty** — it does not carry the previous run's
+screen. Measured on the GoGo-MobileApp#341 relay (composed run 2026-10-20, iPhone `r341-20261020T0316Z`, cell R-4,
+event `6d118ba5…`): a native crash raised right after `Sentry.init`, before the seed reached native, carried the probe's
+marker and **no `screen` tag**, although the previous run ended on `/room/[roomId]/preference`. The earlier premise "the
+native scope outlives the process (GoGo-MobileApp#336 relay, launch 2 carried a launch-1 tag)" therefore does not hold
+for crashes. Its **probable** source — a hypothesis from a side observation of the #341 relay, not measured — is the
+WatchdogTermination report: sentry-cocoa persists scope fields to disk and builds the watchdog event on the next launch;
+that event belongs to the killed run, so its tag is correct by construction, not a stale tag on a new run's crash.
+**Accepted limit (SA-341-01, owner 2026-10-20, Q-R4):** an iOS native crash in the interval between the native SDK
+starting and the `/` seed reaching the native scope (one native-queue hop, no app code) carries **no** `screen` tag —
+no attribution, not a wrong one. Nothing on the JS side can shorten it (`NATIVE.setTag` is a no-op before
+`enableNative`; `initialScope` never syncs to native) and the owner declined a native patch. It is queryable as
+`!has:screen` in Sentry; the Discord row simply lacks `screen`. The limit sits beside, and does not replace, the owner
+decision of 2026-10-16 on Astra F-03 (PR #230, `execution-policy.md` §8): that decision refused a **stale** tag (the
+previous run's screen) and still stands — the relay saw none; seeing one is a FAIL. Android has no cell for this window
+(no measured occurrence). A crash report captured in an earlier run is written with that run's scope at crash time and is not
+rewritten by the seed; the relay run checks it (R-2/R-3, both devices: launch 2's crash — delivered on iPhone by
+launch 3 — carries launch 2's crash-time screen, not `/`). Attribution inside a run is each client's ADR (Mobile ADR
+0010): an error the app reports itself carries the
 screen read from the navigation container's state at capture — event-local, so a throw while a new screen renders or
 mounts names that screen; a read that fails for a state that exists is sent as `unknown`, never the scope's previous
 screen (Astra F-05, round 3, 2026-10-17: absence — no state yet, the seeded `/` stands — and failure are different
@@ -228,13 +240,15 @@ a finding for the SA role, not an accepted limit and not a script defect:
   settled write stays for non-mount changes. **Residuals, accepted by the owner 2026-10-20, not promised — both
   precede every layout effect and still carry the previous screen:** (a) a native call made *during render* of the new
   screen; (b) a crash *inside a native view* while React mounts it (mutation phase; Sol F-06, PR #349 round 3),
-  coverable only by a native-side write, which the owner declined. The layout-effect cell is re-measured on the next
-  clean relay run.
+  coverable only by a native-side write, which the owner declined. The layout-effect cell was measured on the
+  composed relay run of 2026-10-20: PASS on both devices, the write coming from the mount writer (`probewriter=mount`; iPhone `dac50c24…`, Samsung `ee52e083…`).
 
-The outstanding cells are therefore three — the same three Mobile ADR 0010 lists — all awaiting measurement on the
-next clean relay run (run `r341-20261019T1350Z` is BLOCKED by deviation: signals only) and all holding the merge of
-PR #230 and GoGo-MobileApp PR #349: the launch window above, the mount-commit rejection and the native mount. The only
-limits recorded on the native/SDK path are the native mount's two residuals (a) and (b) above.
+The three in-run cells — the same three Mobile ADR 0010 lists — were measured on the composed relay run of 2026-10-20
+(iPhone `r341-20261020T0316Z`, script rev 3.1, + Samsung `r341-20261020T0453Z`, rev 3.3, owner-accepted; report
+`dev/test-evidence/mobile-341-relay-2026-10-19/tooling/runs/r341-20261020T0453Z/REPORT.md` in the GoGo workspace): the
+launch window carries no `screen` (the SA-341-01 limit above); the mount-commit rejection PASS on both devices; the native
+mount PASS on both devices with `probewriter=mount`. The limits recorded on the native/SDK path are the launch window and
+the native mount's two residuals (a) and (b).
 
 ## Alternatives rejected
 
