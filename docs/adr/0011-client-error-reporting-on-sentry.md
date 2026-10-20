@@ -216,10 +216,17 @@ a finding for the SA role, not an accepted limit and not a script defect:
   screen's own mount commit (render / layout effect / `componentDidMount`), captured by the SDK's rejection handler
   rather than the error boundary.
 - *Native mount* (Astra F-04, remaining half): a warm navigation to a new screen; a native crash raised inside that
-  screen's own mount commit (render / layout effect / `componentDidMount`), before the scope write for that screen. On
-  the measured mechanism (the scope moves one commit after mount, both effect kinds) this cell is expected to carry the
-  previous screen; a FAIL is resolved by moving the scope write to dispatch time — the container's state has already
-  moved, before the new screen renders — not by accepting the window.
+  screen's own mount commit (layout effect / `componentDidMount` / native view mount). The relay signal (run
+  `r341-20261019T1350Z`, BLOCKED by deviation, not evidence) carried the previous screen on both devices — SA-341-02
+  (`dev/handoffs/sa-ruling-mobile-341-relay.fable.md`). A literal dispatch-time write is rejected: the container's
+  `__unsafe_action__` fires before `setState`, and a microtask defer loses to a pending React microtask
+  (`setX(); router.push()`), misattributing silently. Mechanism (owner, 2026-10-20): a **mount-time scope write** —
+  Mobile `screenTagLayout`, a React Navigation `screenLayout` on every navigator, renders a writer before each screen's
+  subtree, so by React's commit order the container's screen (already moved at dispatch; unreadable → `unknown`; no
+  state → no write) reaches the native queue before any layout effect, `componentDidMount` or native view mount of
+  the new screen. The settled write stays for non-mount changes. **Residual, accepted by the owner 2026-10-20, not
+  promised:** a native call made *during render* of the new screen precedes every layout effect and still carries the
+  previous screen. Re-measured on the next clean relay run.
 
 The outstanding cells are therefore three — the same three Mobile ADR 0010 lists — all measured on the relay run and
 all holding the merge of PR #230 and GoGo-MobileApp PR #349: the launch window above, the mount-commit rejection and
