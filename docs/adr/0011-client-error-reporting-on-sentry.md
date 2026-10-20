@@ -207,7 +207,8 @@ screen (Astra F-05, round 3, 2026-10-17: absence — no state yet, the seeded `/
 answers) — while a native crash, which cannot run JS, carries the last scope write, as does an error the SDK catches
 itself (unhandled error or rejection). That leaves two in-run cells the scope write does not promise. Neither is an
 accepted limit — the owner accepted neither the wider mount window (F-04 ruling, 2026-10-16) nor a native-mount
-exception (Astra F-04, remaining half, round 3) — both are in the AC and the relay run measures them; **expected
+exception (Astra F-04, remaining half, round 3); only residuals (a) and (b) under *Native mount* below are accepted
+limits (2026-10-20) — both cells are in the AC and the relay run measures them; **expected
 `screen` = the new screen's template** in both, per D-7 addition 3 and the F-04 ruling; the previous screen is a FAIL —
 a finding for the SA role, not an accepted limit and not a script defect:
 
@@ -216,7 +217,7 @@ a finding for the SA role, not an accepted limit and not a script defect:
   screen's own mount commit (render / layout effect / `componentDidMount`), captured by the SDK's rejection handler
   rather than the error boundary.
 - *Native mount* (Astra F-04, remaining half): a warm navigation to a new screen; a native crash raised inside that
-  screen's own mount commit (layout effect / `componentDidMount` / native view mount). The relay signal (run
+  screen's own mount commit (layout effect / `componentDidMount`). The relay signal (run
   `r341-20261019T1350Z`, BLOCKED by deviation, not evidence) carried the previous screen on both devices — SA-341-02
   (`dev/handoffs/sa-ruling-mobile-341-relay.fable.md`). A literal dispatch-time write is rejected: the container's
   `__unsafe_action__` fires before `setState`, and a microtask defer loses to a pending React microtask
