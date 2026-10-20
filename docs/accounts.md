@@ -36,6 +36,7 @@ automation credential be rotated without touching anyone's login.
 | Cloudflare | GitHub OAuth | scoped API token (R2 admin for bootstrap; per-bucket token for the app) | `CLOUDFLARE_API_TOKEN` in GitHub secrets; bucket token in `/gogo/<env>/backend/r2/*` |
 | OneSignal | GitHub OAuth | REST API key + identity verification key, per app | `/gogo/<env>/backend/onesignal/*` |
 | Tenjin | GitHub OAuth | SDK Key per app | mobile build config — nothing in SSM |
+| Adjust | owner's login (method not recorded yet) | app token per app — ships in the app binary; no API/S2S token minted | `/gogo/<env>/mobile/adjust/*` (#237) |
 | Google Cloud | Google account | server API keys, split per API | `/gogo/<env>/backend/google/*` |
 | Google Cloud (client) | Google account | Maps SDK keys, one per platform — ship in the app binary, restricted by app id | `/gogo/<env>/mobile/google/*` |
 | Grafana Cloud | GitHub OAuth | access policy tokens, one per scope (`metrics:write` for the collector, `metrics:read` for the admin API). **Retired 2026-09-05** — ADR-0007 moved the DEV store self-hosted on 2026-09-04; tokens revoked at the provider after the shared end-to-end gate passed, SSM parameters and manifest entries removed (see `secrets.md` rotation register) | `/gogo/<env>/backend/observability/grafana-*` |
@@ -139,6 +140,7 @@ Fill in as accounts are created. "Owner" is a person; "backup" must not be the s
 | OneSignal | `GoGo Development` | GitHub OAuth | | **none** | | |
 | OneSignal | `GoGo Production` | GitHub OAuth | | **none** | | |
 | Tenjin | | GitHub OAuth | | **none** | | |
+| Adjust | plan **Base** (owner registered; welcome email: 1,500 monthly attributions in the first year — not verified against Adjust's terms). Second MMP beside Tenjin, owner 2026-10-19 (GoGo-MobileApp#363). DPA: not recorded yet — gate before the first real-token device run | not recorded | | **none** | | |
 | Google Cloud | project number `186055730568` — every DEV server key | Google | | **none** | | |
 | Grafana Cloud | Free stack `prometheus-prod-37-prod-ap-southeast-1`, instance id `3553140` — dev and prod share it via an `env` label. Superseded for DEV by ADR-0007 on 04/09/2026; tokens revoked 05/09/2026 after cutover | GitHub OAuth | | **none** | | 01/09/2026 |
 | Sentry | org `gogo-vn` (region US; slug renamed from `gogo-fe` 2026-10-14 — DSN unchanged), team `gogo`. Plan: **Business + Seer AI** (owner stated 2026-10-14) — supersedes the Free plan ADR-0006 budgeted; Seer sends error payloads to an AI provider. **Seer** stays **on** (owner Q-1, 2026-10-14: Seer purchased); ADR-0011 D-7 gate = privacy review + Sentry DPA, both before the first real client event — **met 2026-10-14**: owner accepted the privacy review and signed the DPA (#208 comments 6164369716, 6164377573), subject to relay evidence per client. GitHub integration: see *Sentry — GitHub App and spend controls* below (ADR-0012a D-3, D-4). Org state read 2026-10-14: `hideAiFeatures` false, `genAIConsent` false, per-project `seerScannerAutomation` true, `autofixAutomationTuning` medium | GitHub OAuth | `namnh92` (owner stated 2026-10-05) | **none** | | 2026-10-05 |
@@ -462,6 +464,8 @@ Four things the script flags that no script can rotate:
   console.
 - The Tenjin SDK Key, baked into shipped mobile binaries. Rotating it breaks
   attribution for every installed build, so it is a decision, not a reflex.
+  The Adjust app tokens are the same kind: they name the app, are not a secret
+  to rotate, and changing one splits attribution across two apps.
 - Any hand-made AWS access key. There should be none — CI uses OIDC, humans use
   SSO — but `aws iam list-access-keys --user-name <user>` is how you know,
   rather than assuming.
