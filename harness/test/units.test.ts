@@ -15,20 +15,20 @@ import { LIMITS, redact, sanitizeSummary } from '../src/runtime/sanitize.ts';
 import { fakeFetch, intakeAnswers, json, summary } from './helpers.ts';
 
 describe('policy engine', () => {
-  it('classifies commands, dangerous patterns first', () => {
+  it('classifies commands: every line gates, recognisable ones keep a name (D-3b)', () => {
     const cases: Array<[string, string]> = [
-      ['git status', 'read'],
-      ['pnpm test', 'test'],
-      ['node --test test/*.test.ts', 'test'],
-      ['pnpm typecheck', 'typecheck'],
-      ['git commit -m "fix"', 'commit'],
-      ['git push -u origin claude/admiring-keller-49eghr', 'push_feature_branch'],
+      ['git status', 'unknown'],
+      ['pnpm test', 'unknown'],
+      ['node --test test/*.test.ts', 'unknown'],
+      ['pnpm typecheck', 'unknown'],
+      ['git commit -m "fix"', 'unknown'],
+      ['git push -u origin claude/admiring-keller-49eghr', 'unknown'],
       ['git push origin develop', 'push_protected_branch'],
       ['git push --force origin feature/x', 'force_push'],
       ['gh pr merge 12 --squash', 'merge_pr'],
-      ['gh pr create --fill', 'open_pr'],
+      ['gh pr create --fill', 'unknown'],
       ['terraform apply tfplan', 'infra_apply'],
-      ['terraform plan', 'local_build'],
+      ['terraform plan', 'unknown'],
       ['gh workflow run deploy-production.yml', 'deploy_production'],
       ['psql -c "DROP TABLE places"', 'db_destructive'],
       ['psql -c "DELETE FROM places"', 'db_destructive'],

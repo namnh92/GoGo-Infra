@@ -27,10 +27,12 @@ describe('F-01 [P1] compound shell commands are classified by their most restric
       assert.equal(POLICY_CLASS[classifyCommand(command)], 'hard_gate', classifyCommand(command));
     });
   }
-  const autonomous: string[] = ['git status && git log --oneline -3', 'pnpm test && pnpm lint', 'cat package.json 2>/dev/null', 'node --test test/*.test.ts'];
-  for (const command of autonomous) {
-    it(`${JSON.stringify(command)} stays autonomous`, () => {
-      assert.equal(POLICY_CLASS[classifyCommand(command)], 'autonomous', classifyCommand(command));
+  // Superseded by ADR-0013 D-3b (r4): no shell line is autonomous, so the
+  // forms this round kept autonomous are gated now too.
+  const formerlyAutonomous: string[] = ['git status && git log --oneline -3', 'pnpm test && pnpm lint', 'cat package.json 2>/dev/null', 'node --test test/*.test.ts'];
+  for (const command of formerlyAutonomous) {
+    it(`${JSON.stringify(command)} is gated (D-3b)`, () => {
+      assert.equal(POLICY_CLASS[classifyCommand(command)], 'hard_gate', classifyCommand(command));
     });
   }
   it('a dangerous part anywhere still names its own kind', () => {

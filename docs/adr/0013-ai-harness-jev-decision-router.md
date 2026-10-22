@@ -87,7 +87,7 @@ unclassifiable (`unknown`). A human authorization written into a task lifts only
 `task_authorizable` set (`open_pr`, `comment_issue`, `ci_workflow_change`, `edit_out_of_scope`,
 `paid_inference`). Editing `harness/src/policy/` is itself `permission_policy_change`.
 
-**D-3a Shell commands are classified fail-closed** (owner decision 2026-10-22, after Sol rounds 1–3 on
+**D-3a Shell commands are classified fail-closed** — *superseded by D-3b the same day; kept as the record of what was tried.* (owner decision 2026-10-22, after Sol rounds 1–3 on
 PR #242 found six P1 bypasses in the regex classifier — every one a shell form nobody anticipated, every one
 failing open into autonomy). `harness/src/policy/shell.ts` tokenizes like a shell, refuses syntax it does not
 model (substitution, backticks, escapes, unquoted `$`, parentheses, input redirects, background `&`, output
@@ -100,6 +100,18 @@ are recognised only to give the question a name. `curl` and `claude -p` are neve
 `harness/../docs/x` is out of a `harness/` scope. Consequence: a gap in the allowlist costs one extra question,
 never an unapproved action. Q3 of the SA review (allowlist vs permission files vs dropping classification) is
 answered for the POC by this decision; Astra may still revisit it.
+
+**D-3b No shell line is autonomous** (owner decision 2026-10-22, after PR #242 review r4). The D-3a allowlist
+still let write and exec forms through as `read`/`test`: `sed -n 1p -e '1e …'` and `git fetch --upload-pack=…`
+ran any command inline, `sed -n 1p -i <path>` and `node --test --test-reporter-destination=<path>` rewrote any
+file (the policy engine, workflows, prod Terraform included), `git push origin @` pushed `main` as a feature
+branch, and `rg --hostname-bin` ran a program. Every allowlisted tool has flags nobody listed, so argument
+checks fail open one level down — the fourth round with the same failure. `classifyCommand` therefore no
+longer infers autonomy: every shell line is a hard gate, named when recognisable (`merge_pr`, `infra_apply`,
+`push_protected_branch`, …) so the owner's question says what it is, `unknown` otherwise. `shell.ts` is
+removed. Autonomy comes only from an action kind the step declares in `RouterInput.actions` (`test`,
+`commit`, `push_feature_branch`…) and from `classifyEdit` for paths. Cost: an autonomous run that wants to
+run a shell command asks first; for the POC that is the intended trade.
 
 **D-4 Checkpoints, not tool calls.** JEV is evaluated at: task intake (only when the rules do not
 settle it), material scope change, unresolved ambiguity, repeated failure (from the second

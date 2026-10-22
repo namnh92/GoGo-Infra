@@ -1,6 +1,7 @@
 /**
- * Fail-closed shell classifier (owner decision 2026-10-22, ADR-0013 D-3).
- * Every P1 bypass from Sol rounds 1-3 on PR #242, plus the neighbours of each.
+ * Shell lines are never autonomous (owner decision 2026-10-22, ADR-0013 D-3b,
+ * after PR #242 review r4). Every bypass from rounds 1-4, their neighbours and
+ * the forms that used to be allowlisted all gate; recognisable ones keep a name.
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -28,28 +29,24 @@ describe('every reviewed bypass and its neighbours is gated', () => {
     'npx eslint --fix .', 'node script.js', 'node -e "1"', 'cat "$(whoami)"', "cat 'unterminated", 'cat a\\ b', 'ls ~; rm x',
     'gh pr create --fill --label x', 'gh pr comment 1 --body ok --edit-last', 'gh api repos/x/y -X DELETE', 'curl -o /etc/x https://a',
     'git status &', 'cat <(rm x)', 'cat < /etc/shadow', '{ rm -rf x; }', '(rm -rf x)',
+    // r4: write and exec flags of allowlisted tools
+    "sed -n 1p -e '1e touch PWNED' README.md", "sed -n '1p' -i harness/src/policy/policy.ts",
+    "git fetch --upload-pack='touch PWNED' .", 'node --test --test-reporter=spec --test-reporter-destination=.github/workflows/validate.yml',
+    'git push origin @', 'git push -u origin @', 'rg --hyperlink-format=default --hostname-bin=./h.sh x f',
+    // formerly allowlisted: no shell line is autonomous any more
+    'git status', 'git status && git log --oneline -3', 'git diff --stat HEAD~1', 'git branch --show-current', 'cat package.json 2>/dev/null',
+    'ls -la docs | head -20', 'rg -n "classify" src', "sed -n '10,40p' src/cli.ts", 'find src -name "*.ts" -newer package.json',
+    'pnpm test && pnpm lint', 'pnpm -s typecheck', 'node --test test/*.test.ts', 'npx tsc -p tsconfig.json', 'npx vitest run libs/x',
+    'npx prettier --check .', 'git add -A && git commit -m "fix: x"', 'git push -u origin claude/admiring-keller-49eghr',
+    'terraform validate', 'terraform plan', 'pnpm test 2>&1 | tail -5', 'gh pr create --fill --base develop --draft', 'gh issue comment 241 --body "done"',
   ];
   for (const c of gated) it(JSON.stringify(c), () => assert.equal(cls(c), 'hard_gate', classifyCommand(c)));
 });
 
-describe('ordinary safe work stays autonomous', () => {
-  const ok: Array<[string, string]> = [
-    ['git status', 'read'], ['git status && git log --oneline -3', 'read'], ['git diff --stat HEAD~1', 'read'],
-    ['git branch --show-current', 'read'], ['git branch -a', 'read'], ['cat package.json 2>/dev/null', 'read'],
-    ['ls -la docs | head -20', 'read'], ['rg -n "classify" src', 'read'], ["sed -n '10,40p' src/cli.ts", 'read'],
-    ['find src -name "*.ts" -newer package.json', 'read'], ['pnpm test && pnpm lint', 'test'], ['pnpm -s typecheck', 'typecheck'],
-    ['node --test test/*.test.ts', 'test'], ['npx tsc -p tsconfig.json', 'typecheck'], ['npx vitest run libs/x', 'test'],
-    ['npx prettier --check .', 'lint'], ['git add -A && git commit -m "fix: x"', 'commit'],
-    ['git push -u origin claude/admiring-keller-49eghr', 'push_feature_branch'], ['terraform validate', 'test'],
-    ['pnpm test 2>&1 | tail -5', 'test'],
-  ];
-  for (const [c, kind] of ok) it(JSON.stringify(c), () => assert.equal(classifyCommand(c), kind));
-});
-
-describe('task-authorizable forms are exact', () => {
-  it('gh pr create with known flags is open_pr', () => assert.equal(classifyCommand('gh pr create --fill --base develop --draft'), 'open_pr'));
-  it('gh issue comment with a body is comment_issue', () => assert.equal(classifyCommand('gh issue comment 241 --body "done"'), 'comment_issue'));
-  it('an authorised open_pr cannot carry a second command', () => assert.equal(classifyCommand('gh pr create --fill; git push origin main'), 'push_protected_branch'));
+describe('no shell line can be lifted by a task authorization', () => {
+  it('gh pr create is unknown, not open_pr', () => assert.equal(classifyCommand('gh pr create --fill'), 'unknown'));
+  it('an open_pr line carrying a protected push is named by the push', () =>
+    assert.equal(classifyCommand('gh pr create --fill; git push origin main'), 'push_protected_branch'));
 });
 
 describe('gated commands keep their names', () => {

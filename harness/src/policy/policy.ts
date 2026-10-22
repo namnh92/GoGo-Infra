@@ -15,7 +15,6 @@
  * Unknown means approval: an action this file cannot classify is gated.
  */
 import { posix } from 'node:path';
-import { classifyShell } from './shell.ts';
 
 export type ActionKind =
   // autonomous — authorized, low-risk, reversible
@@ -128,12 +127,36 @@ export function evaluatePolicy(input: PolicyInput): PolicyVerdict {
 }
 
 /**
- * Shell command → action kind. Fail-closed allowlist in `shell.ts`: anything
- * it does not positively recognise as harmless is `unknown`, which gates.
+ * Shell command → action kind, always a hard gate (ADR-0013 D-3b, owner
+ * decision 2026-10-22 after PR #242 review r4).
+ *
+ * The POC does not infer autonomy from a shell line. A regex classifier (r1–r3)
+ * and then an argument-aware allowlist (r4) each let a write or exec form
+ * through as `read`/`test` — `sed -e '1e …'`, `git fetch --upload-pack`,
+ * `node --test-reporter-destination`, `git push origin @` — because every
+ * allowlisted tool has flags nobody listed. So a shell line is never
+ * autonomous here: it is named when recognisable, so the question to the
+ * owner says "merge" rather than "unknown", and `unknown` otherwise. Autonomy
+ * comes only from an action kind the step declares (`test`, `commit`…) or
+ * from `classifyEdit`.
  */
 export function classifyCommand(command: string): ActionKind {
-  return classifyShell(command);
+  for (const [pattern, kind] of NAMED_GATES) if (pattern.test(command)) return kind;
+  return 'unknown';
 }
+
+/** Names only — matching here never allows anything; every result is a hard gate. */
+const NAMED_GATES: Array<[RegExp, ActionKind]> = [
+  [/\bgh\s+pr\s+merge\b|\bgit\s+merge\b/, 'merge_pr'],
+  [/deploy-production|\bdeploy-vps\.sh\s+prod\b|\bterraform-apply-prod\b/, 'deploy_production'],
+  [/\bdeploy-vps\.sh\s+staging\b/, 'deploy_staging'],
+  [/\bterraform\s+(apply|destroy|import)\b|\bterraform\s+state\s+(rm|mv|push)\b|\bwrangler\s+(deploy|versions\s+deploy|r2\s+bucket\s+delete)\b/, 'infra_apply'],
+  [/\b(DROP|TRUNCATE)\s+(TABLE|SCHEMA|DATABASE|INDEX)\b|\bDELETE\s+FROM\b(?![^;]*\bWHERE\b)|\bdrizzle-kit\s+(drop|push)\b/i, 'db_destructive'],
+  [/scripts\/secrets\/(put|delete|generate-auth|put-identity-key|put-worker-secret)\.sh|\baws\s+ssm\s+(put|delete)-parameters?\b|\bwrangler\s+secret\s+(put|delete)\b|\bgh\s+secret\s+set\b/, 'secret_rotate'],
+  [/\.claude\/settings(\.local)?\.json|\bCODEOWNERS\b|\bgh\s+api\b.*\/protection\b|\baws\s+iam\s+(put|attach|create|delete|update)/, 'permission_policy_change'],
+  [/\bgit\s+push\b.*(\s-f\b|\s--force|\s--mirror\b|\s\+)/, 'force_push'],
+  [/\bgit\s+push\b.*[\s:](refs\/heads\/)?(master|main|develop|release\/\S+)(\s|$)/, 'push_protected_branch'],
+];
 
 /** Paths whose edit is itself a policy or production change, whatever the task scope says. */
 const PROTECTED_PATHS: Array<[RegExp, ActionKind]> = [

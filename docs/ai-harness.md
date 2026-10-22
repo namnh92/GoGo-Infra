@@ -45,7 +45,7 @@ never in a URL, never logged.
 | `taskId` | Issue reference, e.g. `GoGo-BE#709`. Used for grouping, not sent as meaning. |
 | `checkpoint` | `intake` · `scope_change` · `ambiguity` · `repeated_failure` · `review_planning` |
 | `summary` | `TaskSummary` — written by the session from the issue. Paths, never file contents. |
-| `actions` | What the next step will do, as `ActionKind`s. `classifyCommand` (fail-closed allowlist, ADR-0013 D-3a) / `classifyEdit` map a command or a path; anything not recognised as harmless is `unknown` and gates. |
+| `actions` | What the next step will do, as `ActionKind`s. `classifyEdit` maps a path. `classifyCommand` never returns an autonomous kind (ADR-0013 D-3b): every shell line gates, named when recognisable, `unknown` otherwise — declare the step's kind (`test`, `commit`…) instead. |
 | `humanAuthorizations` | Kinds the issue author authorized explicitly (only `task_authorizable` ones count). |
 | `failure` | `repeated_failure` only: `{ failureClass, signature }`. |
 
