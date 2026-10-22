@@ -9,7 +9,8 @@
  *
  * Personal data is minimized the same way (ai-guardrails.md, PR #242 A-F-04):
  * email addresses, phone numbers (Vietnamese national and `+<country code>`
- * international), decimal coordinates (pairs and `lat=`/`lng=` labeled) and
+ * international, digit groups spaced, dotted, dashed, in parentheses or in
+ * brackets), decimal coordinates (pairs and `lat=`/`lng=` labeled) and
  * home-directory names are replaced before anything is sent, on the
  * whitespace-collapsed text that is actually sent. This is pattern
  * matching, not de-identification: a name or a street written as prose, a
@@ -76,11 +77,13 @@ export function redact(text: string): string {
     .replace(/-?\d{1,3}\.\d{3,}\s*,\s*-?\d{1,3}\.\d{3,}/g, '[COORDS]')
     // Labeled single coordinates: `latitude=10.7769`, `lng: 106.7009` (A-F-04 residual).
     .replace(/\b(lat(?:itude)?|lng|lon(?:gitude)?)(\s*[:=]\s*)-?\d{1,3}\.\d+/gi, '$1$2[COORD]')
-    // International: `+<cc>` then 7–13 digits with up to three spaces, dots or dashes between
-    // any two parts (`+ 44`, `+44  20 …` — A-F-04, Astra r3), parentheses allowed; a diff
-    // header's `+1,3` has no digit run that long. Then Vietnamese national (`0…`, `+84…`).
-    .replace(/(?<![\w.])\+[\s.-]{0,3}\d{1,3}(?:[\s.-]{0,3}\(?\d\)?){7,13}(?!\d)/g, '[PHONE]')
-    .replace(/(?<![\w.])(?:\+[\s.-]{0,3}84|0)(?:[\s.-]{0,3}\d){8,10}(?!\d)/g, '[PHONE]')
+    // International: `+<cc>` (up to three spaces, dots or dashes after the `+`) then 7–13 digits,
+    // any two of them separated by up to five spaces, dots, dashes, parentheses or brackets —
+    // `+ 44`, `+44  20 …`, `+1 ( 415 ) - 555` (A-F-04, Astra r3/r4). A diff header's `+1,3` has no
+    // digit run that long; a comma, `=` or letter ends a number. Then Vietnamese national
+    // (`0…`, `+84…`, `(028) …`).
+    .replace(/(?<![\w.])\+[\s.-]{0,3}\d{1,3}(?:[\s.()[\]-]{0,5}\d){7,13}(?![\d)\]]?\d)/g, '[PHONE]')
+    .replace(/(?<![\w.])(?:\+[\s.-]{0,3}84|0)(?:[\s.()[\]-]{0,5}\d){8,10}(?![\d)\]]?\d)/g, '[PHONE]')
     .replace(/(\/Users|\/home|[A-Za-z]:\\Users)[\/\\][^\/\\\s]+/g, '~');
 }
 

@@ -571,3 +571,56 @@ describe('A-F-09 (Astra r3): a root alias is accepted only when it resolves to t
     assert.equal(v.outcome, 'AUTO_EXECUTE', reasons(v));
   });
 });
+
+// ---------------------------------------------------------------------------
+// Astra SA round 4 @5e6ea50: A-F-04 residual — grouping forms (parentheses, brackets, interior spacing).
+// ---------------------------------------------------------------------------
+
+describe('A-F-04 residual (Astra r4): every grouping form the contract table claims is caught, through sanitizeSummary', () => {
+  /** [text, fragments that must not survive] — one row per form the docs table lists as caught. */
+  const claimed: Array<[string, string[]]> = [
+    // parentheses and brackets, with and without interior spacing
+    ['+1 ( 415 ) 555-0133', ['415', '555', '0133']],
+    ['+1 (415) 555 0133', ['415', '0133']],
+    ['+1 [415] 555 0133', ['415', '0133']],
+    ['+1 [ 415 ] 555 0133', ['415', '0133']],
+    ['+1(415)5550133', ['415', '5550133']],
+    ['+1 ( 415 ) - 555 - 0133', ['415', '555', '0133']],
+    // trunk-prefix groups
+    ['+44 (0) 20 7946 0958', ['7946', '0958']],
+    ['+44 ( 0 ) 20 7946 0958', ['7946', '0958']],
+    ['+84 (0) 912 345 678', ['912', '345']],
+    // Vietnamese national with an area code in parentheses
+    ['(028) 3822 1234', ['3822', '1234']],
+    ['( 028 ) 3822 1234', ['3822', '1234']],
+    ['0 (28) 3822 1234', ['3822', '1234']],
+    // separators already claimed
+    ['+44  20 7946 0958', ['7946']],
+    ['+ 44 20 7946 0958', ['7946']],
+    ['+44.20.7946.0958', ['7946']],
+    ['+65-6123-4567', ['6123']],
+    ['0912 345 678', ['345']],
+    ['0912.345.678', ['345']],
+    ['0912-345-678', ['345']],
+    ['+84 912 345 678', ['345']],
+    ['0912345678', ['0912345678']],
+    ['+84912345678', ['912345678']],
+    ['+44 20\n7946 0958', ['7946']],
+  ];
+  for (const [text, leaks] of claimed) {
+    it(`redact: ${JSON.stringify(text)}`, () => {
+      const out = redact(text);
+      for (const leaked of leaks) assert.ok(!out.includes(leaked), `${leaked} survived: ${out}`);
+    });
+    it(`sanitizeSummary: ${JSON.stringify(text)}`, () => {
+      const sent = JSON.stringify(sanitizeSummary(summary({ description: `customer ${text} reported it`, openQuestions: [`call ${text}?`] })));
+      for (const leaked of leaks) assert.ok(!sent.includes(leaked), `${leaked} survived: ${sent}`);
+    });
+  }
+
+  it('brackets and parentheses in ordinary code text are not phone numbers', () => {
+    for (const text of ['cells[0][1][2] = +1', 'f(0, 1, 2, 3, 4, 5, 6, 7, 8)', 'exit(+1) then exit(0)', '@@ -1,3 +1,3 @@', 'v[0] = (1 + 2) * 3']) {
+      assert.equal(redact(text), text);
+    }
+  });
+});
