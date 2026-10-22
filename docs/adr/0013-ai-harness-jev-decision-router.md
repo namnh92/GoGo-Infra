@@ -151,7 +151,8 @@ nothing may fit.
 **D-5 State.** A sanitized `TaskSummary` — title, description, acceptance criteria, open
 questions, labels, paths (not contents), sources already searched, quoted rules — redacted for
 credentials and minimized for personal data (emails; Vietnamese phone numbers in every common
-spelling — `0…`, `+84`, `84`, grouped with spaces, dots, dashes, parentheses or brackets; decimal
+spelling — `0…`, `+84`, `84`, `0084`, trunk `0`, separators of up to five spaces, dots, dashes,
+parentheses or brackets between any two digits, replaced whole; decimal
 coordinate pairs and `lat=`/`lng=` labeled values; home-directory names; PR #242 A-F-04 — matched
 on the whitespace-collapsed text that is sent), capped at 8,000 characters. The provider's
 `session_id` is a digest of the task id, never the id. Not caught by pattern, and therefore part

@@ -617,3 +617,74 @@ describe('A-F-04 residual (Astra r4): every Vietnamese form the contract table c
     assert.match(residual, /\+1 \( 415 \) 555-0133/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Astra SA round 5 @5978a62: A-F-04 — the claimed Vietnamese forms, generated, replaced completely.
+// The generator below IS the claim in the docs table: change one, change the other.
+// ---------------------------------------------------------------------------
+
+describe('A-F-04 residual (Astra r5): every generated Vietnamese form is replaced completely, through sanitizeSummary', () => {
+  /** National significant digits the table claims: 9 (mobile) or 10 (landline). */
+  const NSN = ['912345678', '2838221234'];
+  /** Prefix forms as digit strings (`+` handled apart); `t` = trunk 0 present. */
+  const PREFIXES: Array<{ label: string; plus: boolean; digits: string; trunk: boolean }> = [
+    { label: '0', plus: false, digits: '0', trunk: false },
+    { label: '84', plus: false, digits: '84', trunk: false },
+    { label: '84 (0)', plus: false, digits: '84', trunk: true },
+    { label: '+84', plus: true, digits: '84', trunk: false },
+    { label: '+84 (0)', plus: true, digits: '84', trunk: true },
+    { label: '0084', plus: false, digits: '0084', trunk: false },
+    { label: '0084 (0)', plus: false, digits: '0084', trunk: true },
+  ];
+  /** Separator runs the table claims between any two digits: 0–5 of space . - ( ) [ ]. */
+  const BETWEEN = ['', ' ', '.', '-', '  ', ' - ', ') ', ' (', ' ) ', '] [', '-.-', ' ) - '];
+  /** Between `+` and the first digit: 0–3 of space . -. */
+  const AFTER_PLUS = ['', ' ', '.', '-', ' - '];
+  /** Optional opening bracket (plus spaces) before the whole number. */
+  const OPEN = ['', '(', '[', '( ', '[ '];
+
+  function build(prefix: (typeof PREFIXES)[number], nsn: string, sepAt: (i: number) => string, afterPlus: string, open: string): string {
+    const digits = `${prefix.digits}${prefix.trunk ? '0' : ''}${nsn}`;
+    let out = '';
+    for (let i = 0; i < digits.length; i += 1) out += (i === 0 ? '' : sepAt(i)) + digits[i];
+    return `${open}${prefix.plus ? `+${afterPlus}` : ''}${out}`;
+  }
+
+  function assertGone(text: string) {
+    const state = sanitizeSummary(summary({ description: `customer ${text} reported it`, openQuestions: [`call ${text}?`] }));
+    const task = state.task as Record<string, unknown>;
+    const sent = `${String(task.description)} ${JSON.stringify(task.open_questions)}`;
+    assert.ok(!/\d/.test(sent), `digits of ${JSON.stringify(text)} survived: ${sent}`);
+    const direct = redact(text);
+    assert.ok(!/\d/.test(direct), `digits of ${JSON.stringify(text)} survived redact: ${direct}`);
+  }
+
+  for (const prefix of PREFIXES) {
+    for (const nsn of NSN) {
+      it(`${prefix.label} + ${nsn.length} digits: one separator at each position, every separator`, () => {
+        const total = prefix.digits.length + (prefix.trunk ? 1 : 0) + nsn.length;
+        for (const sep of BETWEEN) for (let at = 1; at < total; at += 1) assertGone(build(prefix, nsn, (i) => (i === at ? sep : ''), '', ''));
+      });
+      it(`${prefix.label} + ${nsn.length} digits: the same separator at every position`, () => {
+        for (const sep of BETWEEN) assertGone(build(prefix, nsn, () => sep, '', ''));
+      });
+      it(`${prefix.label} + ${nsn.length} digits: usual groupings with spaces, dots, dashes`, () => {
+        const groups = nsn.length === 9 ? [[3, 6], [2, 5], [1, 4, 7]] : [[2, 6], [3, 6], [2, 4, 7]];
+        for (const g of groups) for (const sep of [' ', '.', '-', '  ']) assertGone(build(prefix, nsn, (i) => (g.map((n) => n + prefix.digits.length + (prefix.trunk ? 1 : 0)).includes(i) ? sep : ''), '', ''));
+      });
+      it(`${prefix.label} + ${nsn.length} digits: opening bracket and after-plus separators`, () => {
+        for (const open of OPEN) for (const afterPlus of AFTER_PLUS) assertGone(build(prefix, nsn, (i) => (i === prefix.digits.length ? ' ' : ''), afterPlus, open));
+      });
+    }
+  }
+
+  it('Astra r5 examples are replaced completely', () => {
+    for (const text of ['8 4 912 345 678', '+84 (0) 28 38 22 12 34', '+ 8 4 (0) 912 345 678', '( 0 0 8 4 ) 912 345 678', '[+84] (0) 2838221234']) assertGone(text);
+  });
+
+  it('code-text negatives still hold', () => {
+    for (const text of ['cells[0][1][2] = +1', 'f(0, 1, 2, 3, 4, 5, 6, 7, 8)', 'exit(+1) then exit(0)', '@@ -1,3 +1,3 @@', 'v[0] = (1 + 2) * 3', 'node 22.18.0', 'port 8081, pid 84', 'pid 84 and 0 errors', 'HTTP 404 at 2026-10-22T10:30:00Z', '8 4 items, 0 errors']) {
+      assert.equal(redact(text), text);
+    }
+  });
+});

@@ -57,6 +57,13 @@ const TOKEN_PATTERNS: RegExp[] = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
 ];
 
+/** Separator run the contract allows between two consecutive digits of a Vietnamese number. */
+const SEP = String.raw`[\s.()\[\]-]{0,5}`;
+const VN_PHONE = new RegExp(
+  String.raw`(?<![\w.])[(\[]?\s*(?:(?:\+[\s.-]{0,3})?(?:0${SEP}0${SEP})?8${SEP}4(?:${SEP}0)?|0)(?:${SEP}\d){9,10}(?!\d)`,
+  'g',
+);
+
 const SECRET_ASSIGNMENT =
   /(["']?)\b((?:[a-z]+_)?(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|private[_-]?key))\1(\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}]+)/gi;
 
@@ -77,12 +84,13 @@ export function redact(text: string): string {
     .replace(/-?\d{1,3}\.\d{3,}\s*,\s*-?\d{1,3}\.\d{3,}/g, '[COORDS]')
     // Labeled single coordinates: `latitude=10.7769`, `lng: 106.7009` (A-F-04 residual).
     .replace(/\b(lat(?:itude)?|lng|lon(?:gitude)?)(\s*[:=]\s*)-?\d{1,3}\.\d+/gi, '$1$2[COORD]')
-    // Vietnamese numbers, every common spelling (owner decision 2026-10-22, A-F-04 r4): mobile
-    // `0…`, landline `0xx …`, `+84`, `84`, `0084`, an opening bracket before the prefix, a `(0)`
-    // trunk group, and up to five spaces, dots, dashes, parentheses or brackets between any two
-    // digits — `( +84 ) 912 345 678`, `( 028 ) 3822 1234`, `+84 ( 28 ) 3822 1234`. A comma, `=`
-    // or letter ends a number; a digit run too long for a phone number is left alone.
-    .replace(/(?<![\w.])[(\[]?\s*(?:\+[\s.-]{0,3}84|0{0,2}84|0)(?:[\s.()[\]-]{0,5}\d){8,10}(?![\d)\]]?\d)/g, '[PHONE]')
+    // Vietnamese numbers (owner decision 2026-10-22; A-F-04 r4/r5), exactly the claim in the
+    // docs table and the generator in review-sa-r1.test.ts: `0` + 9–10 digits, or a prefix `84`,
+    // `+84`, `0084` + optional trunk `0` + those 9–10 digits; between any two consecutive digits
+    // (prefix and trunk included) up to five of space . - ( ) [ ]; between `+` and `84` up to
+    // three of space . -; an opening ( or [ with spaces before it all. The trunk is counted apart
+    // from the national digits, so the whole number is replaced, never its first ten digits.
+    .replace(VN_PHONE, '[PHONE]')
     // Best effort only, outside the attested contract: a `+<cc>` number in the same shapes. Non-Vietnamese
     // numbers are documented as not supported; this line may still replace some, and over-replacing is safe.
     .replace(/(?<![\w.])\+[\s.-]{0,3}\d{1,3}(?:[\s.()[\]-]{0,5}\d){7,13}(?![\d)\]]?\d)/g, '[PHONE]')
