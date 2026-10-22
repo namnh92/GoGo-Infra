@@ -1,0 +1,3 @@
+# Ledger, decision log and handoff drafts written by a local run. Durable
+# handoffs are committed under docs/handoffs/, not left here.
+.state/

@@ -1,0 +1,12 @@
+{
+  "clarity,missing_context,reversible_default,risk,task_kind,workflow": {
+    "answers": {
+      "task_kind": { "type": "choice", "choice": "feature", "probabilities": { "bugfix": 0, "feature": 0.9, "refactor": 0, "docs": 0, "test": 0, "investigation": 0.1, "ops": 0, "not_stated": 0 }, "confidence": 0.8 },
+      "clarity": { "type": "score", "score": 1.1, "probabilities": { "0": 0.1, "1": 0.7, "2": 0.2, "3": 0 }, "confidence": 0.5 },
+      "missing_context": { "type": "choice", "choice": "product_decision", "probabilities": { "none": 0, "discoverable": 0.3, "product_decision": 0.7, "access": 0 }, "confidence": 0.4 },
+      "reversible_default": { "type": "noul", "noul": 0.3 },
+      "risk": { "type": "score", "score": 0.6, "probabilities": { "0": 0.5, "1": 0.4, "2": 0.1, "3": 0 }, "confidence": 0.3 },
+      "workflow": { "type": "choice", "choice": "research_first", "probabilities": { "implement": 0.1, "research_first": 0.6, "spike": 0, "clarify": 0.3 }, "confidence": 0.4 }
+    }
+  }
+}

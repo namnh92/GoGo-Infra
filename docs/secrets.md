@@ -38,7 +38,18 @@ caller that predates the field keeps exactly the scope it was written with.
 
 /gogo/ci/<env>/sentry/
 └── mobile-auth-token             Sentry org auth token: source maps + dSYMs for gogo-mobile
+
+/gogo/ci/<env>/ai-harness/
+├── openrouter-api-key            OpenRouter key for JEV decisions only (ADR-0013), credit-limited
+└── anthropic-api-key             Anthropic API key for headless automation only — never interactive
 ```
+
+`ai-harness/*` (GoGo-Infra#241, [`adr/0013`](adr/0013-ai-harness-jev-decision-router.md)) follow the
+`sentry/mobile-auth-token` pattern: `consumer: pipeline`, handed to one command through
+`exec-with.sh`, never rendered into any env file. Two keys for two bills: the OpenRouter key is
+never used as the Anthropic key, and the Anthropic key never reaches an interactive Claude Code
+session (that would move it from the Max subscription to API billing). Neither is set yet; both
+wait on the owner (ADR-0013 "Owner actions").
 
 `sentry/mobile-auth-token` has no workflow yet (GoGo-Infra#222, ADR-0011 D-5 phase 2): the mobile
 release build runs on a workstation, from the operator session, through
