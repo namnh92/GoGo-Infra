@@ -143,11 +143,13 @@ model quality.
 **D-11 Isolation from GoGo-BE.** The backend's JEV use (GoGo-BE#709) has its own adapter, its
 own SSM row under `backend`, its own budget line in the cost registry. No code is shared across
 repositories and nothing in GoGo-BE can invoke the harness, so production traffic cannot start a
-development agent.
+development agent. **Drift (2026-10-22):** one OpenRouter key, `gogo_jev_dev`, currently serves
+both the harness and the backend POC, so they share one credit limit and one spend line
+(`openrouter.jev_shared`). Code isolation holds; billing isolation does not until owner action 5.
 
 ## Owner actions (not done by this change)
 
-1. Authorize, or not, paid JEV inference: create the OpenRouter key `gogo-ai-harness-dev` with a
+1. Authorize, or not, paid JEV inference: create the OpenRouter key `gogo_ai_harness_dev` with a
    key-level credit limit ($2), then `put.sh dev ai-harness/openrouter-api-key`.
 2. Create the Anthropic workspace for automation with a spend limit and auto top-up off before
    `put.sh dev ai-harness/anthropic-api-key`.
@@ -157,7 +159,14 @@ development agent.
 
 4. For the Cost Center to see actual OpenRouter spend: create an OpenRouter management key
    and `put.sh dev openrouter/management-key` (GoGo-BE#709 collector `openrouter_activity`).
-   Keys are filed by label — `gogo-ai-harness-<env>` and `gogo-be-<env>` — so name them so.
+   Keys are filed by label (`-` or `_`): `gogo_jev_*` → `openrouter.jev_shared`,
+   `gogo_claude_*` → `openrouter.claude_byok` (+ the Claude charge on provider `anthropic`),
+   `gogo_ai_harness_*` → `openrouter.dev_tooling`, `gogo_be_*` → `openrouter.decisions`.
+5. Split `gogo_jev_dev` into `gogo_ai_harness_dev` and `gogo_be_dev`, each with its own credit
+   limit, so harness and product spend and caps are separate again (D-11).
+6. Decide on `gogo_claude_dev`: it routes Anthropic calls through OpenRouter (BYOK), which
+   D-7 rules out for harness automation. If it serves a product feature (customer-facing
+   text), that feature needs its own ADR; the Anthropic workspace spend limit still caps it.
 
 ## Consequences
 
