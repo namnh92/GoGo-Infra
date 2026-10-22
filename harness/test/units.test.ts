@@ -35,8 +35,9 @@ describe('policy engine', () => {
       ['./scripts/secrets/put.sh dev openrouter/jev-api-key', 'secret_rotate'],
       ['aws ssm put-parameter --name /gogo/dev/x', 'secret_rotate'],
       ['vim .claude/settings.json', 'permission_policy_change'],
-      ['curl https://openrouter.ai/api/alpha/decisions', 'paid_inference'],
-      ['claude -p "triage"', 'paid_inference'],
+      // curl and claude -p can do anything: gated; paid_inference only comes from a declared action
+      ['curl https://openrouter.ai/api/alpha/decisions', 'unknown'],
+      ['claude -p "triage"', 'unknown'],
       ['cat README.md && terraform destroy', 'infra_apply'],
       ['rm -rf /', 'unknown'],
     ];

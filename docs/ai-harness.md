@@ -9,7 +9,7 @@ Issue: GoGo-Infra#241.
 
 ```bash
 cd harness
-node --test test/*.test.ts                 # 83 deterministic tests, no key, no network
+node --test test/*.test.ts                 # 186 deterministic tests, no key, no network
 pnpm install --ignore-workspace && pnpm typecheck
 
 # A checkpoint, deterministic only (the default — JEV disabled):
@@ -45,7 +45,7 @@ never in a URL, never logged.
 | `taskId` | Issue reference, e.g. `GoGo-BE#709`. Used for grouping, not sent as meaning. |
 | `checkpoint` | `intake` · `scope_change` · `ambiguity` · `repeated_failure` · `review_planning` |
 | `summary` | `TaskSummary` — written by the session from the issue. Paths, never file contents. |
-| `actions` | What the next step will do, as `ActionKind`s. `classifyCommand` / `classifyEdit` map a command or a path. |
+| `actions` | What the next step will do, as `ActionKind`s. `classifyCommand` (fail-closed allowlist, ADR-0013 D-3a) / `classifyEdit` map a command or a path; anything not recognised as harmless is `unknown` and gates. |
 | `humanAuthorizations` | Kinds the issue author authorized explicitly (only `task_authorizable` ones count). |
 | `failure` | `repeated_failure` only: `{ failureClass, signature }`. |
 

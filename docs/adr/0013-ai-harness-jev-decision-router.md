@@ -83,6 +83,20 @@ unclassifiable (`unknown`). A human authorization written into a task lifts only
 `task_authorizable` set (`open_pr`, `comment_issue`, `ci_workflow_change`, `edit_out_of_scope`,
 `paid_inference`). Editing `harness/src/policy/` is itself `permission_policy_change`.
 
+**D-3a Shell commands are classified fail-closed** (owner decision 2026-10-22, after Sol rounds 1–3 on
+PR #242 found six P1 bypasses in the regex classifier — every one a shell form nobody anticipated, every one
+failing open into autonomy). `harness/src/policy/shell.ts` tokenizes like a shell, refuses syntax it does not
+model (substitution, backticks, escapes, unquoted `$`, parentheses, input redirects, background `&`, output
+redirects other than `/dev/null`), splits on `&&` `||` `;` `|` newline outside quotes, and classifies every
+segment against an argument-aware allowlist (e.g. `find` without `-delete`/`-exec*`/`-ok*`/`-fprint*`, `git
+branch` listing flags only, `git push [-u] origin <branch>` exactly, `sed -n '<n>,<m>p'` only). The line's kind
+is the strictest segment's — no early return. Anything not allowlisted is `unknown` (hard gate); gated commands
+are recognised only to give the question a name. `curl` and `claude -p` are never inferred as `paid_inference`
+— that kind comes only from an action the task declares. Edit paths are normalised before scope checks, so
+`harness/../docs/x` is out of a `harness/` scope. Consequence: a gap in the allowlist costs one extra question,
+never an unapproved action. Q3 of the SA review (allowlist vs permission files vs dropping classification) is
+answered for the POC by this decision; Astra may still revisit it.
+
 **D-4 Checkpoints, not tool calls.** JEV is evaluated at: task intake (only when the rules do not
 settle it), material scope change, unresolved ambiguity, repeated failure (from the second
 attempt), review planning. Never before a file read or a shell command. Questions per checkpoint

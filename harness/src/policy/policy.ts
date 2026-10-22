@@ -14,6 +14,8 @@
  *
  * Unknown means approval: an action this file cannot classify is gated.
  */
+import { posix } from 'node:path';
+import { classifyShell } from './shell.ts';
 
 export type ActionKind =
   // autonomous — authorized, low-risk, reversible
@@ -126,64 +128,11 @@ export function evaluatePolicy(input: PolicyInput): PolicyVerdict {
 }
 
 /**
- * Shell command → action kind. Dangerous patterns are tested first, so a
- * command that is both a read and a deploy is a deploy. Anything unmatched is
- * `unknown`, which gates.
- */
-const COMMAND_RULES: Array<[RegExp, ActionKind]> = [
-  [/\bgh\s+pr\s+merge\b|\bmerge_pull_request\b|\bgit\s+merge\b.*\b(origin\/)?(master|main)\b/, 'merge_pr'],
-  [/\bgit\s+push\b.*(\s--force\b|\s-f\b|--force-with-lease|\s\+\S)/, 'force_push'],
-  [/\bgit\s+push\b.*\b(master|main|develop|release\/\S+)\b/, 'push_protected_branch'],
-  [/deploy-production|\bdeploy-vps\.sh\s+prod\b|\bterraform-apply-prod\b/, 'deploy_production'],
-  [/\bdeploy-vps\.sh\s+staging\b|\bstaging\b.*\bdeploy\b/, 'deploy_staging'],
-  [/\bterraform\s+(apply|destroy|import)\b|\bterraform\s+state\s+(rm|mv|push)\b|\bwrangler\s+(deploy|versions\s+deploy|r2\s+bucket\s+delete)\b/, 'infra_apply'],
-  [/\b(DROP|TRUNCATE)\s+(TABLE|SCHEMA|DATABASE|INDEX)\b|\bDELETE\s+FROM\b(?![^;]*\bWHERE\b)|\bdrizzle-kit\s+(drop|push)\b/i, 'db_destructive'],
-  [/scripts\/secrets\/(put|delete|generate-auth|put-identity-key|put-worker-secret)\.sh|\baws\s+ssm\s+(put|delete)-parameters?\b|\bwrangler\s+secret\s+(put|delete)\b|\bgh\s+secret\s+set\b/, 'secret_rotate'],
-  [/\.claude\/settings(\.local)?\.json|\bCODEOWNERS\b|\bgh\s+api\b.*\/protection\b|\baws\s+iam\s+(put|attach|create|delete|update)/, 'permission_policy_change'],
-  [/\bopenrouter\.ai\/api\b|\bapi\.anthropic\.com\b|\bclaude\s+-p\b/, 'paid_inference'],
-  [/\bgh\s+pr\s+create\b|\bcreate_pull_request\b/, 'open_pr'],
-  [/\bgh\s+(issue|pr)\s+comment\b/, 'comment_issue'],
-  [/\bgit\s+push\b/, 'push_feature_branch'],
-  [/\bgit\s+commit\b/, 'commit'],
-  [/\b(pnpm|npm|yarn)\s+(run\s+)?(test|test:\w+)\b|\bnode\s+--test\b|\bvitest\b|\bjest\b|\bshellcheck\b|\bterraform\s+(validate|fmt)\b/, 'test'],
-  [/\b(pnpm|npm)\s+(run\s+)?(lint|format:check)\b|\beslint\b|\bprettier\s+--check\b/, 'lint'],
-  [/\b(pnpm|npm)\s+(run\s+)?typecheck\b|\btsc\b/, 'typecheck'],
-  [/\b(pnpm|npm)\s+(run\s+)?build\b|\bterraform\s+plan\b/, 'local_build'],
-  [/^\s*(cat|ls|rg|grep|find|head|tail|wc|sed\s+-n|git\s+(status|log|diff|show|branch|fetch))\b/, 'read'],
-];
-
-const RANK: Record<PolicyClass, number> = { autonomous: 0, task_authorizable: 1, hard_gate: 2 };
-
-/**
- * Classify a whole command line by its most restrictive part (PR #242 F-01).
- *
- * A gated pattern anywhere in the line wins first, so `cat x && terraform
- * destroy` is `infra_apply`. Otherwise every segment between `&&`, `||`, `;`,
- * `|` and newlines is classified on its own and the strictest kind is kept, so
- * a read in front cannot lend its verdict to an unclassified command behind
- * it. Shapes this classifier cannot see into — command substitution, and an
- * output redirect to anything but /dev/null — are `unknown`, which gates.
+ * Shell command → action kind. Fail-closed allowlist in `shell.ts`: anything
+ * it does not positively recognise as harmless is `unknown`, which gates.
  */
 export function classifyCommand(command: string): ActionKind {
-  for (const [pattern, kind] of COMMAND_RULES) {
-    if (POLICY_CLASS[kind] !== 'autonomous' && pattern.test(command)) return kind;
-  }
-  if (/\$\(|`/.test(command)) return 'unknown';
-  if (/(^|[^0-9&>])>{1,2}\s*(?!\/dev\/null\b)\S/.test(command.replace(/\d?>&\d/g, ''))) return 'unknown';
-  const segments = command.split(/&&|\|\||[;|\n]/).map((part) => part.trim()).filter(Boolean);
-  if (segments.length === 0) return 'unknown';
-  let worst: ActionKind | null = null;
-  for (const segment of segments) {
-    const kind = classifySegment(segment);
-    if (kind === 'unknown') return 'unknown';
-    if (worst === null || RANK[POLICY_CLASS[kind]] > RANK[POLICY_CLASS[worst]]) worst = kind;
-  }
-  return worst ?? 'unknown';
-}
-
-function classifySegment(segment: string): ActionKind {
-  for (const [pattern, kind] of COMMAND_RULES) if (pattern.test(segment)) return kind;
-  return 'unknown';
+  return classifyShell(command);
 }
 
 /** Paths whose edit is itself a policy or production change, whatever the task scope says. */
@@ -197,6 +146,9 @@ const PROTECTED_PATHS: Array<[RegExp, ActionKind]> = [
 
 /** Classify an edit to `path` given the path prefixes the task is scoped to. */
 export function classifyEdit(path: string, scopePrefixes: string[]): ActionKind {
-  for (const [pattern, kind] of PROTECTED_PATHS) if (pattern.test(path)) return kind;
-  return scopePrefixes.some((prefix) => path.startsWith(prefix)) ? 'edit_in_scope' : 'edit_out_of_scope';
+  // Normalise first: `harness/../docs/x.md` must not pass a `harness/` prefix check.
+  const normalized = posix.normalize(path.replace(/\\/g, '/'));
+  for (const [pattern, kind] of PROTECTED_PATHS) if (pattern.test(normalized)) return kind;
+  if (posix.isAbsolute(normalized) || normalized === '..' || normalized.startsWith('../')) return 'edit_out_of_scope';
+  return scopePrefixes.some((prefix) => normalized.startsWith(prefix)) ? 'edit_in_scope' : 'edit_out_of_scope';
 }
