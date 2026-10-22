@@ -22,7 +22,7 @@ import { DecisionRouter } from '../src/router/router.ts';
 import { BudgetLedger } from '../src/runtime/budget.ts';
 import { LoopController } from '../src/runtime/loop.ts';
 import { MemorySink } from '../src/runtime/metrics.ts';
-import { redact } from '../src/runtime/sanitize.ts';
+import { redact, sanitizeSummary } from '../src/runtime/sanitize.ts';
 import { loadTaskState, saveTaskState, taskStateFile } from '../src/runtime/task-state.ts';
 import { countingMock, harness, input, intakeAnswers, summary } from './helpers.ts';
 
@@ -428,5 +428,110 @@ describe('A-F-04 residual (Astra r2): the outbound contract states what minimiza
     assert.match(docs, /\+<country code>|international/);
     assert.match(docs, /latitude|lat=/);
     assert.match(docs, /DMS|degrees/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Astra SA round 3 @3901c6d: A-F-01 and A-F-04 residuals, A-F-09 new.
+// ---------------------------------------------------------------------------
+
+describe('A-F-01 residual (Astra r3): scope and classification read the same normalized spelling', () => {
+  it('docs/../.github/workflows/x.yml with scope docs/ and only ci_workflow_change authorized is gated', () => {
+    const v = evaluatePolicy({ actions: [{ kind: 'ci_workflow_change', target: 'docs/../.github/workflows/x.yml' }], scope: ['docs/'], humanAuthorizations: ['ci_workflow_change'] });
+    assert.equal(v.outcome, 'HUMAN_APPROVAL', reasons(v));
+    assert.ok(v.gates.some((g) => g.kind === 'edit_out_of_scope'), reasons(v));
+  });
+
+  for (const target of ['docs//../.github/workflows/x.yml', './docs/../.github/workflows/x.yml', 'docs/./../.github/workflows/x.yml']) {
+    it(`${target} is read as .github/workflows/x.yml for the scope check too`, () => {
+      const v = evaluatePolicy({ actions: [{ kind: 'edit_in_scope', target }], scope: ['docs/'], humanAuthorizations: ['ci_workflow_change'] });
+      assert.equal(v.outcome, 'HUMAN_APPROVAL', reasons(v));
+      assert.ok(v.gates.some((g) => g.kind === 'edit_out_of_scope'), reasons(v));
+    });
+  }
+
+  it('./.github/workflows/x.yml is inside a .github/ scope (same spelling both ways)', () => {
+    const v = evaluatePolicy({ actions: [{ kind: 'ci_workflow_change', target: './.github/workflows/x.yml' }], scope: ['.github/'], humanAuthorizations: ['ci_workflow_change'] });
+    assert.equal(v.outcome, 'AUTO_EXECUTE', reasons(v));
+  });
+
+  it('the same spelling inside a checkout is gated the same way (guard)', () => {
+    const root = checkout();
+    mkdirSync(join(root, 'docs'));
+    const v = evaluatePolicy({ actions: [{ kind: 'ci_workflow_change', target: 'docs/../.github/workflows/x.yml' }], scope: ['docs/'], repoRoot: root, humanAuthorizations: ['ci_workflow_change'] });
+    assert.equal(v.outcome, 'HUMAN_APPROVAL', reasons(v));
+    assert.ok(v.gates.some((g) => g.kind === 'edit_out_of_scope'), reasons(v));
+  });
+});
+
+describe('A-F-04 residual (Astra r3): repeated separators and the whitespace that clip collapses', () => {
+  it('phone numbers with doubled or mixed separators are minimized', () => {
+    const text = 'ring +44  20 7946 0958, +1\t415 555 0133, 0912  345  678, +84 - 912 - 345 - 678, +65 6123\n4567';
+    const out = redact(text);
+    for (const leaked of ['7946', '0958', '415', '0133', '345', '678', '6123', '4567']) assert.ok(!out.includes(leaked), `${leaked} survived: ${out}`);
+  });
+
+  it('a number split across a line break never reaches the summary intact', () => {
+    const state = sanitizeSummary(summary({ description: 'customer +44 20\n   7946 0958 reported it; see 10.7769,\n106.7009' }));
+    const sent = JSON.stringify(state);
+    for (const leaked of ['7946', '0958', '10.7769', '106.7009']) assert.ok(!sent.includes(leaked), `${leaked} survived: ${sent}`);
+  });
+
+  it('labeled coordinates with extra spaces are minimized', () => {
+    const out = redact('latitude  =  10.7769   longitude :\t106.7009');
+    for (const leaked of ['10.7769', '106.7009']) assert.ok(!out.includes(leaked), `${leaked} survived: ${out}`);
+  });
+
+  it('ordinary text with doubled spaces is unchanged apart from the spaces', () => {
+    for (const text of ['@@ -1,3  +1,3 @@', 'node  22.18.0,  typescript 5.9.3', 'retry  +1  then  +2']) {
+      assert.equal(redact(text).replace(/\s+/g, ' '), text.replace(/\s+/g, ' '));
+    }
+  });
+});
+
+describe('A-F-09 (Astra r3): a root alias is accepted only when it resolves to the selected checkout', () => {
+  /** /A and /B are two checkouts; /A/link → /B/sub; /A/docs/x links into /A/harness/. */
+  function twoCheckouts() {
+    const a = checkout();
+    const b = checkout();
+    mkdirSync(join(a, 'docs'));
+    mkdirSync(join(a, 'harness'));
+    writeFileSync(join(a, 'harness/policy.ts'), '');
+    symlinkSync('../harness/policy.ts', join(a, 'docs/x'));
+    mkdirSync(join(b, 'sub'));
+    mkdirSync(join(b, 'docs'));
+    writeFileSync(join(b, 'docs/x'), '');
+    symlinkSync(join(b, 'sub'), join(a, 'link'));
+    return { a, b };
+  }
+
+  it('repoRoot=/A/link (→ /B/sub) does not make /A a spelling of /B', () => {
+    const { a } = twoCheckouts();
+    const v = evaluatePolicy({ actions: [{ kind: 'edit_in_scope', target: join(a, 'docs/x') }], scope: ['docs/'], repoRoot: join(a, 'link') });
+    assert.equal(v.outcome, 'HUMAN_APPROVAL');
+    assert.match(reasons(v), /outside the checkout|symbolic link/);
+  });
+
+  it('the same with edit_out_of_scope authorized is still gated', () => {
+    const { a } = twoCheckouts();
+    const v = evaluatePolicy({ actions: [{ kind: 'edit_out_of_scope', target: join(a, 'docs/x') }], scope: ['docs/'], repoRoot: join(a, 'link'), humanAuthorizations: ['edit_out_of_scope'] });
+    assert.equal(v.outcome, 'HUMAN_APPROVAL');
+    assert.match(reasons(v), /outside the checkout|symbolic link/);
+  });
+
+  it('a relative target from /A/link is placed in /B, never in /A', () => {
+    const { a } = twoCheckouts();
+    const v = evaluatePolicy({ actions: [{ kind: 'edit_in_scope', target: '../docs/x' }], scope: ['docs/'], repoRoot: join(a, 'link') });
+    assert.equal(v.outcome, 'AUTO_EXECUTE', reasons(v));
+    assert.equal(v.gates.length, 0);
+  });
+
+  it('a symlinked spelling of the checkout itself is still accepted (guard)', () => {
+    const root = checkout();
+    mkdirSync(join(root, 'docs'));
+    const alias = join(mkdtempSync(join(tmpdir(), 'harness-alias-')), 'repo');
+    symlinkSync(root, alias);
+    const v = evaluatePolicy({ actions: [{ kind: 'edit_in_scope', target: join(alias, 'docs/new.md') }], scope: ['docs/'], repoRoot: alias });
+    assert.equal(v.outcome, 'AUTO_EXECUTE', reasons(v));
   });
 });

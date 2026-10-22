@@ -10,7 +10,8 @@
  * Personal data is minimized the same way (ai-guardrails.md, PR #242 A-F-04):
  * email addresses, phone numbers (Vietnamese national and `+<country code>`
  * international), decimal coordinates (pairs and `lat=`/`lng=` labeled) and
- * home-directory names are replaced before anything is sent. This is pattern
+ * home-directory names are replaced before anything is sent, on the
+ * whitespace-collapsed text that is actually sent. This is pattern
  * matching, not de-identification: a name or a street written as prose, a
  * national number without `+` outside Viet Nam, DMS coordinates pass through,
  * which is why live mode also needs JEV_PRIVACY_REVIEWED=yes (config.ts) and
@@ -75,15 +76,18 @@ export function redact(text: string): string {
     .replace(/-?\d{1,3}\.\d{3,}\s*,\s*-?\d{1,3}\.\d{3,}/g, '[COORDS]')
     // Labeled single coordinates: `latitude=10.7769`, `lng: 106.7009` (A-F-04 residual).
     .replace(/\b(lat(?:itude)?|lng|lon(?:gitude)?)(\s*[:=]\s*)-?\d{1,3}\.\d+/gi, '$1$2[COORD]')
-    // International: `+<cc>` then 7–13 digits with spaces, dots, dashes or parentheses; a diff
-    // header's `+1,3` has no digit run that long. Then Vietnamese national (`0…`, `+84…`).
-    .replace(/(?<![\w.])\+\d{1,3}(?:[\s.-]?\(?\d\)?){7,13}(?!\d)/g, '[PHONE]')
-    .replace(/(?<![\w.])(?:\+\s?84|0)(?:[\s.-]?\d){8,10}(?!\d)/g, '[PHONE]')
+    // International: `+<cc>` then 7–13 digits with up to three spaces, dots or dashes between
+    // digits, parentheses allowed (A-F-04, Astra r3: `+44  20 …`); a diff header's `+1,3` has no
+    // digit run that long. Then Vietnamese national (`0…`, `+84…`).
+    .replace(/(?<![\w.])\+\d{1,3}(?:[\s.-]{0,3}\(?\d\)?){7,13}(?!\d)/g, '[PHONE]')
+    .replace(/(?<![\w.])(?:\+\s?84|0)(?:[\s.-]{0,3}\d){8,10}(?!\d)/g, '[PHONE]')
     .replace(/(\/Users|\/home|[A-Za-z]:\\Users)[\/\\][^\/\\\s]+/g, '~');
 }
 
 function clip(text: string, max: number): string {
-  const clean = redact(text).replace(/\s+/g, ' ').trim();
+  // Whitespace is collapsed before redaction, so the patterns see the text that is sent, not
+  // a line-broken version of it (A-F-04, Astra r3).
+  const clean = redact(text.replace(/\s+/g, ' ')).trim();
   return clean.length <= max ? clean : `${clean.slice(0, max - 1)}…`;
 }
 

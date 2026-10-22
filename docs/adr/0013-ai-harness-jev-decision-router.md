@@ -82,8 +82,10 @@ allows, not what the session may do. Every decision carries an `advisory` field 
 the harness can check it re-derives: a write action (`edit_in_scope`, `edit_out_of_scope`,
 `ci_workflow_change`, `update_handoff`, `write_test_evidence`) needs a target and is classified
 from that target, whatever kind was declared. The target is placed in the checkout the working
-directory belongs to (the nearest `.git`; A-F-03), walked component by component in filesystem
-order — a `..` is stepped, not collapsed first (A-F-02) — and checked against the task scope: no
+directory belongs to (the nearest `.git`; A-F-03 — a symlinked spelling of that directory counts
+only when it resolves to the same checkout, A-F-09), walked component by component in filesystem
+order — a `..` is stepped, not collapsed first (A-F-02) — then one normalized spelling serves the
+protected-path match and the scope check alike (A-F-01), and it is checked against the task scope: no
 target, a symbolic link or hard-linked file on the way, a path that leaves the checkout, or a
 working directory in no checkout is `unknown`; a protected path is its gate; a workflow file
 outside the scope needs `ci_workflow_change` **and** `edit_out_of_scope`; any other write outside
@@ -150,7 +152,8 @@ nothing may fit.
 questions, labels, paths (not contents), sources already searched, quoted rules — redacted for
 credentials and minimized for personal data (emails; Vietnamese and `+<country code>`
 international phone numbers; decimal coordinate pairs and `lat=`/`lng=` labeled values;
-home-directory names; PR #242 A-F-04), capped at 8,000 characters. The provider's `session_id`
+home-directory names; PR #242 A-F-04 — matched on the whitespace-collapsed text that is sent),
+capped at 8,000 characters. The provider's `session_id`
 is a digest of the task id, never the id. Not caught by pattern, and therefore part of what the
 privacy review in D-2 attests to: prose names, streets and places, national phone formats without
 `+` outside Viet Nam, DMS or whitespace-only coordinate pairs. The full outbound contract, with

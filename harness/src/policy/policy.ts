@@ -178,6 +178,9 @@ export function deriveAction(declared: ProposedAction, scope: string[], checkout
   } else if (escapesByText(path)) {
     return unknown(`${declared.target} is outside the checkout`);
   }
+  // One spelling for every decision below (A-F-01, Astra r3): `docs/../.github/x` is
+  // `.github/x` for the protected-path match and for the scope check alike.
+  path = posix.normalize(path);
   const edit = classifyEdit(path, scope);
   const required = new Set<ActionKind>();
   if (POLICY_CLASS[edit] === 'hard_gate') {
@@ -206,8 +209,10 @@ export type Checkout = { root: string; spellings: string[]; prefix: string } | {
 /**
  * The nearest ancestor of `dir` with a `.git` entry (a file in a worktree, a
  * directory otherwise), resolved through symlinks, and `dir`'s path under
- * it. `spellings` are the root as resolved and as given, for absolute
- * targets spelled either way.
+ * it. `spellings` are the root as resolved and, when `dir` was spelled
+ * through a link, the lexical root above that spelling — accepted only when
+ * it resolves to the same checkout (A-F-09): `/A/link → /B/sub` must not make
+ * `/A`, another checkout, a name for `/B`.
  */
 export function locateCheckout(dir: string): Checkout {
   const given = resolve(dir);
@@ -219,8 +224,20 @@ export function locateCheckout(dir: string): Checkout {
   }
   const root = ancestorWithGit(real);
   if (!root) return { reason: `${dir} is not inside a git checkout` };
-  const lexical = given === real ? null : ancestorWithGit(given);
-  return { root, spellings: lexical && lexical !== root ? [root, lexical] : [root], prefix: relative(root, real).split(sep).join('/') };
+  const spellings = [root];
+  if (given !== real) {
+    const lexical = ancestorWithGit(given);
+    if (lexical && lexical !== root && sameDirectory(lexical, root)) spellings.push(lexical);
+  }
+  return { root, spellings, prefix: relative(root, real).split(sep).join('/') };
+}
+
+function sameDirectory(a: string, b: string): boolean {
+  try {
+    return realpathSync(a) === realpathSync(b);
+  } catch {
+    return false;
+  }
 }
 
 function ancestorWithGit(start: string): string | null {
@@ -332,9 +349,10 @@ export function classifyEdit(path: string, scopePrefixes: string[]): ActionKind 
   return withinScope(normalized, scopePrefixes) ? 'edit_in_scope' : 'edit_out_of_scope';
 }
 
-/** Whether a normalised repository-relative path is under one of the task's scope prefixes. */
+/** Whether a repository-relative path is under one of the task's scope prefixes. Normalises its own input. */
 export function withinScope(path: string, scopePrefixes: string[]): boolean {
-  return scopePrefixes.some((prefix) => withinPrefix(path, prefix));
+  const normalized = posix.normalize(path.replace(/\\/g, '/'));
+  return scopePrefixes.some((prefix) => withinPrefix(normalized, prefix));
 }
 
 /** Component-boundary prefix match (PR #242 A-F-02): `harness` covers `harness/x`, not `harnessx/`. Empty = whole repo. */

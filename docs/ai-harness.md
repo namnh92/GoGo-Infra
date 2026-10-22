@@ -66,13 +66,14 @@ One request per JEV call, to OpenRouter, built by `sanitizeSummary` and the ques
 | `session_id` | 16-hex digest of `taskId` | the task id itself is never sent |
 | `model` | the pinned model id | — |
 
-Minimization is pattern matching (`harness/src/runtime/sanitize.ts`), and `JEV_PRIVACY_REVIEWED`
-attests to exactly this coverage:
+Minimization is pattern matching (`harness/src/runtime/sanitize.ts`) applied to each field after
+its whitespace is collapsed to single spaces — the text that is sent, so a number broken across
+lines is still seen whole — and `JEV_PRIVACY_REVIEWED` attests to exactly this coverage:
 
 | Data | Caught | Not caught (residual — keep it out of the summary) |
 | --- | --- | --- |
 | Email | `local@domain.tld` | an address written as `name at domain` |
-| Phone | Vietnamese national `0…` / `+84…` (9–11 digits, spaces, dots or dashes); international `+<country code>` followed by 7–13 digits with spaces, dots, dashes or parentheses | a national number without `+` outside Viet Nam (`(415) 555-0133`, `020 7946 0958`); extensions written as words |
+| Phone | Vietnamese national `0…` / `+84…` (9–11 digits); international `+<country code>` followed by 7–13 digits with parentheses allowed — in both, up to three spaces, dots or dashes between digits | a national number without `+` outside Viet Nam (`(415) 555-0133`, `020 7946 0958`); digits separated by other characters or by more than three (`+44 / 20 / 7946`); extensions written as words |
 | Coordinates | decimal pairs `lat, lon` with ≥ 3 decimals; a labeled value `lat`/`latitude`/`lng`/`lon`/`longitude` `=` or `:` a decimal | DMS (`10°46'37"N`), a bare pair separated by whitespace only, plus codes, geohashes, a place name |
 | Home directory | `/Users/<name>`, `/home/<name>`, `C:\Users\<name>` | a user name elsewhere in a path or in prose |
 | Prose | — | a person's name, a street, a place, an account id written as text |
@@ -91,7 +92,7 @@ no file contents, no environment, no repository data — is sent.
 | `summary` | `TaskSummary` — written by the session from the issue. Paths, never file contents. |
 | `actions` | What the next step will do, as `ActionKind`s, declared by the caller and not verified. A write kind (`edit_in_scope`, `edit_out_of_scope`, `ci_workflow_change`, `update_handoff`, `write_test_evidence`) needs a `target` and is re-classified from it, whatever the label: no target, a symlink or a hard-linked file on the way, a `..` that leaves the checkout or goes through a directory that does not exist, an absolute path outside the checkout, or a working directory in no checkout → `unknown`; a protected path (`.claude/settings*.json`, `CODEOWNERS`, anything under `harness/`, prod Terraform; matched case-insensitively) → its gate; a workflow file → `ci_workflow_change`, **plus** `edit_out_of_scope` when it is outside `scope`; otherwise in or out of `scope` by path component — so a handoff or test-evidence write outside the scope needs the `edit_out_of_scope` authorization like any other edit. A declared `edit_out_of_scope` or `ci_workflow_change` keeps its own requirement even on an in-scope target. Non-write kinds (`test`, `commit`…) are taken as declared and are unverified. `classifyCommand` never returns an autonomous kind (ADR-0013 D-3b): every shell line gates, named when recognisable, `unknown` otherwise — declare the step's kind instead. |
 | `scope` | Repository-relative path prefixes the task may edit, matched on component boundaries (`docs` covers `docs/x`, not `docs-x/`). Authored on the issue, so always relative to the checkout root, not to the working directory. Absent = nothing is in scope. |
-| `repoRoot` | The directory the write targets are spelled from. Default: the CLI's working directory. The checkout root is the nearest ancestor with `.git` (a file in a worktree); relative targets are rebased onto it (`cd harness` + `src/cli.ts` → `harness/src/cli.ts`, protected), absolute targets must be spelled under it, and each component is inspected in order. |
+| `repoRoot` | The directory the write targets are spelled from. Default: the CLI's working directory. The checkout root is the nearest ancestor with `.git` (a file in a worktree); relative targets are rebased onto it (`cd harness` + `src/cli.ts` → `harness/src/cli.ts`, protected), absolute targets must be spelled under it — the root as resolved, or the working directory's own spelling when that resolves to the same checkout (`/A/link → /B/sub` does not make `/A` a name for `/B`) — and each component is inspected in order. |
 | `humanAuthorizations` | Kinds the issue author authorized explicitly (only `task_authorizable` ones count). |
 | `failure` | `repeated_failure` only: `{ failureClass, signature }`. |
 
