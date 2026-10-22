@@ -150,14 +150,15 @@ nothing may fit.
 
 **D-5 State.** A sanitized `TaskSummary` — title, description, acceptance criteria, open
 questions, labels, paths (not contents), sources already searched, quoted rules — redacted for
-credentials and minimized for personal data (emails; Vietnamese and `+<country code>`
-international phone numbers; decimal coordinate pairs and `lat=`/`lng=` labeled values;
-home-directory names; PR #242 A-F-04 — matched on the whitespace-collapsed text that is sent),
-capped at 8,000 characters. The provider's `session_id`
-is a digest of the task id, never the id. Not caught by pattern, and therefore part of what the
-privacy review in D-2 attests to: prose names, streets and places, national phone formats without
-`+` outside Viet Nam, DMS or whitespace-only coordinate pairs. The full outbound contract, with
-the caught/not-caught table, is in `docs/ai-harness.md`. Identical context is answered from cache.
+credentials and minimized for personal data (emails; Vietnamese phone numbers in every common
+spelling — `0…`, `+84`, `84`, grouped with spaces, dots, dashes, parentheses or brackets; decimal
+coordinate pairs and `lat=`/`lng=` labeled values; home-directory names; PR #242 A-F-04 — matched
+on the whitespace-collapsed text that is sent), capped at 8,000 characters. The provider's
+`session_id` is a digest of the task id, never the id. Not caught by pattern, and therefore part
+of what the privacy review in D-2 attests to: prose names, streets and places; non-Vietnamese
+phone numbers, which are not supported and not minimized (owner decision 2026-10-22); DMS or
+whitespace-only coordinate pairs. The full outbound contract, with the caught/not-caught table, is
+in `docs/ai-harness.md`. Identical context is answered from cache.
 
 **D-6 Loop controls.** Three repair attempts per failure class, then escalate; the same error
 signature twice in a row → change approach; eight attempts per task; ten JEV calls per task;

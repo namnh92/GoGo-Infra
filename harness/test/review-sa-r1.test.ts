@@ -119,12 +119,12 @@ describe('A-F-04 [P1] live inference needs a privacy attestation and minimized o
   it('emails, phone numbers, coordinates and home paths are redacted', () => {
     const text = [
       'reported by an.nguyen+qa@example.com',
-      'call 0912 345 678 or +84 912.345.678 or 0912345678',
+      'call 0912 345 678 or +84 912.345.678 or 0912345678 or (028) 3822 1234',
       'pin at 10.7769, 106.7009',
       'at /Users/devuser/work/x.ts and /home/runner/work/y.ts',
     ].join('; ');
     const out = redact(text);
-    for (const leaked of ['an.nguyen', 'example.com', '345', '678', '10.7769', '106.7009', 'devuser', 'runner']) {
+    for (const leaked of ['an.nguyen', 'example.com', '345', '678', '3822', '1234', '10.7769', '106.7009', 'devuser', 'runner']) {
       assert.ok(!out.includes(leaked), `${leaked} survived: ${out}`);
     }
   });
@@ -412,9 +412,9 @@ describe('A-F-04 residual (Astra r2): the outbound contract states what minimiza
     }
   });
 
-  it('international phone numbers are minimized', () => {
-    const out = redact('call +1 415 555 0133, +44 20 7946 0958 or +65 6123 4567');
-    for (const leaked of ['415', '555', '0133', '7946', '0958', '6123', '4567']) assert.ok(!out.includes(leaked), `${leaked} survived: ${out}`);
+  it('+84 spellings with dots, dashes and no separators are minimized', () => {
+    const out = redact('call +84912345678, +84-912-345-678 or +84.28.3822.1234');
+    for (const leaked of ['912345678', '345', '3822', '1234']) assert.ok(!out.includes(leaked), `${leaked} survived: ${out}`);
   });
 
   it('diff headers, version lists and timestamps are not phone numbers or coordinates', () => {
@@ -425,7 +425,8 @@ describe('A-F-04 residual (Astra r2): the outbound contract states what minimiza
 
   it('the contract lists the supported formats and the residuals it does not catch', () => {
     const docs = readFileSync(new URL('../../docs/ai-harness.md', import.meta.url), 'utf8');
-    assert.match(docs, /\+<country code>|international/);
+    assert.match(docs, /`\+84`/);
+    assert.match(docs, /non-Vietnamese[^.]*not supported/i);
     assert.match(docs, /latitude|lat=/);
     assert.match(docs, /DMS|degrees/);
   });
@@ -466,51 +467,20 @@ describe('A-F-01 residual (Astra r3): scope and classification read the same nor
 
 describe('A-F-04 residual (Astra r3): repeated separators and the whitespace that clip collapses', () => {
   it('phone numbers with doubled or mixed separators are minimized', () => {
-    const text = 'ring +44  20 7946 0958, +1\t415 555 0133, 0912  345  678, +84 - 912 - 345 - 678, +65 6123\n4567';
+    const text = 'ring +84  912 345 678, 028\t3822 1234, 0912  345  678, +84 - 912 - 345 - 678, 0912 345\n678';
     const out = redact(text);
-    for (const leaked of ['7946', '0958', '415', '0133', '345', '678', '6123', '4567']) assert.ok(!out.includes(leaked), `${leaked} survived: ${out}`);
+    for (const leaked of ['912', '345', '678', '3822', '1234']) assert.ok(!out.includes(leaked), `${leaked} survived: ${out}`);
   });
 
   it('a number split across a line break never reaches the summary intact', () => {
-    const state = sanitizeSummary(summary({ description: 'customer +44 20\n   7946 0958 reported it; see 10.7769,\n106.7009' }));
+    const state = sanitizeSummary(summary({ description: 'customer +84 912\n   345 678 reported it; see 10.7769,\n106.7009' }));
     const sent = JSON.stringify(state);
-    for (const leaked of ['7946', '0958', '10.7769', '106.7009']) assert.ok(!sent.includes(leaked), `${leaked} survived: ${sent}`);
+    for (const leaked of ['912', '345', '678', '10.7769', '106.7009']) assert.ok(!sent.includes(leaked), `${leaked} survived: ${sent}`);
   });
 
-  it('a space between + and the country code is still a phone number', () => {
-    const out = redact('+ 44 20 7946 0958 or + 84 912 345 678 or +  1 415 555 0133');
-    for (const leaked of ['7946', '0958', '912', '345', '415', '0133']) assert.ok(!out.includes(leaked), `${leaked} survived: ${out}`);
-  });
-
-  it('every format the contract table claims as caught is caught', () => {
-    const claimed: Array<[string, string[]]> = [
-      ['an.nguyen@example.com', ['an.nguyen', 'example.com']],
-      ['0912345678', ['0912345678']],
-      ['0912 345 678', ['345']],
-      ['0912.345.678', ['345']],
-      ['0912-345-678', ['345']],
-      ['+84 912 345 678', ['345']],
-      ['+84912345678', ['912345678']],
-      ['+1 (415) 555-0133', ['415', '0133']],
-      ['+44 20 7946 0958', ['7946']],
-      ['+44.20.7946.0958', ['7946']],
-      ['+65-6123-4567', ['6123']],
-      ['10.7769, 106.7009', ['10.7769', '106.7009']],
-      ['10.7769,106.7009', ['10.7769']],
-      ['-33.8688, 151.2093', ['33.8688']],
-      ['lat=10.7769', ['10.7769']],
-      ['latitude: 10.7769', ['10.7769']],
-      ['lng=106.7009', ['106.7009']],
-      ['lon: 106.7009', ['106.7009']],
-      ['longitude = -106.7009', ['106.7009']],
-      ['/Users/devuser/x', ['devuser']],
-      ['/home/runner/x', ['runner']],
-      ['C:\\Users\\devuser\\x', ['devuser']],
-    ];
-    for (const [text, leaks] of claimed) {
-      const out = redact(text);
-      for (const leaked of leaks) assert.ok(!out.includes(leaked), `${leaked} survived in "${text}": ${out}`);
-    }
+  it('a space between + and 84 is still a phone number', () => {
+    const out = redact('+ 84 912 345 678 or +  84 28 3822 1234');
+    for (const leaked of ['912', '345', '3822', '1234']) assert.ok(!out.includes(leaked), `${leaked} survived: ${out}`);
   });
 
   it('labeled coordinates with extra spaces are minimized', () => {
@@ -519,7 +489,7 @@ describe('A-F-04 residual (Astra r3): repeated separators and the whitespace tha
   });
 
   it('ordinary text with doubled spaces is unchanged apart from the spaces', () => {
-    for (const text of ['@@ -1,3  +1,3 @@', 'node  22.18.0,  typescript 5.9.3', 'retry  +1  then  +2']) {
+    for (const text of ['@@ -1,3  +1,3 @@', 'node  22.18.0,  typescript 5.9.3', 'retry  +1  then  +2', 'pid 84  and  0  errors']) {
       assert.equal(redact(text).replace(/\s+/g, ' '), text.replace(/\s+/g, ' '));
     }
   });
@@ -572,40 +542,54 @@ describe('A-F-09 (Astra r3): a root alias is accepted only when it resolves to t
   });
 });
 
+
 // ---------------------------------------------------------------------------
-// Astra SA round 4 @5e6ea50: A-F-04 residual — grouping forms (parentheses, brackets, interior spacing).
+// Astra SA round 4 @5e6ea50: A-F-04 — grouping forms. Owner decision 2026-10-22: the attested
+// contract claims Vietnamese numbers only; international forms are a documented residual.
 // ---------------------------------------------------------------------------
 
-describe('A-F-04 residual (Astra r4): every grouping form the contract table claims is caught, through sanitizeSummary', () => {
-  /** [text, fragments that must not survive] — one row per form the docs table lists as caught. */
+describe('A-F-04 residual (Astra r4): every Vietnamese form the contract table claims is caught, through sanitizeSummary', () => {
+  /** [text, fragments that must not survive] — one row per spelling the docs table lists as caught. */
   const claimed: Array<[string, string[]]> = [
-    // parentheses and brackets, with and without interior spacing
-    ['+1 ( 415 ) 555-0133', ['415', '555', '0133']],
-    ['+1 (415) 555 0133', ['415', '0133']],
-    ['+1 [415] 555 0133', ['415', '0133']],
-    ['+1 [ 415 ] 555 0133', ['415', '0133']],
-    ['+1(415)5550133', ['415', '5550133']],
-    ['+1 ( 415 ) - 555 - 0133', ['415', '555', '0133']],
-    // trunk-prefix groups
-    ['+44 (0) 20 7946 0958', ['7946', '0958']],
-    ['+44 ( 0 ) 20 7946 0958', ['7946', '0958']],
-    ['+84 (0) 912 345 678', ['912', '345']],
-    // Vietnamese national with an area code in parentheses
-    ['(028) 3822 1234', ['3822', '1234']],
-    ['( 028 ) 3822 1234', ['3822', '1234']],
-    ['0 (28) 3822 1234', ['3822', '1234']],
-    // separators already claimed
-    ['+44  20 7946 0958', ['7946']],
-    ['+ 44 20 7946 0958', ['7946']],
-    ['+44.20.7946.0958', ['7946']],
-    ['+65-6123-4567', ['6123']],
+    // mobile 0xxx
+    ['0912345678', ['0912345678']],
     ['0912 345 678', ['345']],
     ['0912.345.678', ['345']],
     ['0912-345-678', ['345']],
-    ['+84 912 345 678', ['345']],
-    ['0912345678', ['0912345678']],
+    ['091 234 5678', ['234', '5678']],
+    ['0 912 345 678', ['912', '345']],
+    // +84 and 84 prefixes
     ['+84912345678', ['912345678']],
-    ['+44 20\n7946 0958', ['7946']],
+    ['+84 912 345 678', ['345']],
+    ['+84.912.345.678', ['345']],
+    ['+ 84 912 345 678', ['345']],
+    ['+84 (0) 912 345 678', ['912', '345']],
+    ['84912345678', ['912345678']],
+    ['84 912 345 678', ['912', '345']],
+    ['0084 912 345 678', ['912', '345']],
+    // parentheses and brackets, with spaces inside and around
+    ['(+84) 912 345 678', ['912', '345']],
+    ['( +84 ) 912 345 678', ['912', '345']],
+    ['[+84] 912 345 678', ['912', '345']],
+    ['(84) 912 345 678', ['912', '345']],
+    ['+84 (912) 345 678', ['912', '345']],
+    ['+84 ( 912 ) 345-678', ['912', '345']],
+    // landlines
+    ['028 3822 1234', ['3822', '1234']],
+    ['02838221234', ['02838221234']],
+    ['(028) 3822 1234', ['3822', '1234']],
+    ['( 028 ) 3822 1234', ['3822', '1234']],
+    ['0 (28) 3822 1234', ['3822', '1234']],
+    ['028.3822.1234', ['3822']],
+    ['+84 28 3822 1234', ['3822', '1234']],
+    ['+84 (28) 3822 1234', ['3822', '1234']],
+    ['+84 ( 28 ) 3822 1234', ['3822', '1234']],
+    ['(+84) 28 3822 1234', ['3822', '1234']],
+    ['0243 826 1234', ['826', '1234']],
+    ['(024) 3826 1234', ['3826', '1234']],
+    // whitespace that clip collapses
+    ['+84  912  345  678', ['345']],
+    ['0912 345\n678', ['345']],
   ];
   for (const [text, leaks] of claimed) {
     it(`redact: ${JSON.stringify(text)}`, () => {
@@ -618,9 +602,18 @@ describe('A-F-04 residual (Astra r4): every grouping form the contract table cla
     });
   }
 
-  it('brackets and parentheses in ordinary code text are not phone numbers', () => {
-    for (const text of ['cells[0][1][2] = +1', 'f(0, 1, 2, 3, 4, 5, 6, 7, 8)', 'exit(+1) then exit(0)', '@@ -1,3 +1,3 @@', 'v[0] = (1 + 2) * 3']) {
+  it('brackets, parentheses and digit lists in ordinary code text are not phone numbers', () => {
+    for (const text of ['cells[0][1][2] = +1', 'f(0, 1, 2, 3, 4, 5, 6, 7, 8)', 'exit(+1) then exit(0)', '@@ -1,3 +1,3 @@', 'v[0] = (1 + 2) * 3', 'node 22.18.0', 'port 8081, pid 84', 'HTTP 404 at 2026-10-22T10:30:00Z']) {
       assert.equal(redact(text), text);
     }
+  });
+
+  it('Astra r4 example `+1 ( 415 ) 555-0133` is a documented residual, not a claimed form', () => {
+    const docs = readFileSync(new URL('../../docs/ai-harness.md', import.meta.url), 'utf8');
+    const row = docs.split('\n').find((l) => l.startsWith('| Phone |')) ?? '';
+    const [, , caught = '', residual = ''] = row.split('|');
+    assert.ok(!/\+1\b|\+44\b|international/i.test(caught), `caught column claims international: ${caught}`);
+    assert.match(residual, /non-Vietnamese[^.]*not supported/i);
+    assert.match(residual, /\+1 \( 415 \) 555-0133/);
   });
 });
