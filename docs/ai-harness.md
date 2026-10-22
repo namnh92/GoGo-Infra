@@ -9,7 +9,7 @@ Issue: GoGo-Infra#241.
 
 ```bash
 cd harness
-node --test test/*.test.ts                 # 74 deterministic tests, no key, no network
+node --test test/*.test.ts                 # 83 deterministic tests, no key, no network
 pnpm install --ignore-workspace && pnpm typecheck
 
 # A checkpoint, deterministic only (the default — JEV disabled):

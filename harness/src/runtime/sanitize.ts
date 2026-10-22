@@ -46,12 +46,20 @@ const TOKEN_PATTERNS: RegExp[] = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
 ];
 
+const SECRET_ASSIGNMENT =
+  /(["']?)\b((?:[a-z]+_)?(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|private[_-]?key))\1(\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}]+)/gi;
+
 export function redact(text: string): string {
   let out = text;
   for (const pattern of TOKEN_PATTERNS) out = out.replace(pattern, '[REDACTED]');
   return out
     .replace(/\b(Bearer)\s+[A-Za-z0-9._~+/=-]{12,}/gi, '$1 [REDACTED]')
-    .replace(/\b(password|passwd|secret|token|api[_-]?key)(\s*[:=]\s*)\S+/gi, '$1$2[REDACTED]')
+    // key=value, key: value and their quoted (JSON / YAML / dict) forms — PR #242 r3 F-05.
+    // A quoted value is redacted whole, spaces included; the quotes are kept so the text stays readable.
+    .replace(SECRET_ASSIGNMENT, (_m, q: string, key: string, sep: string, value: string) => {
+      const vq = value[0] === '"' || value[0] === "'" ? value[0] : '';
+      return `${q}${key}${q}${sep}${vq}[REDACTED]${vq}`;
+    })
     .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s:/@]+:[^\s@]+@/gi, '$1[REDACTED]@');
 }
 
