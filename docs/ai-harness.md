@@ -82,9 +82,13 @@ shown as a count of unknown-cost calls, never as $0. A request that never left t
 p50/p95 (nearest rank; `null` with no samples), input/output tokens when reported, reported
 cost, unknown-cost calls, error categories, outcomes — and the budget state of each account.
 
-These are separate from GoGo-BE's Cost Center: the harness is development tooling, not a
-product provider. GoGo-BE registers `openrouter` as a planned provider for its own runtime use
-(GoGo-BE#709) with its own key.
+The local ledger is the pre-call guard. The after-the-fact bill is GoGo-BE's Cost Center:
+collector `openrouter_activity` (GoGo-BE#709) reads OpenRouter's `/keys` and `/activity` with a
+management key (`backend/openrouter/management-key`, dev only) and files spend by key label —
+so the harness key **must** be created with the label `gogo-ai-harness-<env>` (service
+`openrouter.dev_tooling`) and the backend key with `gogo-be-<env>` (`openrouter.decisions`);
+any other label lands in `openrouter.other_keys`. The two are never summed with each other or
+with the Anthropic account.
 
 ## Proposed Claude Code hook (owner action — not installed)
 

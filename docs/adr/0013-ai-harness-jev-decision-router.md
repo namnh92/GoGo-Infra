@@ -155,6 +155,10 @@ development agent.
    `Stop` hook calling `cli.ts decide`). That edits `.claude/settings.json` — a permission-policy
    change this ADR deliberately does not make. `docs/ai-harness.md` has the proposed snippet.
 
+4. For the Cost Center to see actual OpenRouter spend: create an OpenRouter management key
+   and `put.sh dev openrouter/management-key` (GoGo-BE#709 collector `openrouter_activity`).
+   Keys are filed by label — `gogo-ai-harness-<env>` and `gogo-be-<env>` — so name them so.
+
 ## Consequences
 
 - With JEV disabled (today), every checkpoint still returns an outcome from the deterministic
