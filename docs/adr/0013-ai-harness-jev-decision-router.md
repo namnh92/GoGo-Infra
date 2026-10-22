@@ -143,9 +143,10 @@ model quality.
 **D-11 Isolation from GoGo-BE.** The backend's JEV use (GoGo-BE#709) has its own adapter, its
 own SSM row under `backend`, its own budget line in the cost registry. No code is shared across
 repositories and nothing in GoGo-BE can invoke the harness, so production traffic cannot start a
-development agent. **Drift (2026-10-22):** one OpenRouter key, `gogo_jev_dev`, currently serves
-both the harness and the backend POC, so they share one credit limit and one spend line
-(`openrouter.jev_shared`). Code isolation holds; billing isolation does not until owner action 5.
+development agent. **Drift found and closed (2026-10-22):** one OpenRouter key, `gogo_jev_dev`,
+served both the harness and the backend POC (one credit limit, one spend line). The owner split
+it the same day: the harness key is now `gogo_ai_harness_dev`; the backend POC gets its own
+`gogo_be_dev` when its key is created.
 
 ## Owner actions (not done by this change)
 
@@ -159,11 +160,11 @@ both the harness and the backend POC, so they share one credit limit and one spe
 
 4. For the Cost Center to see actual OpenRouter spend: create an OpenRouter management key
    and `put.sh dev openrouter/management-key` (GoGo-BE#709 collector `openrouter_activity`).
-   Keys are filed by label (`-` or `_`): `gogo_jev_*` → `openrouter.jev_shared`,
+   Keys are filed by `name` (`-` or `_`): `gogo_jev_*` → `openrouter.jev_shared`,
    `gogo_claude_*` → `openrouter.claude_byok` (+ the Claude charge on provider `anthropic`),
    `gogo_ai_harness_*` → `openrouter.dev_tooling`, `gogo_be_*` → `openrouter.decisions`.
-5. Split `gogo_jev_dev` into `gogo_ai_harness_dev` and `gogo_be_dev`, each with its own credit
-   limit, so harness and product spend and caps are separate again (D-11).
+5. ~~Split `gogo_jev_dev`~~ — done 2026-10-22 (`gogo_ai_harness_dev`); create `gogo_be_dev`
+   with its own credit limit when the backend POC is authorized to call live.
 6. Decide on `gogo_claude_dev`: it routes Anthropic calls through OpenRouter (BYOK), which
    D-7 rules out for harness automation. If it serves a product feature (customer-facing
    text), that feature needs its own ADR; the Anthropic workspace spend limit still caps it.

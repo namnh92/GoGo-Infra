@@ -85,18 +85,18 @@ cost, unknown-cost calls, error categories, outcomes — and the budget state of
 The local ledger is the pre-call guard. The after-the-fact bill is GoGo-BE's Cost Center:
 collector `openrouter_activity` (GoGo-BE#709) reads OpenRouter's `/keys` and `/activity` with a
 management key (`backend/openrouter/management-key`, dev only) and files spend by key label —
-`-` or `_` between words. Keys on the account on 2026-10-22:
+`-` or `_` between words, read from the key's `name` (OpenRouter's `label` is a masked
+preview of the key and is never used). Keys on the account after the split (2026-10-22):
 
-| Label | Used by | Cost Center service |
+| Name | Used by | Cost Center service |
 | --- | --- | --- |
-| `gogo_jev_dev` | JEV for the harness **and** the BE intent POC | `openrouter.jev_shared` (unsplit) |
-| `gogo_claude_dev` | Claude through BYOK (GoGo's own Anthropic key) | `openrouter.claude_byok` (OpenRouter fee) + `anthropic.claude_byok` (Claude charge) |
+| `gogo_ai_harness_dev` | JEV for the harness | `openrouter.dev_tooling` |
+| `gogo-claude-dev` | Claude through BYOK (GoGo's own Anthropic key) | `openrouter.claude_byok` (OpenRouter fee) + `anthropic.claude_byok` (Claude charge) |
 
-While one key serves both, harness spend cannot be told apart from product spend, and the
-key's credit limit is one cap for both. Splitting it — `gogo_ai_harness_<env>` →
-`openrouter.dev_tooling`, `gogo_be_<env>` → `openrouter.decisions` — is the owner action that
-restores ADR-0013 D-11. Any other label lands in `openrouter.other_keys`. Nothing is summed
-across services.
+The BE POC's key, when created, is `gogo_be_<env>` → `openrouter.decisions`. A key named
+`gogo_jev_<env>` (one key for both, the state before the split) is filed as
+`openrouter.jev_shared`, neither harness nor product. Any other name lands in
+`openrouter.other_keys`. Nothing is summed across services.
 
 ## Proposed Claude Code hook (owner action — not installed)
 
