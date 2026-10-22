@@ -77,10 +77,10 @@ export function redact(text: string): string {
     // Labeled single coordinates: `latitude=10.7769`, `lng: 106.7009` (A-F-04 residual).
     .replace(/\b(lat(?:itude)?|lng|lon(?:gitude)?)(\s*[:=]\s*)-?\d{1,3}\.\d+/gi, '$1$2[COORD]')
     // International: `+<cc>` then 7–13 digits with up to three spaces, dots or dashes between
-    // digits, parentheses allowed (A-F-04, Astra r3: `+44  20 …`); a diff header's `+1,3` has no
-    // digit run that long. Then Vietnamese national (`0…`, `+84…`).
-    .replace(/(?<![\w.])\+\d{1,3}(?:[\s.-]{0,3}\(?\d\)?){7,13}(?!\d)/g, '[PHONE]')
-    .replace(/(?<![\w.])(?:\+\s?84|0)(?:[\s.-]{0,3}\d){8,10}(?!\d)/g, '[PHONE]')
+    // any two parts (`+ 44`, `+44  20 …` — A-F-04, Astra r3), parentheses allowed; a diff
+    // header's `+1,3` has no digit run that long. Then Vietnamese national (`0…`, `+84…`).
+    .replace(/(?<![\w.])\+[\s.-]{0,3}\d{1,3}(?:[\s.-]{0,3}\(?\d\)?){7,13}(?!\d)/g, '[PHONE]')
+    .replace(/(?<![\w.])(?:\+[\s.-]{0,3}84|0)(?:[\s.-]{0,3}\d){8,10}(?!\d)/g, '[PHONE]')
     .replace(/(\/Users|\/home|[A-Za-z]:\\Users)[\/\\][^\/\\\s]+/g, '~');
 }
 

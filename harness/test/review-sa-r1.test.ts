@@ -477,6 +477,42 @@ describe('A-F-04 residual (Astra r3): repeated separators and the whitespace tha
     for (const leaked of ['7946', '0958', '10.7769', '106.7009']) assert.ok(!sent.includes(leaked), `${leaked} survived: ${sent}`);
   });
 
+  it('a space between + and the country code is still a phone number', () => {
+    const out = redact('+ 44 20 7946 0958 or + 84 912 345 678 or +  1 415 555 0133');
+    for (const leaked of ['7946', '0958', '912', '345', '415', '0133']) assert.ok(!out.includes(leaked), `${leaked} survived: ${out}`);
+  });
+
+  it('every format the contract table claims as caught is caught', () => {
+    const claimed: Array<[string, string[]]> = [
+      ['an.nguyen@example.com', ['an.nguyen', 'example.com']],
+      ['0912345678', ['0912345678']],
+      ['0912 345 678', ['345']],
+      ['0912.345.678', ['345']],
+      ['0912-345-678', ['345']],
+      ['+84 912 345 678', ['345']],
+      ['+84912345678', ['912345678']],
+      ['+1 (415) 555-0133', ['415', '0133']],
+      ['+44 20 7946 0958', ['7946']],
+      ['+44.20.7946.0958', ['7946']],
+      ['+65-6123-4567', ['6123']],
+      ['10.7769, 106.7009', ['10.7769', '106.7009']],
+      ['10.7769,106.7009', ['10.7769']],
+      ['-33.8688, 151.2093', ['33.8688']],
+      ['lat=10.7769', ['10.7769']],
+      ['latitude: 10.7769', ['10.7769']],
+      ['lng=106.7009', ['106.7009']],
+      ['lon: 106.7009', ['106.7009']],
+      ['longitude = -106.7009', ['106.7009']],
+      ['/Users/devuser/x', ['devuser']],
+      ['/home/runner/x', ['runner']],
+      ['C:\\Users\\devuser\\x', ['devuser']],
+    ];
+    for (const [text, leaks] of claimed) {
+      const out = redact(text);
+      for (const leaked of leaks) assert.ok(!out.includes(leaked), `${leaked} survived in "${text}": ${out}`);
+    }
+  });
+
   it('labeled coordinates with extra spaces are minimized', () => {
     const out = redact('latitude  =  10.7769   longitude :\t106.7009');
     for (const leaked of ['10.7769', '106.7009']) assert.ok(!out.includes(leaked), `${leaked} survived: ${out}`);
