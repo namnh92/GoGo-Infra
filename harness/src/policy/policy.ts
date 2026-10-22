@@ -13,8 +13,17 @@
  * discovering the boundary by being refused halfway through.
  *
  * Unknown means approval: an action this file cannot classify is gated.
+ *
+ * Advisory, not enforcement (owner decision 2026-10-22, PR #242 A-F-01): the
+ * action list and the human authorizations arrive from the session that asks,
+ * and nothing here can prove they describe what the session will do. What
+ * this file can check, it re-derives: a write action is classified from its
+ * target, not from the kind the session declared. A non-write kind (`test`,
+ * `commit`…) is taken as declared. Claude Code's permission system and branch
+ * protection remain the enforcement layer.
  */
-import { posix } from 'node:path';
+import { lstatSync, realpathSync } from 'node:fs';
+import { join, posix } from 'node:path';
 
 export type ActionKind =
   // autonomous — authorized, low-risk, reversible
@@ -90,6 +99,10 @@ export type ProposedAction = { kind: ActionKind; target?: string };
 
 export type PolicyInput = {
   actions: ProposedAction[];
+  /** Repository-relative path prefixes the task may edit. Absent = none: every edit is out of scope. */
+  scope?: string[];
+  /** Checkout the targets are resolved against (symlinks, hard links). Absent = path text only. */
+  repoRoot?: string;
   /**
    * Kinds a human authorized for this task, copied from the issue or the
    * request — never from model output. Only `task_authorizable` kinds can be
@@ -109,7 +122,8 @@ export type PolicyVerdict = {
 export function evaluatePolicy(input: PolicyInput): PolicyVerdict {
   const authorized = new Set(input.humanAuthorizations ?? []);
   const gates: PolicyGate[] = [];
-  for (const action of input.actions) {
+  for (const declared of input.actions) {
+    const { action, note } = deriveAction(declared, input.scope ?? [], input.repoRoot);
     const cls = POLICY_CLASS[action.kind] ?? 'hard_gate';
     if (cls === 'autonomous') continue;
     if (cls === 'task_authorizable' && authorized.has(action.kind)) continue;
@@ -118,12 +132,65 @@ export function evaluatePolicy(input: PolicyInput): PolicyVerdict {
       ...(action.target ? { target: action.target } : {}),
       class: cls,
       reason:
-        cls === 'hard_gate'
+        (cls === 'hard_gate'
           ? `${action.kind} is a hard approval boundary`
-          : `${action.kind} needs an explicit human authorization on the task`,
+          : `${action.kind} needs an explicit human authorization on the task`) + (note ? ` (${note})` : ''),
     });
   }
   return { outcome: gates.length === 0 ? 'AUTO_EXECUTE' : 'HUMAN_APPROVAL', gates };
+}
+
+/** Kinds that write a file. Each is classified from its target (PR #242 A-F-01). */
+const WRITE_KINDS = new Set<ActionKind>(['edit_in_scope', 'edit_out_of_scope', 'ci_workflow_change', 'update_handoff', 'write_test_evidence']);
+const SCOPED_KINDS = new Set<ActionKind>(['edit_in_scope', 'edit_out_of_scope']);
+const RANK: Record<PolicyClass, number> = { autonomous: 0, task_authorizable: 1, hard_gate: 2 };
+
+/**
+ * The kind a declared write action really is. A write with no target is
+ * `unknown`; a target that is (or passes through) a link is `unknown`; a
+ * protected target is its protected kind; an edit's scope comes from the
+ * path, not the label. The stricter of declared and derived wins.
+ */
+export function deriveAction(action: ProposedAction, scope: string[], repoRoot?: string): { action: ProposedAction; note?: string } {
+  if (!WRITE_KINDS.has(action.kind)) return { action };
+  if (!action.target) return { action: { kind: 'unknown' }, note: `${action.kind} declared without a target` };
+  const link = repoRoot ? linkedTarget(repoRoot, action.target) : null;
+  if (link) return { action: { kind: 'unknown', target: action.target }, note: link };
+  const edit = classifyEdit(action.target, scope);
+  const derived: ActionKind = SCOPED_KINDS.has(action.kind) || POLICY_CLASS[edit] === 'hard_gate' || edit === 'ci_workflow_change' ? edit : action.kind;
+  const kind = RANK[POLICY_CLASS[derived]] >= RANK[POLICY_CLASS[action.kind]] ? derived : action.kind;
+  return { action: { kind, target: action.target }, ...(kind !== action.kind ? { note: `declared ${action.kind}` } : {}) };
+}
+
+/**
+ * Why `path` under `root` does not name the file its spelling suggests, or
+ * null. Every existing component is checked: a symbolic link anywhere on the
+ * way, or a file with another hard link, can make an in-scope spelling write a
+ * protected file (PR #242 A-F-02). Components that do not exist yet are new
+ * files and are classified by their spelling.
+ */
+export function linkedTarget(root: string, path: string): string | null {
+  const normalized = posix.normalize(path.replace(/\\/g, '/'));
+  if (posix.isAbsolute(normalized) || normalized === '..' || normalized.startsWith('../')) return null; // out of scope already
+  let current: string;
+  try {
+    current = realpathSync(root);
+  } catch {
+    return `repository root ${root} cannot be resolved`;
+  }
+  for (const part of normalized.split('/').filter((p) => p !== '' && p !== '.')) {
+    current = join(current, part);
+    let stat;
+    try {
+      stat = lstatSync(current);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      return `${path} cannot be inspected`;
+    }
+    if (stat.isSymbolicLink()) return `${path} passes through a symbolic link`;
+    if (stat.isFile() && stat.nlink > 1) return `${path} has other hard links`;
+  }
+  return null;
 }
 
 /**
@@ -159,12 +226,15 @@ const NAMED_GATES: Array<[RegExp, ActionKind]> = [
 ];
 
 /** Paths whose edit is itself a policy or production change, whatever the task scope says. */
+// Case-insensitive (PR #242 A-F-02): macOS and Windows checkouts resolve `.Claude/Settings.json` to the same file.
+// The whole harness/ tree is enforcement code (owner decision 2026-10-22, A-F-03): the router, the CLI and the
+// tests decide what the policy verdict means as much as src/policy/ does.
 const PROTECTED_PATHS: Array<[RegExp, ActionKind]> = [
-  [/(^|\/)\.claude\/settings(\.local)?\.json$/, 'permission_policy_change'],
-  [/(^|\/)CODEOWNERS$/, 'permission_policy_change'],
-  [/(^|\/)harness\/src\/policy\//, 'permission_policy_change'],
-  [/(^|\/)terraform\/environments\/prod\/|(^|\/)config\/prod\.tfvars$|(^|\/)config\/known_hosts\.prod$/, 'deploy_production'],
-  [/(^|\/)\.github\/workflows\//, 'ci_workflow_change'],
+  [/(^|\/)\.claude\/settings(\.local)?\.json$/i, 'permission_policy_change'],
+  [/(^|\/)CODEOWNERS$/i, 'permission_policy_change'],
+  [/(^|\/)harness\//i, 'permission_policy_change'],
+  [/(^|\/)terraform\/environments\/prod\/|(^|\/)config\/prod\.tfvars$|(^|\/)config\/known_hosts\.prod$/i, 'deploy_production'],
+  [/(^|\/)\.github\/workflows\//i, 'ci_workflow_change'],
 ];
 
 /** Classify an edit to `path` given the path prefixes the task is scoped to. */
@@ -173,5 +243,12 @@ export function classifyEdit(path: string, scopePrefixes: string[]): ActionKind 
   const normalized = posix.normalize(path.replace(/\\/g, '/'));
   for (const [pattern, kind] of PROTECTED_PATHS) if (pattern.test(normalized)) return kind;
   if (posix.isAbsolute(normalized) || normalized === '..' || normalized.startsWith('../')) return 'edit_out_of_scope';
-  return scopePrefixes.some((prefix) => normalized.startsWith(prefix)) ? 'edit_in_scope' : 'edit_out_of_scope';
+  return scopePrefixes.some((prefix) => withinPrefix(normalized, prefix)) ? 'edit_in_scope' : 'edit_out_of_scope';
+}
+
+/** Component-boundary prefix match (PR #242 A-F-02): `harness` covers `harness/x`, not `harnessx/`. Empty = whole repo. */
+function withinPrefix(path: string, prefix: string): boolean {
+  const p = posix.normalize(prefix.replace(/\\/g, '/')).replace(/\/+$/, '');
+  if (p === '' || p === '.') return true;
+  return path === p || path.startsWith(`${p}/`);
 }

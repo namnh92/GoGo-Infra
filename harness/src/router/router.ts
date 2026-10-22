@@ -16,6 +16,11 @@
  * JEV can make an outcome stricter, never looser: the result is the strictest
  * of the policy outcome and the JEV outcome.
  *
+ * Every outcome is advisory (owner decision 2026-10-22, PR #242 A-F-01): the
+ * caller declares its own actions and authorizations, so a decision says what
+ * the stated plan allows, not what the session may do. It is a checkpoint for
+ * a cooperative agent, not a sandbox.
+ *
  * Outcomes are GoGo's, not JEV's:
  *   AUTO_EXECUTE           continue within scope without asking.
  *   RESEARCH_AND_CONTINUE  look in code/docs/issues/handoffs, then re-checkpoint.
@@ -71,14 +76,23 @@ export type RouterInput = {
   summary: TaskSummary;
   actions: ProposedAction[];
   humanAuthorizations?: ActionKind[];
+  /** Path prefixes the task may edit; write actions are classified against them (PR #242 A-F-01). */
+  scope?: string[];
+  /** Checkout the write targets are resolved in; the CLI defaults it to its working directory. */
+  repoRoot?: string;
   /** Repeated-failure checkpoint: the failure being recorded now. */
   failure?: { failureClass: string; signature: string };
 };
 
 export type DecisionSource = 'policy' | 'loop' | 'rules' | 'jev' | 'fallback';
 
+export const ADVISORY =
+  'advisory: actions and authorizations are declared by the caller and not verified; Claude Code permissions and branch protection enforce';
+
 export type RouterDecision = {
   outcome: Outcome;
+  /** Always {@link ADVISORY}: the decision is not a permission (PR #242 A-F-01). */
+  advisory: string;
   source: DecisionSource;
   reasons: string[];
   policyGates: PolicyGate[];
@@ -97,6 +111,12 @@ export type RouterDeps = {
   sink: DecisionSink;
   /** Decisions already made for this task, keyed by state hash; restored by the CLI between calls. */
   cache?: Map<string, RouterDecision>;
+  /**
+   * Writes the task counters to disk. Called after a JEV call is counted and
+   * reserved, before the request is sent (PR #242 A-F-05), so a process killed
+   * in flight still has that call on its record.
+   */
+  persist?: () => void;
 };
 
 export class DecisionRouter {
@@ -110,10 +130,10 @@ export class DecisionRouter {
 
   async decide(input: RouterInput): Promise<RouterDecision> {
     const { provider, ledger, loop } = this.#deps;
-    const base = { policyGates: [] as PolicyGate[], fallback: false, errorCategory: null, cached: false, jev: null, loop: null };
+    const base = { advisory: ADVISORY, policyGates: [] as PolicyGate[], fallback: false, errorCategory: null, cached: false, jev: null, loop: null };
 
     // 1. Policy.
-    const policy = evaluatePolicy({ actions: input.actions, humanAuthorizations: input.humanAuthorizations });
+    const policy = evaluatePolicy({ actions: input.actions, humanAuthorizations: input.humanAuthorizations, scope: input.scope, repoRoot: input.repoRoot });
     if (policy.outcome === 'HUMAN_APPROVAL') {
       return this.#log(input, '', { ...base, outcome: 'HUMAN_APPROVAL', source: 'policy', policyGates: policy.gates, reasons: policy.gates.map((g) => g.reason) });
     }
@@ -142,7 +162,7 @@ export class DecisionRouter {
     // reads no model answer at all — it is the deterministic path.
     const cacheKey = `${provider.mode}\u0000${provider.model ?? ''}\u0000${stateHash}`;
     const hit = provider.mode === 'disabled' ? undefined : this.#cache.get(cacheKey);
-    if (hit && input.checkpoint !== 'repeated_failure') return this.#log(input, stateHash, { ...hit, cached: true });
+    if (hit && input.checkpoint !== 'repeated_failure') return this.#log(input, stateHash, { ...hit, advisory: ADVISORY, cached: true });
 
     const fallback = (category: RouterDecision['errorCategory'], note: string): RouterDecision => {
       const f = fallbackOutcome(input, verdict);
@@ -153,9 +173,15 @@ export class DecisionRouter {
     if (!ledger.canSpend('openrouter_jev')) return this.#log(input, stateHash, fallback('budget_exhausted', 'JEV budget exhausted'));
     if (!loop.takeDecisionCall()) return this.#log(input, stateHash, fallback('decision_calls', 'JEV call limit for this task reached'));
 
+    // On disk before the request leaves (PR #242 A-F-05): a reservation counted at the
+    // unknown-cost ceiling and the call count. A process killed in flight leaves both.
+    const reservation = provider.mode === 'live' ? ledger.reserve('openrouter_jev', `${input.taskId}/${input.checkpoint}`) : null;
+    this.#deps.persist?.();
+
     const questions = questionsFor(input.checkpoint);
-    const result = await provider.decide({ state, questions, sessionId: input.taskId });
-    if (provider.mode === 'live') ledger.record('openrouter_jev', result.meta.usage, `${input.taskId}/${input.checkpoint}`);
+    // The task id can carry names or addresses; the provider gets a stable digest (PR #242 A-F-04).
+    const result = await provider.decide({ state, questions, sessionId: sessionDigest(input.taskId) });
+    if (reservation) ledger.settle(reservation, result.meta.usage);
 
     if (!result.ok) {
       return this.#log(input, stateHash, fallback(result.error.category, `JEV ${result.error.category}: ${result.error.message}`), result.meta);
@@ -199,6 +225,10 @@ export class DecisionRouter {
     });
     return decision;
   }
+}
+
+export function sessionDigest(taskId: string): string {
+  return createHash('sha256').update('gogo-harness-session\u0000').update(taskId).digest('hex').slice(0, 16);
 }
 
 function hash(checkpoint: Checkpoint, state: Json): string {

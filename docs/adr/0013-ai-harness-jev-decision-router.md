@@ -75,9 +75,23 @@ timeout; every call reported `usage.cost` (none unknown). The error table is sti
 The three outcomes are GoGo's vocabulary, not JEV output. The result at every checkpoint is the
 **stricter** of the policy outcome and the JEV outcome: JEV can add caution, never remove it.
 
+**Outcomes are advisory** (owner decision 2026-10-22, PR #242 A-F-01). `RouterInput.actions` and
+`humanAuthorizations` are declared by the session that asks; the harness has no trusted adapter
+that binds a declaration to the operation that follows, so a decision says what the stated plan
+allows, not what the session may do. Every decision carries an `advisory` field saying so. What
+the harness can check it re-derives: a write action (`edit_in_scope`, `edit_out_of_scope`,
+`ci_workflow_change`, `update_handoff`, `write_test_evidence`) needs a target and is classified
+from that target — no target, or a symbolic link or hard-linked file on the way, is `unknown`;
+protected paths match case-insensitively; scope matches on path components (A-F-02). The other
+kinds (`test`, `commit`, …) are taken as declared — consistent with D-3b, which leaves no shell
+inference to check them against. Enforcement stays with Claude Code's permission system, the
+sandbox and branch protection; a trusted adapter is future work, not this POC.
+
 **D-2 Provider modes.** `disabled` (default) · `mock` (fixtures, for tests) · `live`
-(OpenRouter). Live needs `JEV_MODE=live` **and** `JEV_LIVE_AUTHORIZED=yes` **and** a key handed
-to the process by `exec-with.sh`; an unknown mode is an error. The model id is pinned
+(OpenRouter). Live needs `JEV_MODE=live` **and** `JEV_LIVE_AUTHORIZED=yes` **and**
+`JEV_PRIVACY_REVIEWED=yes` (the privacy review + DPA for the outbound data contract in
+`docs/ai-harness.md` are recorded — `ai-guardrails.md`, PR #242 A-F-04; a person's statement the
+harness cannot check) **and** a key handed to the process by `exec-with.sh`; an unknown mode is an error. The model id is pinned
 (`typesafe/jev-1.14`), aliases (`~…`) are refused, the response `model` is logged.
 
 **D-3 Hard approval boundaries.** `deploy_production`, `deploy_staging`, `infra_apply`,
@@ -85,7 +99,11 @@ to the process by `exec-with.sh`; an unknown mode is an error. The model id is p
 `merge_pr`, `push_protected_branch`, `force_push`, `external_irreversible`, and anything
 unclassifiable (`unknown`). A human authorization written into a task lifts only the
 `task_authorizable` set (`open_pr`, `comment_issue`, `ci_workflow_change`, `edit_out_of_scope`,
-`paid_inference`). Editing `harness/src/policy/` is itself `permission_policy_change`.
+`paid_inference`). Editing anything under `harness/` is itself `permission_policy_change`: the
+router, the CLI and the tests define what a policy verdict means as much as `src/policy/` does
+(owner decision 2026-10-22, PR #242 A-F-03). That stops the harness from authorizing its own
+edit; it does not stop an edit made outside a checkpoint, because the harness runs from the
+editable checkout. Running an approved, pinned copy outside the worktree is GoGo-Infra#245.
 
 **D-3a Shell commands are classified fail-closed** — *superseded by D-3b the same day; kept as the record of what was tried.* (owner decision 2026-10-22, after Sol rounds 1–3 on
 PR #242 found six P1 bypasses in the regex classifier — every one a shell form nobody anticipated, every one
@@ -121,17 +139,24 @@ nothing may fit.
 
 **D-5 State.** A sanitized `TaskSummary` — title, description, acceptance criteria, open
 questions, labels, paths (not contents), sources already searched, quoted rules — redacted for
-credentials, capped at 8,000 characters. Identical context is answered from cache.
+credentials and minimized for personal data (emails, phone numbers, coordinate pairs,
+home-directory names; PR #242 A-F-04), capped at 8,000 characters. The provider's `session_id`
+is a digest of the task id, never the id. Prose names and places are not caught by patterns,
+which is why D-2 requires the privacy review. The full outbound contract is in
+`docs/ai-harness.md`. Identical context is answered from cache.
 
 **D-6 Loop controls.** Three repair attempts per failure class, then escalate; the same error
 signature twice in a row → change approach; eight attempts per task; ten JEV calls per task;
-two hours wall clock; automation concurrency 1. All configurable, all deterministic, all win
+two hours wall clock; checkpoint concurrency 1. All configurable, all deterministic, all win
 over a JEV "retry". The counters and the decision cache are persisted per task under
 `HARNESS_STATE_DIR`, because each CLI checkpoint is its own process, and one lockfile serialises
-the whole checkpoint transaction (ledger + task counters are shared state). The decision cache is
-keyed by provider mode and model, and disabled mode never reads it. Shell commands are
-classified by their most restrictive segment; command substitution and output redirects are
-`unknown` (gated).
+the whole checkpoint transaction (ledger + task counters are shared state). That is checkpoint
+serialization: the lock ends when `decide` returns, so it does not limit how many sessions or
+automation jobs run — execution-level concurrency is not enforced here (PR #242 A-F-08). A live
+JEV call is reserved in the ledger and counted against the task's call limit on disk before the
+request leaves; a process killed in flight leaves an unknown-cost call, never a lost one (A-F-05).
+The decision cache is keyed by provider mode and model, and disabled mode never reads it. Shell
+commands: D-3b.
 
 **D-7 Billing separation and budgets.** Three accounts, never summed:
 `claude_max` (interactive Claude Code, subscription, not metered in USD), `anthropic_api`
@@ -140,6 +165,10 @@ Interactive sessions must not carry `ANTHROPIC_API_KEY` (`cli.ts billing --mode 
 Anthropic automation is never routed through OpenRouter; the two keys are separate SSM rows.
 The ledger counts an unknown cost at a per-call ceiling against the budget and reports it as
 unknown — never $0. These are local targets; the provider-side caps are owner actions.
+`anthropic_api` is **not integrated** (PR #242 A-F-08): nothing in the harness runs or records an
+Anthropic call, so the $100/$10 target is configuration only, `status` reports
+`not_integrated` and usage UNKNOWN, and the Anthropic workspace spend limit is the only cap until
+an integration is separately approved.
 
 **D-8 Observability.** One JSONL record per checkpoint: provider, model build, decision types,
 latency, tokens, cost + status, error category, fallback, cache hit, outcome, source — and a hash

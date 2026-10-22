@@ -1,9 +1,12 @@
 /**
  * Harness configuration from the environment (ADR-0013 D-2, D-7).
  *
- * Live mode needs three things a person sets on purpose: JEV_MODE=live,
- * JEV_LIVE_AUTHORIZED=yes, and an OPENROUTER_API_KEY handed to this one
- * process by scripts/secrets/exec-with.sh. Anything else falls back to
+ * Live mode needs four things a person sets on purpose: JEV_MODE=live,
+ * JEV_LIVE_AUTHORIZED=yes, JEV_PRIVACY_REVIEWED=yes, and an OPENROUTER_API_KEY
+ * handed to this one process by scripts/secrets/exec-with.sh.
+ * JEV_PRIVACY_REVIEWED attests that the outbound data contract in
+ * docs/ai-harness.md had its privacy review and that the OpenRouter DPA covers
+ * it (ai-guardrails.md; PR #242 A-F-04) — a person's statement, not a check. Anything else falls back to
  * `disabled`, the default — an unknown mode is an error, not a default, so a
  * typo cannot silently turn paid inference on or off.
  */
@@ -37,6 +40,9 @@ export function loadConfig(env: Env): HarnessConfig {
   if (!['disabled', 'mock', 'live'].includes(mode)) throw new Error(`JEV_MODE must be disabled, mock or live; got "${mode}"`);
   if (mode === 'live' && env.JEV_LIVE_AUTHORIZED !== 'yes') {
     throw new Error('JEV_MODE=live needs JEV_LIVE_AUTHORIZED=yes — paid inference is never implied');
+  }
+  if (mode === 'live' && env.JEV_PRIVACY_REVIEWED !== 'yes') {
+    throw new Error('JEV_MODE=live needs JEV_PRIVACY_REVIEWED=yes — privacy review + DPA before task data leaves the machine (ai-guardrails.md)');
   }
   const timeoutMs = int(env.JEV_TIMEOUT_MS, DEFAULT_TIMEOUT_MS);
   if (timeoutMs < 100 || timeoutMs > MAX_TIMEOUT_MS) throw new Error(`JEV_TIMEOUT_MS must be 100…${MAX_TIMEOUT_MS}`);

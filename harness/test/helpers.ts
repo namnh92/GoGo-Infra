@@ -65,7 +65,9 @@ export function input(over: Partial<RouterInput> = {}): RouterInput {
     taskId: 'T-1',
     checkpoint: 'intake',
     summary: summary(),
-    actions: [{ kind: 'read' }, { kind: 'edit_in_scope', target: 'harness/src/cli.ts' }, { kind: 'test' }],
+    // harness/ is itself protected (PR #242 A-F-03), so the default task edits docs.
+    scope: ['docs/'],
+    actions: [{ kind: 'read' }, { kind: 'edit_in_scope', target: 'docs/ai-harness.md' }, { kind: 'test' }],
     ...over,
   };
 }

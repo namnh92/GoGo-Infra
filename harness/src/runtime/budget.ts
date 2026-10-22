@@ -16,7 +16,16 @@
  * Amount precedence: reported > estimated > unknown. An unknown amount is
  * counted at the per-call ceiling against the budget (so it can only make the
  * harness stop sooner) and reported as unknown, never as $0.
+ *
+ * A call is reserved on disk before it is sent and settled after (PR #242
+ * A-F-05). A reservation that is never settled — the process died in flight —
+ * stays an unknown-cost call: counted at the ceiling, never forgotten.
+ *
+ * `anthropic_api` is declared but not integrated: nothing in the harness runs
+ * or meters Anthropic calls, so its status is `not_integrated`, never `ok`
+ * (PR #242 A-F-08). The workspace spend limit at Anthropic is the only cap.
  */
+import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DecisionUsage } from '../decisions/types.ts';
@@ -30,11 +39,13 @@ export type AccountBudget = {
   reserveUsd: number;
   /** What one call is counted at when its cost is unknown. */
   unknownCallCeilingUsd: number;
+  /** False when no harness code records this account's calls; the status says so instead of `ok`. */
+  integrated?: boolean;
 };
 
 export const DEFAULT_BUDGETS: Record<Account, AccountBudget> = {
   claude_max: { limitUsd: null, reserveUsd: 0, unknownCallCeilingUsd: 0 },
-  anthropic_api: { limitUsd: 100, reserveUsd: 10, unknownCallCeilingUsd: 1 },
+  anthropic_api: { limitUsd: 100, reserveUsd: 10, unknownCallCeilingUsd: 1, integrated: false },
   // $0.042 per 1M input tokens, output free (OpenRouter model page, 2026-10-22):
   // an 8k-char state is ~3k tokens ≈ $0.00013. The ceiling is ~8× that.
   openrouter_jev: { limitUsd: 2, reserveUsd: 0, unknownCallCeilingUsd: 0.001 },
@@ -46,9 +57,11 @@ export type LedgerEntry = {
   costUsd: number | null;
   costStatus: DecisionUsage['costStatus'];
   ref: string;
+  /** Set while the call is in flight; a settled entry has none. */
+  reservation?: string;
 };
 
-export type BudgetState = 'ok' | 'warning' | 'exhausted' | 'not_metered';
+export type BudgetState = 'ok' | 'warning' | 'exhausted' | 'not_metered' | 'not_integrated';
 
 export type BudgetStatus = {
   account: Account;
@@ -96,6 +109,9 @@ export class BudgetLedger {
     if (budget.limitUsd === null) {
       return { account, month: this.month, limitUsd: null, reserveUsd: 0, reportedUsd, estimatedUsd, unknownCount, committedUsd, remainingUsd: null, state: 'not_metered', calls };
     }
+    if (budget.integrated === false) {
+      return { account, month: this.month, limitUsd: budget.limitUsd, reserveUsd: budget.reserveUsd, reportedUsd, estimatedUsd, unknownCount, committedUsd, remainingUsd: null, state: 'not_integrated', calls };
+    }
     const spendable = budget.limitUsd - budget.reserveUsd;
     const remainingUsd = spendable - committedUsd;
     const state: BudgetState = remainingUsd <= 0 ? 'exhausted' : committedUsd >= spendable * WARNING_RATIO ? 'warning' : 'ok';
@@ -113,6 +129,27 @@ export class BudgetLedger {
     if (usage.costStatus === 'not_sent') return;
     const costUsd = usage.costStatus === 'unknown' ? null : usage.costUsd;
     this.#entries.push({ ts: new Date().toISOString(), account, costUsd, costStatus: usage.costStatus, ref });
+    if (this.#file) save(this.#file, this.#entries);
+  }
+
+  /** Count a call as unknown-cost, on disk, before it is sent. Returns the id `settle` takes. */
+  reserve(account: Account, ref: string): string {
+    const reservation = randomUUID();
+    this.#entries.push({ ts: new Date().toISOString(), account, costUsd: null, costStatus: 'unknown', ref, reservation });
+    if (this.#file) save(this.#file, this.#entries);
+    return reservation;
+  }
+
+  /** Replace a reservation with what the call cost; `not_sent` removes it. */
+  settle(reservation: string, usage: Pick<DecisionUsage, 'costUsd' | 'costStatus'>): void {
+    const index = this.#entries.findIndex((e) => e.reservation === reservation);
+    if (index < 0) throw new Error(`no reservation ${reservation} in the ledger`);
+    const entry = this.#entries[index]!;
+    if (usage.costStatus === 'not_sent') {
+      this.#entries.splice(index, 1);
+    } else {
+      this.#entries[index] = { ts: entry.ts, account: entry.account, costUsd: usage.costStatus === 'unknown' ? null : usage.costUsd, costStatus: usage.costStatus, ref: entry.ref };
+    }
     if (this.#file) save(this.#file, this.#entries);
   }
 }

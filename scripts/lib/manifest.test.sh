@@ -302,6 +302,22 @@ else
       "render-env.sh would write a bot token into the API and worker environment"
 fi
 
+# PR #242 A-F-07: the BE intent POC's OpenRouter inference key has one reader,
+# `pnpm eval:intent` through exec-with.sh. Nothing in GoGo-BE reads it at
+# runtime, so render-env.sh and pull.sh must not hand it to the API or worker.
+openrouter_runtime="$(python3 "$READER" dev --namespace backend --consumer runtime | cut -f1 | grep -x 'openrouter/api-key' || true)"
+if [[ -z "$openrouter_runtime" ]]; then
+  ok "the BE OpenRouter inference key is not a runtime row"
+else
+  bad "openrouter/api-key reached the runtime consumer" \
+      "render-env.sh and pull.sh would export an eval-only inference key to the API and worker"
+fi
+if python3 "$READER" dev --namespace all --consumer all | cut -f1 | grep -qx 'openrouter/api-key'; then
+  ok "the BE OpenRouter inference key is still declared (exec-with.sh, validate.sh, put.sh see it)"
+else
+  bad "openrouter/api-key vanished from the manifest" "exec-with.sh could no longer hand it to pnpm eval:intent"
+fi
+
 count_runtime=$(python3 "$READER" dev --namespace all | wc -l | tr -d ' ')
 count_seed=$(python3 "$READER" dev --namespace all --consumer seed | wc -l | tr -d ' ')
 count_obs=$(python3 "$READER" dev --namespace all --consumer observability | wc -l | tr -d ' ')

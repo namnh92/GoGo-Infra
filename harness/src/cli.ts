@@ -9,9 +9,13 @@
  *
  * Live mode, through the SSM wrapper so the key reaches this process only:
  *
- *   JEV_MODE=live JEV_LIVE_AUTHORIZED=yes \
+ *   JEV_MODE=live JEV_LIVE_AUTHORIZED=yes JEV_PRIVACY_REVIEWED=yes \
  *     ./scripts/secrets/exec-with.sh dev ai-harness/openrouter-api-key -- \
  *     node harness/src/cli.ts decide --input task.json
+ *
+ * The outcome is advisory (ADR-0013 D-1): the input declares its own actions
+ * and authorizations. Write actions are re-classified from their targets,
+ * resolved against `repoRoot` (default: the working directory).
  *
  * Exit codes: 0 AUTO_EXECUTE, 10 RESEARCH_AND_CONTINUE, 20 HUMAN_APPROVAL,
  * 2 usage or configuration error — so a hook or a script can branch on it.
@@ -47,6 +51,7 @@ async function main(argv: string[]): Promise<number> {
     case 'decide': {
       if (!values.input) throw new Usage('decide needs --input <task.json>');
       const input = JSON.parse(readFileSync(values.input, 'utf8')) as RouterInput;
+      input.repoRoot ??= process.cwd();
       const fixture = values.fixture ? fixtureFrom(values.fixture) : undefined;
       // Load, check limits, decide and persist under one lock (PR #242 r2 F-04):
       // the ledger and the task counters are read inside it, never before.
@@ -55,9 +60,10 @@ async function main(argv: string[]): Promise<number> {
         const saved = loadTaskState(config.stateDir, input.taskId);
         const loop = new LoopController({}, Date.now, saved.loop ?? undefined);
         const cache = new Map(saved.cache);
-        const router = new DecisionRouter({ provider: createProvider(config, process.env, fixture), ledger, loop, sink, cache });
+        const persist = () => saveTaskState(config.stateDir, { taskId: input.taskId, loop: loop.snapshot(), cache: [...cache] });
+        const router = new DecisionRouter({ provider: createProvider(config, process.env, fixture), ledger, loop, sink, cache, persist });
         const result = await router.decide(input);
-        saveTaskState(config.stateDir, { taskId: input.taskId, loop: loop.snapshot(), cache: [...cache] });
+        persist();
         return result;
       });
       process.stdout.write(`${JSON.stringify(decision, null, 2)}\n`);

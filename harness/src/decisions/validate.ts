@@ -25,7 +25,7 @@ export function validateRequest(request: DecisionRequest): void {
       case 'noul':
         if (q.criteria) {
           const extra = Object.keys(q.criteria).filter((k) => k !== 'true' && k !== 'false');
-          if (extra.length > 0 || !('true' in q.criteria) || !('false' in q.criteria)) {
+          if (extra.length > 0 || !Object.hasOwn(q.criteria, 'true') || !Object.hasOwn(q.criteria, 'false')) {
             throw new ContractError(`${key}: noul criteria need exactly true and false`);
           }
         }
@@ -48,8 +48,9 @@ export function validateRequest(request: DecisionRequest): void {
 export function parseAnswers(request: DecisionRequest, raw: unknown): Record<string, Answer> {
   if (!isRecord(raw)) throw new ContractError('answers is not an object');
   const expected = Object.keys(request.questions);
-  const missing = expected.filter((k) => !(k in raw));
-  const extra = Object.keys(raw).filter((k) => !(k in request.questions));
+  // Own properties only (PR #242 A-F-06): `toString` or `__proto__` is on every object.
+  const missing = expected.filter((k) => !Object.hasOwn(raw, k));
+  const extra = Object.keys(raw).filter((k) => !Object.hasOwn(request.questions, k));
   if (missing.length > 0) throw new ContractError(`missing answers: ${missing.join(', ')}`);
   if (extra.length > 0) throw new ContractError(`unexpected answers: ${extra.join(', ')}`);
 
@@ -69,7 +70,7 @@ function parseAnswer(key: string, question: Question, value: unknown): Answer {
     case 'noul':
       return { type: 'noul', noul: unit(key, 'noul', value.noul) };
     case 'choice': {
-      if (typeof value.choice !== 'string' || !(value.choice in question.criteria)) {
+      if (typeof value.choice !== 'string' || !Object.hasOwn(question.criteria, value.choice)) {
         throw new ContractError(`${key}: choice is not one of the options`);
       }
       const options = Object.keys(question.criteria);
@@ -116,7 +117,7 @@ function legend(key: string, levels: string[], value: unknown): Record<string, J
 
 function sameKeys(key: string, field: string, expected: string[], value: Record<string, unknown>): void {
   const keys = Object.keys(value);
-  if (keys.length !== expected.length || expected.some((k) => !(k in value))) {
+  if (keys.length !== expected.length || expected.some((k) => !Object.hasOwn(value, k))) {
     throw new ContractError(`${key}: ${field} keys do not match the question`);
   }
 }

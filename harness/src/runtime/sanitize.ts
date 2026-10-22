@@ -6,6 +6,13 @@
  * billed. The summary is also the one thing in the harness that leaves the
  * machine, so secrets are redacted here, before the size limits, and a field
  * this file does not know is dropped rather than passed through.
+ *
+ * Personal data is minimized the same way (ai-guardrails.md, PR #242 A-F-04):
+ * email addresses, phone numbers, coordinate pairs and home-directory names
+ * are replaced before anything is sent. This is pattern matching, not
+ * de-identification: a name or a street written as prose passes through,
+ * which is why live mode also needs JEV_PRIVACY_REVIEWED=yes (config.ts) and
+ * docs/ai-harness.md lists exactly which fields leave the machine.
  */
 import type { Json } from '../decisions/types.ts';
 
@@ -60,7 +67,12 @@ export function redact(text: string): string {
       const vq = value[0] === '"' || value[0] === "'" ? value[0] : '';
       return `${q}${key}${q}${sep}${vq}[REDACTED]${vq}`;
     })
-    .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s:/@]+:[^\s@]+@/gi, '$1[REDACTED]@');
+    .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s:/@]+:[^\s@]+@/gi, '$1[REDACTED]@')
+    // Personal data, after the credential forms so `user:pass@host` is not half-read as an email.
+    .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[EMAIL]')
+    .replace(/-?\d{1,3}\.\d{3,}\s*,\s*-?\d{1,3}\.\d{3,}/g, '[COORDS]')
+    .replace(/(?<![\w.])(?:\+\s?84|0)(?:[\s.-]?\d){8,10}(?!\d)/g, '[PHONE]')
+    .replace(/(\/Users|\/home|[A-Za-z]:\\Users)[\/\\][^\/\\\s]+/g, '~');
 }
 
 function clip(text: string, max: number): string {

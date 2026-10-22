@@ -7,7 +7,7 @@ import { createProvider, loadConfig } from '../src/config.ts';
 import { classifyStatus, createOpenRouterProvider, DECISIONS_URL } from '../src/decisions/openrouter.ts';
 import { classifyCommand, classifyEdit, evaluatePolicy, POLICY_CLASS } from '../src/policy/policy.ts';
 import { scoreLevel } from '../src/router/router.ts';
-import { BudgetLedger, checkBillingSeparation } from '../src/runtime/budget.ts';
+import { BudgetLedger, DEFAULT_BUDGETS, checkBillingSeparation } from '../src/runtime/budget.ts';
 import { LoopController, Semaphore } from '../src/runtime/loop.ts';
 import { percentile, summarize } from '../src/runtime/metrics.ts';
 import type { DecisionRecord } from '../src/runtime/metrics.ts';
@@ -49,7 +49,9 @@ describe('policy engine', () => {
   });
 
   it('classifies edits: protected paths win over scope', () => {
-    assert.equal(classifyEdit('harness/src/cli.ts', ['harness/']), 'edit_in_scope');
+    assert.equal(classifyEdit('docs/ai-harness.md', ['docs/']), 'edit_in_scope');
+    // The whole harness/ tree is enforcement code (PR #242 A-F-03).
+    assert.equal(classifyEdit('harness/src/cli.ts', ['harness/']), 'permission_policy_change');
     assert.equal(classifyEdit('docs/x.md', ['harness/']), 'edit_out_of_scope');
     assert.equal(classifyEdit('.claude/settings.json', ['']), 'permission_policy_change');
     assert.equal(classifyEdit('harness/src/policy/policy.ts', ['harness/']), 'permission_policy_change');
@@ -112,7 +114,8 @@ describe('budget ledger', () => {
   });
 
   it('accounts are separate and Claude Max is not metered in USD', () => {
-    const l = new BudgetLedger({ stateDir: null });
+    // The ledger math, once something records Anthropic calls; today nothing does (PR #242 A-F-08).
+    const l = new BudgetLedger({ stateDir: null, budgets: { anthropic_api: { ...DEFAULT_BUDGETS.anthropic_api, integrated: true } } });
     l.record('anthropic_api', { costUsd: 95, costStatus: 'reported' }, 'big');
     assert.equal(l.status('anthropic_api').state, 'exhausted', '$95 of $100 with a $10 reserve');
     assert.equal(l.status('openrouter_jev').state, 'ok');
@@ -279,7 +282,7 @@ describe('config', () => {
     assert.throws(() => loadConfig({ JEV_MODE: 'live' }), /JEV_LIVE_AUTHORIZED/);
     assert.throws(() => loadConfig({ JEV_MODE: 'on' }), /JEV_MODE/);
     assert.throws(() => loadConfig({ JEV_TIMEOUT_MS: '60000' }), /JEV_TIMEOUT_MS/);
-    const c = loadConfig({ JEV_MODE: 'live', JEV_LIVE_AUTHORIZED: 'yes' });
+    const c = loadConfig({ JEV_MODE: 'live', JEV_LIVE_AUTHORIZED: 'yes', JEV_PRIVACY_REVIEWED: 'yes' });
     assert.throws(() => createProvider(c, {}), /OPENROUTER_API_KEY/);
   });
 });

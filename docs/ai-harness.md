@@ -5,11 +5,18 @@ consulted only at checkpoints, loop and budget controls, a decision log and dura
 Why and where the boundaries are: [`adr/0013`](adr/0013-ai-harness-jev-decision-router.md).
 Issue: GoGo-Infra#241.
 
+**Advisory, not enforcement** (owner decision 2026-10-22, ADR-0013 D-1). The session that asks
+also declares the actions and the human authorizations, and the harness cannot prove either
+describes what the session will do. A decision says what the *stated* plan allows. Write actions
+are re-classified from their target (path, symlinks, hard links, scope); every other kind is taken
+as declared. Enforcement stays with Claude Code's permission system, the sandbox and branch
+protection. Every `decide` output carries an `advisory` field that says so.
+
 ## Run it
 
 ```bash
 cd harness
-node --test test/*.test.ts                 # 186 deterministic tests, no key, no network
+node --test test/*.test.ts                 # deterministic tests, no key, no network
 pnpm install --ignore-workspace && pnpm typecheck
 
 # A checkpoint, deterministic only (the default — JEV disabled):
@@ -25,16 +32,40 @@ node src/cli.ts billing --mode interactive # refuses if ANTHROPIC_API_KEY is in 
 Exit codes: `0` AUTO_EXECUTE · `10` RESEARCH_AND_CONTINUE · `20` HUMAN_APPROVAL · `2` usage or
 configuration error.
 
-### Live mode — only after the owner authorizes paid inference
+### Live mode — only after the owner authorizes paid inference and the privacy review
+
+Two separate owner steps come first: authorizing paid inference, and the privacy review + DPA
+for the outbound data below (`ai-guardrails.md`). `JEV_PRIVACY_REVIEWED=yes` is the person
+running the command stating that the second one is recorded on the issue; the harness cannot
+check it, and refuses live mode without it.
 
 ```bash
-JEV_MODE=live JEV_LIVE_AUTHORIZED=yes \
+JEV_MODE=live JEV_LIVE_AUTHORIZED=yes JEV_PRIVACY_REVIEWED=yes \
   ./scripts/secrets/exec-with.sh dev ai-harness/openrouter-api-key -- \
   node harness/src/cli.ts decide --input task.json
 ```
 
 The key reaches that one process only. It is never in a `.env`, never exported in a shell,
 never in a URL, never logged.
+
+### Outbound data contract (what leaves the machine in live mode)
+
+One request per JEV call, to OpenRouter, built by `sanitizeSummary` and the question set:
+
+| Field | Content | Minimization |
+| --- | --- | --- |
+| `state.task.title`, `description`, `acceptance_criteria`, `open_questions` | Session-written summary of the issue | credentials, emails, phone numbers, coordinate pairs, home-directory names replaced; capped |
+| `state.task.labels`, `paths` | Short labels; repository-relative paths, never contents | same |
+| `state.context_already_searched`, `project_rules` | Names of sources searched; short rule quotes | same |
+| `state.failure` (repeated failure only) | failure class, attempt count, last error text | same — stack traces lose `/Users/<name>` |
+| `state.scope_change` (scope change only) | one sentence | same |
+| `questions` | Fixed text from `harness/src/router/questions.ts` | no task data |
+| `session_id` | 16-hex digest of `taskId` | the task id itself is never sent |
+| `model` | the pinned model id | — |
+
+Not removed by pattern: a person's name, a street or a place written as prose. Do not put
+customer or user data into a task summary; summarize the issue instead. Nothing else — no file
+contents, no environment, no repository data — is sent.
 
 ## Input
 
@@ -45,7 +76,9 @@ never in a URL, never logged.
 | `taskId` | Issue reference, e.g. `GoGo-BE#709`. Used for grouping, not sent as meaning. |
 | `checkpoint` | `intake` · `scope_change` · `ambiguity` · `repeated_failure` · `review_planning` |
 | `summary` | `TaskSummary` — written by the session from the issue. Paths, never file contents. |
-| `actions` | What the next step will do, as `ActionKind`s. `classifyEdit` maps a path. `classifyCommand` never returns an autonomous kind (ADR-0013 D-3b): every shell line gates, named when recognisable, `unknown` otherwise — declare the step's kind (`test`, `commit`…) instead. |
+| `actions` | What the next step will do, as `ActionKind`s, declared by the caller and not verified. A write kind (`edit_in_scope`, `edit_out_of_scope`, `ci_workflow_change`, `update_handoff`, `write_test_evidence`) needs a `target` and is re-classified from it: no target, a symlink or a hard-linked file on the way → `unknown`; a protected path (`.claude/settings*.json`, `CODEOWNERS`, anything under `harness/`, prod Terraform, workflows; matched case-insensitively) → its gate; otherwise in or out of `scope` by path component. `classifyCommand` never returns an autonomous kind (ADR-0013 D-3b): every shell line gates, named when recognisable, `unknown` otherwise — declare the step's kind (`test`, `commit`…) instead. |
+| `scope` | Path prefixes the task may edit, matched on component boundaries (`docs` covers `docs/x`, not `docs-x/`). Absent = nothing is in scope. |
+| `repoRoot` | Checkout the write targets are resolved in. Default: the CLI's working directory. |
 | `humanAuthorizations` | Kinds the issue author authorized explicitly (only `task_authorizable` ones count). |
 | `failure` | `repeated_failure` only: `{ failureClass, signature }`. |
 
@@ -60,7 +93,8 @@ never in a URL, never logged.
 | `HARNESS_STATE_DIR` | `~/.gogo-harness` | ledger, decision log and per-task state `tasks/<task>-<hash>.json` (loop counters + decision cache, so limits hold across separate `decide` calls) — per machine, not committed |
 | `HARNESS_JEV_MONTHLY_USD` | `2` | local JEV target |
 | `HARNESS_ANTHROPIC_MONTHLY_USD` / `_RESERVE_USD` | `100` / `10` | local Anthropic API target |
-| `HARNESS_CONCURRENCY` | `1` | automation concurrency; only `1` is accepted — `decide` holds `HARNESS_STATE_DIR/harness.lock` across load, limits, inference and save, so overlapping calls queue instead of losing counters or charges |
+| `HARNESS_CONCURRENCY` | `1` | checkpoint serialization only; only `1` is accepted — `decide` holds `HARNESS_STATE_DIR/harness.lock` across load, limits, inference and save, so overlapping `decide` calls queue instead of losing counters or charges. The lock ends when `decide` returns: it does not limit how many Claude sessions or automation jobs run (not enforced here) |
+| `JEV_PRIVACY_REVIEWED` | — | must be `yes` for `live`: the privacy review + DPA for the outbound data contract are recorded |
 | `OPENROUTER_API_KEY` | — | from `exec-with.sh dev ai-harness/openrouter-api-key` |
 
 ## Cost controls and monitoring
@@ -70,13 +104,15 @@ Three accounts, never summed (ADR-0013 D-7):
 | Account | Billing | Local control | Provider-side control (owner) |
 | --- | --- | --- | --- |
 | `claude_max` | Max 5x subscription, interactive Claude Code | `billing --mode interactive` refuses an `ANTHROPIC_API_KEY` in the shell | — |
-| `anthropic_api` | Anthropic API, headless automation | $100 target, $10 reserve, stops at $90 committed | workspace spend limit, auto top-up off |
+| `anthropic_api` | Anthropic API, headless automation | **not integrated**: the harness runs and records no Anthropic call, so it enforces no target; `status` reports `not_integrated`, usage UNKNOWN. The $100 target / $10 reserve are configured for when a recorder is approved | workspace spend limit, auto top-up off — the only cap today |
 | `openrouter_jev` | OpenRouter, JEV decisions | $2 target; budget checked before every call | key-level credit limit |
 
 Amounts: `reported` (provider `usage.cost`) > `estimated` > `unknown`. An unknown cost (timeout,
 network error, 5xx) is counted at a per-call ceiling ($0.001 for JEV) against the budget and
 shown as a count of unknown-cost calls, never as $0. A request that never left the process
-(disabled, over budget, rejected 4xx) is `not_sent` — the one honest zero.
+(disabled, over budget, rejected 4xx) is `not_sent` — the one honest zero. Each live call is
+reserved in the ledger, and counted against the task's call limit, on disk before it is sent;
+a process killed in flight leaves that reservation as an unknown-cost call.
 
 `status` prints, per provider and model build: requests, cache hits, fallbacks, latency
 p50/p95 (nearest rank; `null` with no samples), input/output tokens when reported, reported
@@ -101,7 +137,8 @@ The BE POC's key, when created, is `gogo_be_<env>` → `openrouter.decisions`. A
 ## Proposed Claude Code hook (owner action — not installed)
 
 Installing this edits `.claude/settings.json`, a permission-policy change. Proposed shape, for
-the owner to adopt or not:
+the owner to adopt or not. It runs the harness from an editable checkout; running an approved,
+pinned copy outside the worktree is tracked separately (ADR-0013 D-3, A-F-03):
 
 ```json
 {

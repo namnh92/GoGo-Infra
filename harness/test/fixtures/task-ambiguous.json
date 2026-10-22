@@ -11,5 +11,6 @@
     "searchedSources": [],
     "rules": ["Money is integer minor units", "member/guest cannot finalize plans"]
   },
+  "scope": ["src/features/plans/"],
   "actions": [{ "kind": "read" }, { "kind": "edit_in_scope", "target": "src/features/plans/" }, { "kind": "test" }]
 }
