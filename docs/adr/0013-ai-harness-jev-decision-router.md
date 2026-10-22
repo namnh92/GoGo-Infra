@@ -56,6 +56,10 @@ the OpenAPI page as source of truth, and TypeSafe's `typesafe-ai/skills` `SKILL.
 `GET /api/v1/models?output_modalities=decisions` needs network access); the Decisions-specific
 error table (the adapter uses OpenRouter's general one: 400/401/402/403/408/429/5xx); latency.
 The first authorized live call must log the response `model` and settle the first point.
+**Settled 2026-10-22** by the owner's authorized GoGo-BE eval run (157 Decisions calls, key
+`gogo_be_dev`): the response named `typesafe/jev-1.14-20261014`, so `jev-1.14` is served on
+`/api/alpha/decisions`; latency p50 579 ms / p95 688 ms, under this harness's 5 s default
+timeout; every call reported `usage.cost` (none unknown). The error table is still unverified.
 
 ## Decision
 
