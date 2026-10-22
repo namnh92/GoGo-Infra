@@ -41,6 +41,9 @@ export function loadConfig(env: Env): HarnessConfig {
   const timeoutMs = int(env.JEV_TIMEOUT_MS, DEFAULT_TIMEOUT_MS);
   if (timeoutMs < 100 || timeoutMs > MAX_TIMEOUT_MS) throw new Error(`JEV_TIMEOUT_MS must be 100…${MAX_TIMEOUT_MS}`);
   const concurrency = int(env.HARNESS_CONCURRENCY, 1);
+  // One checkpoint transaction at a time is what the state lock enforces; a
+  // higher value would be read and silently ignored, so it is refused instead.
+  if (concurrency !== 1) throw new Error('HARNESS_CONCURRENCY other than 1 is not supported yet (ADR-0013 D-6)');
   return {
     mode,
     model: env.JEV_MODEL ?? DEFAULT_MODEL,

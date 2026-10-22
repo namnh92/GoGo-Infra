@@ -29,6 +29,7 @@ import { writeHandoff } from './runtime/handoff.ts';
 import type { Handoff } from './runtime/handoff.ts';
 import { LoopController } from './runtime/loop.ts';
 import { JsonlSink, summarize } from './runtime/metrics.ts';
+import { withStateLock } from './runtime/lock.ts';
 import { loadTaskState, saveTaskState } from './runtime/task-state.ts';
 
 const EXIT = { AUTO_EXECUTE: 0, RESEARCH_AND_CONTINUE: 10, HUMAN_APPROVAL: 20 } as const;
@@ -40,7 +41,6 @@ async function main(argv: string[]): Promise<number> {
     options: { input: { type: 'string' }, fixture: { type: 'string' }, out: { type: 'string' }, mode: { type: 'string' } },
   });
   const config = loadConfig(process.env);
-  const ledger = new BudgetLedger({ stateDir: config.stateDir, budgets: config.budgets });
   const sink = new JsonlSink(join(config.stateDir, 'decisions.jsonl'));
 
   switch (command) {
@@ -48,16 +48,23 @@ async function main(argv: string[]): Promise<number> {
       if (!values.input) throw new Usage('decide needs --input <task.json>');
       const input = JSON.parse(readFileSync(values.input, 'utf8')) as RouterInput;
       const fixture = values.fixture ? fixtureFrom(values.fixture) : undefined;
-      const saved = loadTaskState(config.stateDir, input.taskId);
-      const loop = new LoopController({}, Date.now, saved.loop ?? undefined);
-      const cache = new Map(saved.cache);
-      const router = new DecisionRouter({ provider: createProvider(config, process.env, fixture), ledger, loop, sink, cache });
-      const decision = await router.decide(input);
-      saveTaskState(config.stateDir, { taskId: input.taskId, loop: loop.snapshot(), cache: [...cache] });
+      // Load, check limits, decide and persist under one lock (PR #242 r2 F-04):
+      // the ledger and the task counters are read inside it, never before.
+      const decision = await withStateLock(config.stateDir, async () => {
+        const ledger = new BudgetLedger({ stateDir: config.stateDir, budgets: config.budgets });
+        const saved = loadTaskState(config.stateDir, input.taskId);
+        const loop = new LoopController({}, Date.now, saved.loop ?? undefined);
+        const cache = new Map(saved.cache);
+        const router = new DecisionRouter({ provider: createProvider(config, process.env, fixture), ledger, loop, sink, cache });
+        const result = await router.decide(input);
+        saveTaskState(config.stateDir, { taskId: input.taskId, loop: loop.snapshot(), cache: [...cache] });
+        return result;
+      });
       process.stdout.write(`${JSON.stringify(decision, null, 2)}\n`);
       return EXIT[decision.outcome];
     }
     case 'status': {
+      const ledger = new BudgetLedger({ stateDir: config.stateDir, budgets: config.budgets });
       const status = { month: ledger.month, budgets: (['openrouter_jev', 'anthropic_api', 'claude_max'] as const).map((a) => ledger.status(a)), decisions: summarize(sink.read()) };
       process.stdout.write(`${JSON.stringify(status, null, 2)}\n`);
       return 0;

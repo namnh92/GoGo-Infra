@@ -97,7 +97,9 @@ credentials, capped at 8,000 characters. Identical context is answered from cach
 signature twice in a row → change approach; eight attempts per task; ten JEV calls per task;
 two hours wall clock; automation concurrency 1. All configurable, all deterministic, all win
 over a JEV "retry". The counters and the decision cache are persisted per task under
-`HARNESS_STATE_DIR`, because each CLI checkpoint is its own process. Shell commands are
+`HARNESS_STATE_DIR`, because each CLI checkpoint is its own process, and one lockfile serialises
+the whole checkpoint transaction (ledger + task counters are shared state). The decision cache is
+keyed by provider mode and model, and disabled mode never reads it. Shell commands are
 classified by their most restrictive segment; command substitution and output redirects are
 `unknown` (gated).
 

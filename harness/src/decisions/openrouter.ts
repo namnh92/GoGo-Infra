@@ -55,6 +55,7 @@ export function createOpenRouterProvider(options: OpenRouterOptions): DecisionPr
 
   return {
     mode: 'live',
+    model: options.model,
     async decide(request: DecisionRequest, callOptions?: { signal?: AbortSignal }): Promise<DecisionResult> {
       const started = performance.now();
       const meta = (usage: DecisionUsage, model: string | null = options.model, responseId: string | null = null): DecisionMeta => ({

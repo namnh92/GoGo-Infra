@@ -137,7 +137,11 @@ export class DecisionRouter {
     // 4. JEV, on a bounded summary, once per distinct context.
     const state = sanitizeSummary(input.summary);
     const stateHash = hash(input.checkpoint, state);
-    const hit = this.#cache.get(stateHash);
+    // The cache belongs to the provider that answered (PR #242 r2 F-03): a mock
+    // fixture's answer must never stand in for a live model, and disabled mode
+    // reads no model answer at all — it is the deterministic path.
+    const cacheKey = `${provider.mode}\u0000${provider.model ?? ''}\u0000${stateHash}`;
+    const hit = provider.mode === 'disabled' ? undefined : this.#cache.get(cacheKey);
     if (hit && input.checkpoint !== 'repeated_failure') return this.#log(input, stateHash, { ...hit, cached: true });
 
     const fallback = (category: RouterDecision['errorCategory'], note: string): RouterDecision => {
@@ -166,7 +170,7 @@ export class DecisionRouter {
       reasons: mapped.reasons,
       jev: { model: result.meta.model, answers: result.answers },
     };
-    this.#cache.set(stateHash, decision);
+    this.#cache.set(cacheKey, decision);
     return this.#log(input, stateHash, decision, result.meta);
   }
 

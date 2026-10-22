@@ -127,6 +127,8 @@ export type ProviderMode = 'disabled' | 'mock' | 'live';
 
 export interface DecisionProvider {
   readonly mode: ProviderMode;
+  /** The configured model id (not the build that answered); part of the decision-cache identity. */
+  readonly model: string | null;
   decide(request: DecisionRequest, options?: { signal?: AbortSignal }): Promise<DecisionResult>;
 }
 

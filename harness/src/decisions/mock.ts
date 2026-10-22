@@ -17,6 +17,7 @@ import { parseAnswers, validateRequest } from './validate.ts';
 export function createDisabledProvider(): DecisionProvider {
   return {
     mode: 'disabled',
+    model: null,
     async decide(): Promise<DecisionResult> {
       return {
         ok: false,
@@ -41,6 +42,7 @@ export function createMockProvider(fixture: MockFixture, options: { timeoutMs?: 
   const timeoutMs = options.timeoutMs ?? 15_000;
   return {
     mode: 'mock',
+    model: MOCK_MODEL,
     async decide(request: DecisionRequest, callOptions?: { signal?: AbortSignal }): Promise<DecisionResult> {
       const meta = (latencyMs: number, costUsd?: number): DecisionMeta => ({
         provider: 'mock',
