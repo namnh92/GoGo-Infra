@@ -9,7 +9,7 @@ Issue: GoGo-Infra#241.
 
 ```bash
 cd harness
-node --test test/*.test.ts                 # 53 deterministic tests, no key, no network
+node --test test/*.test.ts                 # 69 deterministic tests, no key, no network
 pnpm install --ignore-workspace && pnpm typecheck
 
 # A checkpoint, deterministic only (the default — JEV disabled):
@@ -57,7 +57,7 @@ never in a URL, never logged.
 | `JEV_LIVE_AUTHORIZED` | — | must be `yes` for `live` |
 | `JEV_MODEL` | `typesafe/jev-1.14` | pinned id; aliases refused |
 | `JEV_TIMEOUT_MS` | `5000` | 100…15000 |
-| `HARNESS_STATE_DIR` | `~/.gogo-harness` | ledger + decision log (per machine, not committed) |
+| `HARNESS_STATE_DIR` | `~/.gogo-harness` | ledger, decision log and per-task state `tasks/<task>-<hash>.json` (loop counters + decision cache, so limits hold across separate `decide` calls) — per machine, not committed |
 | `HARNESS_JEV_MONTHLY_USD` | `2` | local JEV target |
 | `HARNESS_ANTHROPIC_MONTHLY_USD` / `_RESERVE_USD` | `100` / `10` | local Anthropic API target |
 | `HARNESS_CONCURRENCY` | `1` | automation concurrency |

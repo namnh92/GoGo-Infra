@@ -96,7 +96,10 @@ credentials, capped at 8,000 characters. Identical context is answered from cach
 **D-6 Loop controls.** Three repair attempts per failure class, then escalate; the same error
 signature twice in a row → change approach; eight attempts per task; ten JEV calls per task;
 two hours wall clock; automation concurrency 1. All configurable, all deterministic, all win
-over a JEV "retry".
+over a JEV "retry". The counters and the decision cache are persisted per task under
+`HARNESS_STATE_DIR`, because each CLI checkpoint is its own process. Shell commands are
+classified by their most restrictive segment; command substitution and output redirects are
+`unknown` (gated).
 
 **D-7 Billing separation and budgets.** Three accounts, never summed:
 `claude_max` (interactive Claude Code, subscription, not metered in USD), `anthropic_api`

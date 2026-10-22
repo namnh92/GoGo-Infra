@@ -29,6 +29,7 @@ import { writeHandoff } from './runtime/handoff.ts';
 import type { Handoff } from './runtime/handoff.ts';
 import { LoopController } from './runtime/loop.ts';
 import { JsonlSink, summarize } from './runtime/metrics.ts';
+import { loadTaskState, saveTaskState } from './runtime/task-state.ts';
 
 const EXIT = { AUTO_EXECUTE: 0, RESEARCH_AND_CONTINUE: 10, HUMAN_APPROVAL: 20 } as const;
 
@@ -47,8 +48,12 @@ async function main(argv: string[]): Promise<number> {
       if (!values.input) throw new Usage('decide needs --input <task.json>');
       const input = JSON.parse(readFileSync(values.input, 'utf8')) as RouterInput;
       const fixture = values.fixture ? fixtureFrom(values.fixture) : undefined;
-      const router = new DecisionRouter({ provider: createProvider(config, process.env, fixture), ledger, loop: new LoopController(), sink });
+      const saved = loadTaskState(config.stateDir, input.taskId);
+      const loop = new LoopController({}, Date.now, saved.loop ?? undefined);
+      const cache = new Map(saved.cache);
+      const router = new DecisionRouter({ provider: createProvider(config, process.env, fixture), ledger, loop, sink, cache });
       const decision = await router.decide(input);
+      saveTaskState(config.stateDir, { taskId: input.taskId, loop: loop.snapshot(), cache: [...cache] });
       process.stdout.write(`${JSON.stringify(decision, null, 2)}\n`);
       return EXIT[decision.outcome];
     }

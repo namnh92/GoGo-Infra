@@ -152,8 +152,37 @@ const COMMAND_RULES: Array<[RegExp, ActionKind]> = [
   [/^\s*(cat|ls|rg|grep|find|head|tail|wc|sed\s+-n|git\s+(status|log|diff|show|branch|fetch))\b/, 'read'],
 ];
 
+const RANK: Record<PolicyClass, number> = { autonomous: 0, task_authorizable: 1, hard_gate: 2 };
+
+/**
+ * Classify a whole command line by its most restrictive part (PR #242 F-01).
+ *
+ * A gated pattern anywhere in the line wins first, so `cat x && terraform
+ * destroy` is `infra_apply`. Otherwise every segment between `&&`, `||`, `;`,
+ * `|` and newlines is classified on its own and the strictest kind is kept, so
+ * a read in front cannot lend its verdict to an unclassified command behind
+ * it. Shapes this classifier cannot see into — command substitution, and an
+ * output redirect to anything but /dev/null — are `unknown`, which gates.
+ */
 export function classifyCommand(command: string): ActionKind {
-  for (const [pattern, kind] of COMMAND_RULES) if (pattern.test(command)) return kind;
+  for (const [pattern, kind] of COMMAND_RULES) {
+    if (POLICY_CLASS[kind] !== 'autonomous' && pattern.test(command)) return kind;
+  }
+  if (/\$\(|`/.test(command)) return 'unknown';
+  if (/(^|[^0-9&>])>{1,2}\s*(?!\/dev\/null\b)\S/.test(command.replace(/\d?>&\d/g, ''))) return 'unknown';
+  const segments = command.split(/&&|\|\||[;|\n]/).map((part) => part.trim()).filter(Boolean);
+  if (segments.length === 0) return 'unknown';
+  let worst: ActionKind | null = null;
+  for (const segment of segments) {
+    const kind = classifySegment(segment);
+    if (kind === 'unknown') return 'unknown';
+    if (worst === null || RANK[POLICY_CLASS[kind]] > RANK[POLICY_CLASS[worst]]) worst = kind;
+  }
+  return worst ?? 'unknown';
+}
+
+function classifySegment(segment: string): ActionKind {
+  for (const [pattern, kind] of COMMAND_RULES) if (pattern.test(segment)) return kind;
   return 'unknown';
 }
 

@@ -29,6 +29,7 @@ import type {
   DecisionResult,
   DecisionUsage,
 } from './types.ts';
+import { redact } from '../runtime/sanitize.ts';
 import { ContractError, isRecord, parseAnswers, validateRequest } from './validate.ts';
 
 export const DECISIONS_URL = 'https://openrouter.ai/api/alpha/decisions';
@@ -107,7 +108,7 @@ export function createOpenRouterProvider(options: OpenRouterOptions): DecisionPr
         if (!res.ok) {
           const { category, retryable } = classifyStatus(res.status);
           // The body may echo the request; keep only OpenRouter's error message, bounded.
-          const message = await errorMessage(res);
+          const message = await errorMessage(res, apiKey);
           // A 4xx is rejected before inference; a 5xx may or may not have been billed.
           const usage = res.status >= 500 || res.status === 408 ? UNKNOWN_USAGE : NOT_SENT;
           return { ok: false, error: { category, retryable, status: res.status, message }, meta: meta(usage) };
@@ -169,11 +170,17 @@ function parseUsage(raw: unknown): DecisionUsage {
   };
 }
 
-async function errorMessage(res: Response): Promise<string> {
+/**
+ * OpenRouter's own error text, redacted and bounded (PR #242 F-03). An
+ * upstream message can echo what it was sent; the configured key is removed
+ * by value — whatever its shape — before the token patterns run, and only
+ * then is the text cut, so a key cannot survive half-truncated.
+ */
+async function errorMessage(res: Response, apiKey: string): Promise<string> {
   try {
     const body: unknown = await res.json();
     if (isRecord(body) && isRecord(body.error) && typeof body.error.message === 'string') {
-      return body.error.message.slice(0, 200);
+      return redact(body.error.message.split(apiKey).join('[REDACTED]')).slice(0, 200);
     }
   } catch {
     // fall through

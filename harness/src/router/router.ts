@@ -95,14 +95,17 @@ export type RouterDeps = {
   ledger: BudgetLedger;
   loop: LoopController;
   sink: DecisionSink;
+  /** Decisions already made for this task, keyed by state hash; restored by the CLI between calls. */
+  cache?: Map<string, RouterDecision>;
 };
 
 export class DecisionRouter {
   readonly #deps: RouterDeps;
-  readonly #cache = new Map<string, RouterDecision>();
+  readonly #cache: Map<string, RouterDecision>;
 
   constructor(deps: RouterDeps) {
     this.#deps = deps;
+    this.#cache = deps.cache ?? new Map();
   }
 
   async decide(input: RouterInput): Promise<RouterDecision> {

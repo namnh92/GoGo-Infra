@@ -28,6 +28,15 @@ export const DEFAULT_LIMITS: LoopLimits = {
   maxWallClockMs: 2 * 60 * 60 * 1000,
 };
 
+/** A task's loop counters, persisted between CLI checkpoint calls. */
+export type LoopSnapshot = {
+  startedAt: number;
+  perClass: Record<string, number>;
+  lastSignature: Record<string, { signature: string; repeats: number }>;
+  total: number;
+  decisionCalls: number;
+};
+
 export type FailureVerdict =
   | { action: 'retry'; attempt: number }
   | { action: 'change_approach'; attempt: number; reason: string }
@@ -44,10 +53,31 @@ export class LoopController {
   #total = 0;
   #decisionCalls = 0;
 
-  constructor(limits: Partial<LoopLimits> = {}, now: () => number = Date.now) {
+  /**
+   * `from` restores a task's counters saved by `snapshot()`. The CLI is one
+   * process per checkpoint, so without it every call would start at attempt 1
+   * and no limit could ever be reached (PR #242 F-02).
+   */
+  constructor(limits: Partial<LoopLimits> = {}, now: () => number = Date.now, from?: LoopSnapshot) {
     this.limits = { ...DEFAULT_LIMITS, ...limits };
     this.#now = now;
-    this.#startedAt = now();
+    this.#startedAt = from?.startedAt ?? now();
+    if (from) {
+      for (const [k, v] of Object.entries(from.perClass)) this.#perClass.set(k, v);
+      for (const [k, v] of Object.entries(from.lastSignature)) this.#lastSignature.set(k, v);
+      this.#total = from.total;
+      this.#decisionCalls = from.decisionCalls;
+    }
+  }
+
+  snapshot(): LoopSnapshot {
+    return {
+      startedAt: this.#startedAt,
+      perClass: Object.fromEntries(this.#perClass),
+      lastSignature: Object.fromEntries(this.#lastSignature),
+      total: this.#total,
+      decisionCalls: this.#decisionCalls,
+    };
   }
 
   /** Record a failed attempt and say what the deterministic rules allow next. */
