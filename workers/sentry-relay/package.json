@@ -1,0 +1,8 @@
+{
+  "name": "gogo-sentry-relay-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/worker.test.mjs test/scrub.test.mjs"
+  }
+}
