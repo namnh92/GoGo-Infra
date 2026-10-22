@@ -15,7 +15,9 @@
  *
  * The outcome is advisory (ADR-0013 D-1): the input declares its own actions
  * and authorizations. Write actions are re-classified from their targets,
- * resolved against `repoRoot` (default: the working directory).
+ * spelled from `repoRoot` (default: the working directory) and placed in the
+ * checkout that directory belongs to — `cd harness` does not turn
+ * `src/cli.ts` into an ordinary in-scope file (PR #242 A-F-03).
  *
  * Exit codes: 0 AUTO_EXECUTE, 10 RESEARCH_AND_CONTINUE, 20 HUMAN_APPROVAL,
  * 2 usage or configuration error — so a hook or a script can branch on it.
@@ -51,6 +53,7 @@ async function main(argv: string[]): Promise<number> {
     case 'decide': {
       if (!values.input) throw new Usage('decide needs --input <task.json>');
       const input = JSON.parse(readFileSync(values.input, 'utf8')) as RouterInput;
+      // The directory the targets are spelled from; the policy engine finds the checkout root above it.
       input.repoRoot ??= process.cwd();
       const fixture = values.fixture ? fixtureFrom(values.fixture) : undefined;
       // Load, check limits, decide and persist under one lock (PR #242 r2 F-04):

@@ -6,15 +6,17 @@
  * issue); A-F-04 live needs a privacy attestation and outbound minimization.
  */
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import { loadConfig } from '../src/config.ts';
 import { NOT_SENT } from '../src/decisions/types.ts';
 import type { DecisionProvider, DecisionRequest } from '../src/decisions/types.ts';
 import { parseAnswers } from '../src/decisions/validate.ts';
-import { classifyEdit } from '../src/policy/policy.ts';
+import { classifyEdit, evaluatePolicy } from '../src/policy/policy.ts';
 import { questionsFor } from '../src/router/questions.ts';
 import { DecisionRouter } from '../src/router/router.ts';
 import { BudgetLedger } from '../src/runtime/budget.ts';
@@ -78,7 +80,7 @@ describe('A-F-02 [P1] edit authorization checks the filesystem target', () => {
   });
 
   it('a symlink inside scope pointing at a protected file is gated', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'harness-root-'));
+    const root = checkout();
     mkdirSync(join(root, '.claude'));
     writeFileSync(join(root, '.claude/settings.json'), '{}');
     mkdirSync(join(root, 'docs'));
@@ -87,10 +89,11 @@ describe('A-F-02 [P1] edit authorization checks the filesystem target', () => {
     const { router } = harness(provider);
     const d = await router.decide(input({ summary: settled, scope: ['docs/'], repoRoot: root, actions: [{ kind: 'edit_in_scope', target: 'docs/link.md' }] }));
     assert.equal(d.outcome, 'HUMAN_APPROVAL');
+    assert.match(d.reasons.join(' '), /symbolic link/);
   });
 
   it('a symlinked directory component is gated too', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'harness-root-'));
+    const root = checkout();
     mkdirSync(join(root, 'scripts'));
     mkdirSync(join(root, 'docs'));
     symlinkSync('../scripts', join(root, 'docs/sub'));
@@ -98,6 +101,7 @@ describe('A-F-02 [P1] edit authorization checks the filesystem target', () => {
     const { router } = harness(provider);
     const d = await router.decide(input({ summary: settled, scope: ['docs/'], repoRoot: root, actions: [{ kind: 'edit_in_scope', target: 'docs/sub/new.sh' }] }));
     assert.equal(d.outcome, 'HUMAN_APPROVAL');
+    assert.match(d.reasons.join(' '), /symbolic link/);
   });
 });
 
@@ -230,5 +234,199 @@ describe('A-F-08 [P2] docs and status do not claim controls the harness does not
   it('status reports the Anthropic account as not integrated, not ok', () => {
     const state = new BudgetLedger({ stateDir: null }).status('anthropic_api').state as string;
     assert.equal(state, 'not_integrated');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Astra SA confirmation round (r2) @ad961ad: A-F-01..A-F-04 residuals.
+// Each block starts from the exact scenario the finding names, then close variants.
+// ---------------------------------------------------------------------------
+
+/** A temporary checkout: `.git` is a file, as in a worktree. */
+function checkout(): string {
+  const root = mkdtempSync(join(tmpdir(), 'harness-checkout-'));
+  writeFileSync(join(root, '.git'), 'gitdir: /nowhere\n');
+  return root;
+}
+
+const reasons = (v: ReturnType<typeof evaluatePolicy>) => v.gates.map((g) => g.reason).join(' | ');
+
+describe('A-F-01 residual (Astra r2): every write kind is checked against the task scope', () => {
+  const { provider } = countingMock(() => ({ answers: intakeAnswers() }));
+
+  for (const kind of ['update_handoff', 'write_test_evidence'] as const) {
+    it(`${kind} on src/main.ts with scope docs/ is gated`, async () => {
+      const { router } = harness(provider);
+      const d = await router.decide(input({ summary: settled, scope: ['docs/'], actions: [{ kind, target: 'src/main.ts' }] }));
+      assert.equal(d.outcome, 'HUMAN_APPROVAL');
+      assert.ok(d.policyGates.some((g) => g.kind === 'edit_out_of_scope'), JSON.stringify(d.policyGates));
+    });
+
+    it(`${kind} on src/main.ts proceeds once edit_out_of_scope is authorized`, async () => {
+      const { router } = harness(provider);
+      const d = await router.decide(input({ summary: settled, scope: ['docs/'], actions: [{ kind, target: 'src/main.ts' }], humanAuthorizations: ['edit_out_of_scope'] }));
+      assert.equal(d.outcome, 'AUTO_EXECUTE');
+    });
+
+    it(`${kind} inside the scope stays autonomous`, async () => {
+      const { router } = harness(provider);
+      const d = await router.decide(input({ summary: settled, scope: ['docs/'], actions: [{ kind, target: 'docs/handoffs/x.md' }] }));
+      assert.equal(d.outcome, 'AUTO_EXECUTE');
+    });
+  }
+
+  it('a workflow outside the scope needs both ci_workflow_change and edit_out_of_scope', () => {
+    const action = { kind: 'ci_workflow_change' as const, target: '.github/workflows/x.yml' };
+    const ciOnly = evaluatePolicy({ actions: [action], scope: ['docs/'], humanAuthorizations: ['ci_workflow_change'] });
+    assert.equal(ciOnly.outcome, 'HUMAN_APPROVAL', reasons(ciOnly));
+    assert.ok(ciOnly.gates.some((g) => g.kind === 'edit_out_of_scope'), reasons(ciOnly));
+    const oosOnly = evaluatePolicy({ actions: [action], scope: ['docs/'], humanAuthorizations: ['edit_out_of_scope'] });
+    assert.equal(oosOnly.outcome, 'HUMAN_APPROVAL', reasons(oosOnly));
+    assert.ok(oosOnly.gates.some((g) => g.kind === 'ci_workflow_change'), reasons(oosOnly));
+    const both = evaluatePolicy({ actions: [action], scope: ['docs/'], humanAuthorizations: ['ci_workflow_change', 'edit_out_of_scope'] });
+    assert.equal(both.outcome, 'AUTO_EXECUTE', reasons(both));
+  });
+
+  it('a workflow inside the scope needs only ci_workflow_change', () => {
+    const v = evaluatePolicy({ actions: [{ kind: 'edit_in_scope', target: '.github/workflows/x.yml' }], scope: ['.github/'], humanAuthorizations: ['ci_workflow_change'] });
+    assert.equal(v.outcome, 'AUTO_EXECUTE', reasons(v));
+  });
+
+  it('a declared edit_out_of_scope on an in-scope target still needs the authorization (guard)', () => {
+    const v = evaluatePolicy({ actions: [{ kind: 'edit_out_of_scope', target: 'docs/x.md' }], scope: ['docs/'] });
+    assert.equal(v.outcome, 'HUMAN_APPROVAL');
+  });
+
+  it('a protected target under a handoff label is the protected gate, not an out-of-scope question (guard)', () => {
+    const v = evaluatePolicy({ actions: [{ kind: 'update_handoff', target: 'CODEOWNERS' }], scope: [''], humanAuthorizations: ['edit_out_of_scope'] });
+    assert.equal(v.outcome, 'HUMAN_APPROVAL');
+    assert.ok(v.gates.some((g) => g.kind === 'permission_policy_change'), reasons(v));
+  });
+});
+
+describe('A-F-02 residual (Astra r2): traversal is inspected before `..` is collapsed', () => {
+  it('docs/link → ../.claude/subdir makes docs/link/../settings.json the settings file', () => {
+    const root = checkout();
+    mkdirSync(join(root, '.claude/subdir'), { recursive: true });
+    writeFileSync(join(root, '.claude/settings.json'), '{}');
+    mkdirSync(join(root, 'docs'));
+    symlinkSync('../.claude/subdir', join(root, 'docs/link'));
+    const v = evaluatePolicy({ actions: [{ kind: 'edit_in_scope', target: 'docs/link/../settings.json' }], scope: ['docs/'], repoRoot: root });
+    assert.equal(v.outcome, 'HUMAN_APPROVAL');
+    assert.match(reasons(v), /symbolic link/);
+  });
+
+  it('a `..` that leaves the checkout is gated even with edit_out_of_scope authorized', () => {
+    const root = checkout();
+    const v = evaluatePolicy({ actions: [{ kind: 'edit_in_scope', target: '../elsewhere/x.md' }], scope: ['docs/'], repoRoot: root, humanAuthorizations: ['edit_out_of_scope'] });
+    assert.equal(v.outcome, 'HUMAN_APPROVAL');
+    assert.match(reasons(v), /checkout/);
+  });
+
+  it('an absolute path outside the checkout is gated even with edit_out_of_scope authorized', () => {
+    const root = checkout();
+    const outside = mkdtempSync(join(tmpdir(), 'harness-outside-'));
+    const v = evaluatePolicy({ actions: [{ kind: 'edit_out_of_scope', target: join(outside, 'x.md') }], scope: ['docs/'], repoRoot: root, humanAuthorizations: ['edit_out_of_scope'] });
+    assert.equal(v.outcome, 'HUMAN_APPROVAL');
+    assert.match(reasons(v), /checkout/);
+  });
+
+  it('an absolute path inside the checkout is inspected for links', () => {
+    const root = checkout();
+    mkdirSync(join(root, '.claude'));
+    writeFileSync(join(root, '.claude/settings.json'), '{}');
+    mkdirSync(join(root, 'docs'));
+    symlinkSync('../.claude/settings.json', join(root, 'docs/link.md'));
+    const v = evaluatePolicy({ actions: [{ kind: 'edit_out_of_scope', target: join(root, 'docs/link.md') }], scope: ['docs/'], repoRoot: root, humanAuthorizations: ['edit_out_of_scope'] });
+    assert.equal(v.outcome, 'HUMAN_APPROVAL');
+    assert.match(reasons(v), /symbolic link/);
+  });
+
+  it('an absolute path inside the checkout is classified by its checkout-relative spelling', () => {
+    const root = checkout();
+    mkdirSync(join(root, 'docs'));
+    const v = evaluatePolicy({ actions: [{ kind: 'edit_in_scope', target: join(root, 'docs/new.md') }], scope: ['docs/'], repoRoot: root });
+    assert.equal(v.outcome, 'AUTO_EXECUTE', reasons(v));
+  });
+
+  it('`..` through a directory that does not exist is gated', () => {
+    const root = checkout();
+    mkdirSync(join(root, 'docs'));
+    const v = evaluatePolicy({ actions: [{ kind: 'edit_in_scope', target: 'docs/missing/../x.md' }], scope: ['docs/'], repoRoot: root });
+    assert.equal(v.outcome, 'HUMAN_APPROVAL');
+  });
+
+  it('`..` back to an existing in-scope directory is still allowed', () => {
+    const root = checkout();
+    mkdirSync(join(root, 'docs/sub'), { recursive: true });
+    const v = evaluatePolicy({ actions: [{ kind: 'edit_in_scope', target: 'docs/sub/../x.md' }], scope: ['docs/'], repoRoot: root });
+    assert.equal(v.outcome, 'AUTO_EXECUTE', reasons(v));
+  });
+});
+
+describe('A-F-03 residual (Astra r2): targets are classified relative to the checkout root', () => {
+  it('after `cd harness`, scope src/ and target src/cli.ts is a harness self-edit', () => {
+    const root = checkout();
+    mkdirSync(join(root, 'harness/src'), { recursive: true });
+    writeFileSync(join(root, 'harness/src/cli.ts'), '');
+    const v = evaluatePolicy({ actions: [{ kind: 'edit_in_scope', target: 'src/cli.ts' }], scope: ['src/'], repoRoot: join(root, 'harness') });
+    assert.equal(v.outcome, 'HUMAN_APPROVAL');
+    assert.ok(v.gates.some((g) => g.kind === 'permission_policy_change'), reasons(v));
+  });
+
+  it('from a subdirectory, ../docs/x.md lands in the repo-relative docs/ scope', () => {
+    const root = checkout();
+    mkdirSync(join(root, 'harness'));
+    mkdirSync(join(root, 'docs'));
+    const v = evaluatePolicy({ actions: [{ kind: 'edit_in_scope', target: '../docs/x.md' }], scope: ['docs/'], repoRoot: join(root, 'harness') });
+    assert.equal(v.outcome, 'AUTO_EXECUTE', reasons(v));
+  });
+
+  it('a working directory outside any checkout gates every write', () => {
+    const root = mkdtempSync(join(tmpdir(), 'harness-nogit-'));
+    mkdirSync(join(root, 'docs'));
+    const v = evaluatePolicy({ actions: [{ kind: 'edit_in_scope', target: 'docs/x.md' }], scope: ['docs/'], repoRoot: root });
+    assert.equal(v.outcome, 'HUMAN_APPROVAL');
+    assert.match(reasons(v), /checkout/);
+  });
+
+  it('the CLI run from harness/ with no repoRoot gates the self-edit (exit 20)', () => {
+    const root = checkout();
+    mkdirSync(join(root, 'harness/src'), { recursive: true });
+    writeFileSync(join(root, 'harness/src/cli.ts'), '');
+    const task = join(root, 'task.json');
+    writeFileSync(task, JSON.stringify({ ...input({ summary: settled, scope: ['src/'], actions: [{ kind: 'edit_in_scope', target: 'src/cli.ts' }] }), taskId: 'T-self-edit' }));
+    const cli = join(dirname(fileURLToPath(import.meta.url)), '../src/cli.ts');
+    const state = mkdtempSync(join(tmpdir(), 'harness-state-'));
+    const r = spawnSync(process.execPath, [cli, 'decide', '--input', task], { cwd: join(root, 'harness'), env: { ...process.env, HARNESS_STATE_DIR: state, JEV_MODE: 'disabled' }, encoding: 'utf8' });
+    assert.equal(r.status, 20, `${r.stdout}\n${r.stderr}`);
+    assert.match(r.stdout, /permission_policy_change/);
+  });
+});
+
+describe('A-F-04 residual (Astra r2): the outbound contract states what minimization covers', () => {
+  it('labeled coordinates are minimized', () => {
+    for (const text of ['latitude=10.7769 longitude=106.7009', 'lat: 10.7769, lng: 106.7009', 'lon=106.7009 lat=-10.7769']) {
+      const out = redact(text);
+      for (const leaked of ['10.7769', '106.7009']) assert.ok(!out.includes(leaked), `${leaked} survived: ${out}`);
+    }
+  });
+
+  it('international phone numbers are minimized', () => {
+    const out = redact('call +1 415 555 0133, +44 20 7946 0958 or +65 6123 4567');
+    for (const leaked of ['415', '555', '0133', '7946', '0958', '6123', '4567']) assert.ok(!out.includes(leaked), `${leaked} survived: ${out}`);
+  });
+
+  it('diff headers, version lists and timestamps are not phone numbers or coordinates', () => {
+    for (const text of ['@@ -1,3 +1,3 @@', 'node 22.18.0, typescript 5.9.3', 'at 2026-10-22T10:30:00Z', 'exit code +1', 'p95 688 ms']) {
+      assert.equal(redact(text), text);
+    }
+  });
+
+  it('the contract lists the supported formats and the residuals it does not catch', () => {
+    const docs = readFileSync(new URL('../../docs/ai-harness.md', import.meta.url), 'utf8');
+    assert.match(docs, /\+<country code>|international/);
+    assert.match(docs, /latitude|lat=/);
+    assert.match(docs, /DMS|degrees/);
   });
 });

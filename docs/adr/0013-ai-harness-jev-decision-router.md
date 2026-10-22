@@ -81,11 +81,18 @@ that binds a declaration to the operation that follows, so a decision says what 
 allows, not what the session may do. Every decision carries an `advisory` field saying so. What
 the harness can check it re-derives: a write action (`edit_in_scope`, `edit_out_of_scope`,
 `ci_workflow_change`, `update_handoff`, `write_test_evidence`) needs a target and is classified
-from that target — no target, or a symbolic link or hard-linked file on the way, is `unknown`;
-protected paths match case-insensitively; scope matches on path components (A-F-02). The other
-kinds (`test`, `commit`, …) are taken as declared — consistent with D-3b, which leaves no shell
-inference to check them against. Enforcement stays with Claude Code's permission system, the
-sandbox and branch protection; a trusted adapter is future work, not this POC.
+from that target, whatever kind was declared. The target is placed in the checkout the working
+directory belongs to (the nearest `.git`; A-F-03), walked component by component in filesystem
+order — a `..` is stepped, not collapsed first (A-F-02) — and checked against the task scope: no
+target, a symbolic link or hard-linked file on the way, a path that leaves the checkout, or a
+working directory in no checkout is `unknown`; a protected path is its gate; a workflow file
+outside the scope needs `ci_workflow_change` **and** `edit_out_of_scope`; any other write outside
+the scope, a handoff or test-evidence write included, needs `edit_out_of_scope` (A-F-01). The
+required set is the union of the declared and the derived boundaries, never the looser one.
+Protected paths match case-insensitively; scope matches on path components. The other kinds
+(`test`, `commit`, …) are taken as declared and unverified — consistent with D-3b, which leaves
+no shell inference to check them against. Enforcement stays with Claude Code's permission system,
+the sandbox and branch protection; a trusted adapter is future work, not this POC.
 
 **D-2 Provider modes.** `disabled` (default) · `mock` (fixtures, for tests) · `live`
 (OpenRouter). Live needs `JEV_MODE=live` **and** `JEV_LIVE_AUTHORIZED=yes` **and**
@@ -101,9 +108,11 @@ unclassifiable (`unknown`). A human authorization written into a task lifts only
 `task_authorizable` set (`open_pr`, `comment_issue`, `ci_workflow_change`, `edit_out_of_scope`,
 `paid_inference`). Editing anything under `harness/` is itself `permission_policy_change`: the
 router, the CLI and the tests define what a policy verdict means as much as `src/policy/` does
-(owner decision 2026-10-22, PR #242 A-F-03). That stops the harness from authorizing its own
-edit; it does not stop an edit made outside a checkpoint, because the harness runs from the
-editable checkout. Running an approved, pinned copy outside the worktree is GoGo-Infra#245.
+(owner decision 2026-10-22, PR #242 A-F-03). The path is read relative to the checkout root, not
+to the working directory, so `cd harness` and `src/cli.ts` is still `harness/src/cli.ts`. That
+stops the harness from authorizing its own edit; it does not stop an edit made outside a
+checkpoint, because the harness runs from the editable checkout. Running an approved, pinned copy
+outside the worktree is GoGo-Infra#245.
 
 **D-3a Shell commands are classified fail-closed** — *superseded by D-3b the same day; kept as the record of what was tried.* (owner decision 2026-10-22, after Sol rounds 1–3 on
 PR #242 found six P1 bypasses in the regex classifier — every one a shell form nobody anticipated, every one
@@ -139,11 +148,13 @@ nothing may fit.
 
 **D-5 State.** A sanitized `TaskSummary` — title, description, acceptance criteria, open
 questions, labels, paths (not contents), sources already searched, quoted rules — redacted for
-credentials and minimized for personal data (emails, phone numbers, coordinate pairs,
+credentials and minimized for personal data (emails; Vietnamese and `+<country code>`
+international phone numbers; decimal coordinate pairs and `lat=`/`lng=` labeled values;
 home-directory names; PR #242 A-F-04), capped at 8,000 characters. The provider's `session_id`
-is a digest of the task id, never the id. Prose names and places are not caught by patterns,
-which is why D-2 requires the privacy review. The full outbound contract is in
-`docs/ai-harness.md`. Identical context is answered from cache.
+is a digest of the task id, never the id. Not caught by pattern, and therefore part of what the
+privacy review in D-2 attests to: prose names, streets and places, national phone formats without
+`+` outside Viet Nam, DMS or whitespace-only coordinate pairs. The full outbound contract, with
+the caught/not-caught table, is in `docs/ai-harness.md`. Identical context is answered from cache.
 
 **D-6 Loop controls.** Three repair attempts per failure class, then escalate; the same error
 signature twice in a row → change approach; eight attempts per task; ten JEV calls per task;

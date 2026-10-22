@@ -18,12 +18,15 @@
  * action list and the human authorizations arrive from the session that asks,
  * and nothing here can prove they describe what the session will do. What
  * this file can check, it re-derives: a write action is classified from its
- * target, not from the kind the session declared. A non-write kind (`test`,
- * `commit`…) is taken as declared. Claude Code's permission system and branch
- * protection remain the enforcement layer.
+ * target, not from the kind the session declared — the target is placed in
+ * the checkout the working directory belongs to (A-F-03), walked component by
+ * component (A-F-02) and checked against the task scope whatever the label
+ * says (A-F-01). A non-write kind (`test`, `commit`…) is taken as declared.
+ * Claude Code's permission system and branch protection remain the
+ * enforcement layer.
  */
-import { lstatSync, realpathSync } from 'node:fs';
-import { join, posix } from 'node:path';
+import { existsSync, lstatSync, realpathSync } from 'node:fs';
+import { dirname, join, posix, relative, resolve, sep } from 'node:path';
 
 export type ActionKind =
   // autonomous — authorized, low-risk, reversible
@@ -101,7 +104,14 @@ export type PolicyInput = {
   actions: ProposedAction[];
   /** Repository-relative path prefixes the task may edit. Absent = none: every edit is out of scope. */
   scope?: string[];
-  /** Checkout the targets are resolved against (symlinks, hard links). Absent = path text only. */
+  /**
+   * The directory the write targets are spelled from (the CLI's working
+   * directory). The checkout root is located above it (`.git`, PR #242
+   * A-F-03), relative targets are rebased onto that root and every component
+   * is inspected there (symlinks, hard links, traversal — A-F-02). Not inside
+   * a checkout, or a target that leaves it: every write is `unknown`.
+   * Absent = path text only.
+   */
   repoRoot?: string;
   /**
    * Kinds a human authorized for this task, copied from the issue or the
@@ -121,76 +131,152 @@ export type PolicyVerdict = {
 
 export function evaluatePolicy(input: PolicyInput): PolicyVerdict {
   const authorized = new Set(input.humanAuthorizations ?? []);
+  const checkout = input.repoRoot === undefined ? undefined : locateCheckout(input.repoRoot);
   const gates: PolicyGate[] = [];
   for (const declared of input.actions) {
-    const { action, note } = deriveAction(declared, input.scope ?? [], input.repoRoot);
-    const cls = POLICY_CLASS[action.kind] ?? 'hard_gate';
-    if (cls === 'autonomous') continue;
-    if (cls === 'task_authorizable' && authorized.has(action.kind)) continue;
-    gates.push({
-      kind: action.kind,
-      ...(action.target ? { target: action.target } : {}),
-      class: cls,
-      reason:
-        (cls === 'hard_gate'
-          ? `${action.kind} is a hard approval boundary`
-          : `${action.kind} needs an explicit human authorization on the task`) + (note ? ` (${note})` : ''),
-    });
+    const { actions, note } = deriveAction(declared, input.scope ?? [], checkout);
+    for (const action of actions) {
+      const cls = POLICY_CLASS[action.kind] ?? 'hard_gate';
+      if (cls === 'autonomous') continue;
+      if (cls === 'task_authorizable' && authorized.has(action.kind)) continue;
+      gates.push({
+        kind: action.kind,
+        ...(action.target ? { target: action.target } : {}),
+        class: cls,
+        reason:
+          (cls === 'hard_gate'
+            ? `${action.kind} is a hard approval boundary`
+            : `${action.kind} needs an explicit human authorization on the task`) + (note ? ` (${note})` : ''),
+      });
+    }
   }
   return { outcome: gates.length === 0 ? 'AUTO_EXECUTE' : 'HUMAN_APPROVAL', gates };
 }
 
 /** Kinds that write a file. Each is classified from its target (PR #242 A-F-01). */
 const WRITE_KINDS = new Set<ActionKind>(['edit_in_scope', 'edit_out_of_scope', 'ci_workflow_change', 'update_handoff', 'write_test_evidence']);
-const SCOPED_KINDS = new Set<ActionKind>(['edit_in_scope', 'edit_out_of_scope']);
-const RANK: Record<PolicyClass, number> = { autonomous: 0, task_authorizable: 1, hard_gate: 2 };
 
 /**
- * The kind a declared write action really is. A write with no target is
- * `unknown`; a target that is (or passes through) a link is `unknown`; a
- * protected target is its protected kind; an edit's scope comes from the
- * path, not the label. The stricter of declared and derived wins.
+ * The kinds a declared write action really needs, every one of which must be
+ * allowed (PR #242 A-F-01 residual). A write with no target, a target that is
+ * (or passes through) a link, or one that leaves the checkout, is `unknown`;
+ * a protected target is its protected kind alone; otherwise the target's
+ * scope decides — for every write kind, a handoff or evidence label included —
+ * and a declared non-autonomous kind keeps its own requirement, so the set is
+ * the union of the two boundaries, never the looser one.
  */
-export function deriveAction(action: ProposedAction, scope: string[], repoRoot?: string): { action: ProposedAction; note?: string } {
-  if (!WRITE_KINDS.has(action.kind)) return { action };
-  if (!action.target) return { action: { kind: 'unknown' }, note: `${action.kind} declared without a target` };
-  const link = repoRoot ? linkedTarget(repoRoot, action.target) : null;
-  if (link) return { action: { kind: 'unknown', target: action.target }, note: link };
-  const edit = classifyEdit(action.target, scope);
-  const derived: ActionKind = SCOPED_KINDS.has(action.kind) || POLICY_CLASS[edit] === 'hard_gate' || edit === 'ci_workflow_change' ? edit : action.kind;
-  const kind = RANK[POLICY_CLASS[derived]] >= RANK[POLICY_CLASS[action.kind]] ? derived : action.kind;
-  return { action: { kind, target: action.target }, ...(kind !== action.kind ? { note: `declared ${action.kind}` } : {}) };
+export function deriveAction(declared: ProposedAction, scope: string[], checkout?: Checkout): { actions: ProposedAction[]; note?: string } {
+  if (!WRITE_KINDS.has(declared.kind)) return { actions: [declared] };
+  const unknown = (note: string) => ({ actions: [{ kind: 'unknown' as const, ...(declared.target ? { target: declared.target } : {}) }], note });
+  if (!declared.target) return unknown(`${declared.kind} declared without a target`);
+  let path = declared.target.replace(/\\/g, '/');
+  if (checkout) {
+    if ('reason' in checkout) return unknown(checkout.reason);
+    const resolved = resolveTarget(checkout, path);
+    if ('reason' in resolved) return unknown(resolved.reason);
+    path = resolved.relative;
+  } else if (escapesByText(path)) {
+    return unknown(`${declared.target} is outside the checkout`);
+  }
+  const edit = classifyEdit(path, scope);
+  const required = new Set<ActionKind>();
+  if (POLICY_CLASS[edit] === 'hard_gate') {
+    required.add(edit);
+  } else {
+    required.add(edit);
+    if (edit === 'ci_workflow_change' && !withinScope(path, scope)) required.add('edit_out_of_scope');
+    if (POLICY_CLASS[declared.kind] !== 'autonomous') required.add(declared.kind);
+  }
+  const notes = [
+    ...(required.size === 1 && required.has(declared.kind) ? [] : [`declared ${declared.kind}`]),
+    ...(path !== declared.target ? [`resolves to ${path}`] : []),
+  ];
+  return { actions: [...required].map((kind) => ({ kind, target: declared.target })), ...(notes.length ? { note: notes.join(', ') } : {}) };
+}
+
+/** Path text alone: absolute, or climbing out of the root. Classified before the filesystem is asked. */
+function escapesByText(path: string): boolean {
+  const normalized = posix.normalize(path);
+  return posix.isAbsolute(normalized) || normalized === '..' || normalized.startsWith('../');
+}
+
+/** Where a working directory sits in its checkout, or why it cannot be placed (PR #242 A-F-03). */
+export type Checkout = { root: string; spellings: string[]; prefix: string } | { reason: string };
+
+/**
+ * The nearest ancestor of `dir` with a `.git` entry (a file in a worktree, a
+ * directory otherwise), resolved through symlinks, and `dir`'s path under
+ * it. `spellings` are the root as resolved and as given, for absolute
+ * targets spelled either way.
+ */
+export function locateCheckout(dir: string): Checkout {
+  const given = resolve(dir);
+  let real: string;
+  try {
+    real = realpathSync(given);
+  } catch {
+    return { reason: `working directory ${dir} cannot be resolved` };
+  }
+  const root = ancestorWithGit(real);
+  if (!root) return { reason: `${dir} is not inside a git checkout` };
+  const lexical = given === real ? null : ancestorWithGit(given);
+  return { root, spellings: lexical && lexical !== root ? [root, lexical] : [root], prefix: relative(root, real).split(sep).join('/') };
+}
+
+function ancestorWithGit(start: string): string | null {
+  for (let current = start; ; current = dirname(current)) {
+    if (existsSync(join(current, '.git'))) return current;
+    if (dirname(current) === current) return null;
+  }
 }
 
 /**
- * Why `path` under `root` does not name the file its spelling suggests, or
- * null. Every existing component is checked: a symbolic link anywhere on the
- * way, or a file with another hard link, can make an in-scope spelling write a
- * protected file (PR #242 A-F-02). Components that do not exist yet are new
- * files and are classified by their spelling.
+ * The checkout-relative spelling of a target, after every existing component
+ * on the way was inspected in the order the filesystem would take it — a `..`
+ * is stepped, never collapsed first, so `docs/link/../x` is seen through
+ * `docs/link` (PR #242 A-F-02 residual). A symbolic link, a file with other
+ * hard links, a `..` out of the root or through a directory that does not
+ * exist, and an absolute path not under the root are reasons, not spellings.
+ * Components that do not exist yet are new files, classified by spelling.
  */
-export function linkedTarget(root: string, path: string): string | null {
-  const normalized = posix.normalize(path.replace(/\\/g, '/'));
-  if (posix.isAbsolute(normalized) || normalized === '..' || normalized.startsWith('../')) return null; // out of scope already
-  let current: string;
-  try {
-    current = realpathSync(root);
-  } catch {
-    return `repository root ${root} cannot be resolved`;
+export function resolveTarget(checkout: { root: string; spellings: string[]; prefix: string }, path: string): { relative: string } | { reason: string } {
+  let spelled: string;
+  if (posix.isAbsolute(path)) {
+    const under = checkout.spellings.find((r) => path === r || path.startsWith(`${r}/`));
+    if (!under) return { reason: `${path} is outside the checkout ${checkout.root}` };
+    spelled = path.slice(under.length);
+  } else {
+    spelled = checkout.prefix ? `${checkout.prefix}/${path}` : path;
   }
-  for (const part of normalized.split('/').filter((p) => p !== '' && p !== '.')) {
+  const parts = spelled.split('/').filter((p) => p !== '' && p !== '.');
+  let current = checkout.root;
+  let depth = 0;
+  let exists = true;
+  for (const part of parts) {
+    if (part === '..') {
+      if (depth === 0) return { reason: `${path} leaves the checkout` };
+      if (!exists) return { reason: `${path} traverses a directory that does not exist` };
+      current = dirname(current);
+      depth -= 1;
+      continue;
+    }
     current = join(current, part);
+    depth += 1;
+    if (!exists) continue;
     let stat;
     try {
       stat = lstatSync(current);
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      return `${path} cannot be inspected`;
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') return { reason: `${path} cannot be inspected` };
+      exists = false;
+      continue;
     }
-    if (stat.isSymbolicLink()) return `${path} passes through a symbolic link`;
-    if (stat.isFile() && stat.nlink > 1) return `${path} has other hard links`;
+    if (stat.isSymbolicLink()) return { reason: `${path} passes through a symbolic link` };
+    if (stat.isFile() && stat.nlink > 1) return { reason: `${path} has other hard links` };
   }
-  return null;
+  const rel = posix.normalize(parts.join('/'));
+  if (rel === '' || rel === '.') return { reason: `${path} names the checkout root` };
+  return { relative: rel };
 }
 
 /**
@@ -243,7 +329,12 @@ export function classifyEdit(path: string, scopePrefixes: string[]): ActionKind 
   const normalized = posix.normalize(path.replace(/\\/g, '/'));
   for (const [pattern, kind] of PROTECTED_PATHS) if (pattern.test(normalized)) return kind;
   if (posix.isAbsolute(normalized) || normalized === '..' || normalized.startsWith('../')) return 'edit_out_of_scope';
-  return scopePrefixes.some((prefix) => withinPrefix(normalized, prefix)) ? 'edit_in_scope' : 'edit_out_of_scope';
+  return withinScope(normalized, scopePrefixes) ? 'edit_in_scope' : 'edit_out_of_scope';
+}
+
+/** Whether a normalised repository-relative path is under one of the task's scope prefixes. */
+export function withinScope(path: string, scopePrefixes: string[]): boolean {
+  return scopePrefixes.some((prefix) => withinPrefix(path, prefix));
 }
 
 /** Component-boundary prefix match (PR #242 A-F-02): `harness` covers `harness/x`, not `harnessx/`. Empty = whole repo. */

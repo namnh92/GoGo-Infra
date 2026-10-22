@@ -8,11 +8,13 @@
  * this file does not know is dropped rather than passed through.
  *
  * Personal data is minimized the same way (ai-guardrails.md, PR #242 A-F-04):
- * email addresses, phone numbers, coordinate pairs and home-directory names
- * are replaced before anything is sent. This is pattern matching, not
- * de-identification: a name or a street written as prose passes through,
+ * email addresses, phone numbers (Vietnamese national and `+<country code>`
+ * international), decimal coordinates (pairs and `lat=`/`lng=` labeled) and
+ * home-directory names are replaced before anything is sent. This is pattern
+ * matching, not de-identification: a name or a street written as prose, a
+ * national number without `+` outside Viet Nam, DMS coordinates pass through,
  * which is why live mode also needs JEV_PRIVACY_REVIEWED=yes (config.ts) and
- * docs/ai-harness.md lists exactly which fields leave the machine.
+ * docs/ai-harness.md lists exactly which formats are caught and which are not.
  */
 import type { Json } from '../decisions/types.ts';
 
@@ -71,6 +73,11 @@ export function redact(text: string): string {
     // Personal data, after the credential forms so `user:pass@host` is not half-read as an email.
     .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[EMAIL]')
     .replace(/-?\d{1,3}\.\d{3,}\s*,\s*-?\d{1,3}\.\d{3,}/g, '[COORDS]')
+    // Labeled single coordinates: `latitude=10.7769`, `lng: 106.7009` (A-F-04 residual).
+    .replace(/\b(lat(?:itude)?|lng|lon(?:gitude)?)(\s*[:=]\s*)-?\d{1,3}\.\d+/gi, '$1$2[COORD]')
+    // International: `+<cc>` then 7–13 digits with spaces, dots, dashes or parentheses; a diff
+    // header's `+1,3` has no digit run that long. Then Vietnamese national (`0…`, `+84…`).
+    .replace(/(?<![\w.])\+\d{1,3}(?:[\s.-]?\(?\d\)?){7,13}(?!\d)/g, '[PHONE]')
     .replace(/(?<![\w.])(?:\+\s?84|0)(?:[\s.-]?\d){8,10}(?!\d)/g, '[PHONE]')
     .replace(/(\/Users|\/home|[A-Za-z]:\\Users)[\/\\][^\/\\\s]+/g, '~');
 }
