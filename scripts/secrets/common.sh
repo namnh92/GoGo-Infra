@@ -83,8 +83,11 @@ ssm_prefix() {
 # Prints nothing for an undeclared path; the caller decides what that means.
 param_namespace() {
   local path="$1" env="${2:-dev}"
+  # awk reads to the end rather than `exit` on the match: under pipefail an early
+  # exit closes the pipe while python may still hold buffered output, and the
+  # reader then dies of BrokenPipe (CI, once the manifest passed 8 KiB).
   python3 "$MANIFEST_READER" "$env" --namespace all --consumer all \
-    | awk -F'\t' -v p="$path" '$1 == p { print $5; exit }'
+    | awk -F'\t' -v p="$path" '$1 == p && !seen { print $5; seen = 1 }'
 }
 
 # Every namespace the manifest declares, one per line.

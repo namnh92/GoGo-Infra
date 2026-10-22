@@ -50,7 +50,7 @@ if [[ "$ENVIRONMENT" == "ci" ]]; then
   [[ "$INFRA_READABLE" == "no" ]] || die "--infra-readable applies to <env>/backend rows, not the ci namespace"
 else
   declared_infra_readable="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace all --consumer all --field infra_readable \
-    | awk -F'\t' -v p="$PARAM_PATH" '$1 == p { print $7; exit }')"
+    | awk -F'\t' -v p="$PARAM_PATH" '$1 == p && !seen { print $7; seen = 1 }')"
   if [[ "$INFRA_READABLE" == "yes" && "$declared_infra_readable" != "true" ]]; then
     die "'${PARAM_PATH}' is not declared infra_readable in config/secrets.manifest.yml.
        Only the rows Terraform reads may carry the gogo:infra-readable tag."
