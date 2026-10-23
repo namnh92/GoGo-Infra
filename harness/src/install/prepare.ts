@@ -19,7 +19,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { MANIFEST, buildManifest, verifyDir } from './launcher.ts';
+import { MANIFEST, assertOutsideCheckout, buildManifest, verifyDir } from './launcher.ts';
 
 export type Prepared = { sha: string; manifestDigest: string; dir: string; existed: boolean };
 
@@ -28,6 +28,8 @@ export function defaultInstallDir(env: NodeJS.ProcessEnv = process.env): string 
 }
 
 export function prepare(o: { repo: string; rev: string; installDir: string; remote?: string; branch?: string; runTests?: boolean }): Prepared {
+  // PR #253 review P1: never publish into a directory a session may write.
+  assertOutsideCheckout(o.installDir);
   const remote = o.remote ?? 'origin';
   const branch = o.branch ?? 'develop';
   const git = (...args: string[]) => execFileSync('git', ['-C', o.repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();

@@ -354,3 +354,95 @@ describe('#245 the install directory is outside the checkout, so writing to it i
     }
   });
 });
+
+/** `cp -R` copies a read-only tree as a non-root user too (it makes directories writable while filling them). */
+function copyTree(from: string, to: string): void {
+  execFileSync('cp', ['-R', from, to]);
+}
+
+describe('#253 review P1: an install inside a git checkout is refused', () => {
+  it('prepare refuses an install directory inside a checkout', () => {
+    const w = world();
+    assert.throws(() => prepare({ repo: w.work, rev: 'HEAD', installDir: join(w.work, 'install'), runTests: false }), /inside the git checkout/);
+    assert.equal(existsSync(join(w.work, 'install/versions')), false);
+  });
+
+  it('activate refuses one too', async () => {
+    const w = world();
+    const a = prep(w);
+    const inside = join(w.work, 'install-copy');
+    copyTree(w.install, inside);
+    await assert.rejects(activate({ installDir: inside, sha: a.sha, approval: 'x' }, yes), /inside the git checkout/);
+    assert.equal(existsSync(join(inside, 'ACTIVE')), false);
+  });
+
+  const places: Array<[string, (w: World) => string]> = [
+    ['a checkout (.git directory)', (w) => join(w.work, 'install-copy')],
+    ['a worktree (.git file)', (w) => {
+      const wt = join(w.root, 'worktree');
+      mkdirSync(wt);
+      writeFileSync(join(wt, '.git'), 'gitdir: /elsewhere/.git/worktrees/x\n');
+      return join(wt, 'install-copy');
+    }],
+  ];
+  for (const [i, [name, place]] of places.entries()) {
+    it(`a working install copied into ${name} refuses to run, directly and through a symlink`, async () => {
+      const w = world();
+      const a = prep(w);
+      await activateAs(w, a.sha);
+      assert.equal(launch(w, ['install-verify']).status, 0);
+      const inside = place(w);
+      copyTree(w.install, inside);
+      const link = join(w.root, `install-link-${i}`);
+      symlinkSync(inside, link);
+      for (const launcher of [join(inside, 'bin/harness.mts'), join(link, 'bin/harness.mts')]) {
+        const r = spawnSync(process.execPath, [launcher, 'install-verify'], { cwd: w.root, encoding: 'utf8' });
+        assert.equal(r.status, 2, `${launcher} ran`);
+        assert.match(r.stderr, /inside the git checkout/);
+      }
+    });
+  }
+});
+
+describe('#253 review P2: ACTIVE alone switches launcher and runtime', () => {
+  const VERIFY_LINE = 'process.stdout.write(`${JSON.stringify(active)}\\n`);';
+
+  it('a failure after the owner confirmed leaves launcher and ACTIVE on the previous version', async () => {
+    const w = world();
+    const a = prep(w);
+    await activateAs(w, a.sha);
+    const bin = join(w.install, 'bin/harness.mts');
+    const before = readFileSync(bin);
+    tamperCheckoutRouter(w);
+    appendFileSync(join(w.work, 'harness/src/install/launcher.ts'), '// launcher B\n'); // B's launcher differs from A's
+    const b = prep(w, commit(w.work, 'B'));
+    // activate() runs in this process: a directory where it writes ACTIVE's temp file makes
+    // the last step fail with EISDIR, after confirmation, history and (before the fix) the launcher.
+    mkdirSync(join(w.install, `.ACTIVE.${process.pid}`));
+    await assert.rejects(activateAs(w, b.sha), /EISDIR/);
+    assert.equal(readActive(w.install).sha, a.sha);
+    assert.deepEqual(readFileSync(bin), before, 'the launcher changed although the activation failed');
+    const r = launch(w);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(outcome(r), 'AUTO_EXECUTE');
+  });
+
+  it('the launcher code that runs is the active version\'s; bin/harness.mts is not rewritten', async () => {
+    const w = world();
+    const a = prep(w);
+    await activateAs(w, a.sha);
+    const bin = join(w.install, 'bin/harness.mts');
+    const before = readFileSync(bin);
+    // B changes the launcher in a way install-verify shows.
+    const file = join(w.work, 'harness/src/install/launcher.ts');
+    const text = readFileSync(file, 'utf8');
+    assert.ok(text.includes(VERIFY_LINE), 'the install-verify line moved; update VERIFY_LINE');
+    writeFileSync(file, text.replace(VERIFY_LINE, "process.stdout.write(`${JSON.stringify({ ...active, launcher: 'B' })}\\n`);"));
+    const b = prep(w, commit(w.work, 'B'));
+    await activateAs(w, b.sha, 'approval-B');
+    assert.deepEqual(readFileSync(bin), before);
+    assert.deepEqual(JSON.parse(launch(w, ['install-verify']).stdout), { sha: b.sha, manifestDigest: b.manifestDigest, launcher: 'B' });
+    await activateAs(w, a.sha, 'approval-rollback');
+    assert.deepEqual(JSON.parse(launch(w, ['install-verify']).stdout), { sha: a.sha, manifestDigest: a.manifestDigest });
+  });
+});

@@ -198,7 +198,7 @@ worktree never changes the verdicts the session receives (ADR-0013 D-3, GoGo-Inf
   versions/<full-sha>/harness/    `git archive <sha> harness`, read-only
   ACTIVE                          { sha, manifestDigest } of the running version
   history.jsonl                   actor, time, old → new SHA + digest, approval reference
-  bin/harness.mts                 the launcher, copied from the active version
+  bin/harness.mts                 bootstrap, written once at the first activation
 ```
 
 ```bash
@@ -218,17 +218,23 @@ node ~/.gogo-harness/install/bin/harness.mts decide --input task.json
 node ~/.gogo-harness/install/bin/harness.mts install-verify     # { sha, manifestDigest } or exit 2
 ```
 
-The launcher uses Node's standard library only. Per process it reads `ACTIVE` once, checks the
-`MANIFEST` digest against it and every file against the `MANIFEST` (missing, extra, changed or
-linked file), and only then imports that version's CLI. Any mismatch exits `2` with
-`harness install: …` — no decision, no provider call, no fallback to a checkout; `HARNESS_DEV`
-or any other variable changes nothing. A launcher run from a checkout refuses to start.
+The launcher uses Node's standard library only. Per process the bootstrap reads `ACTIVE` once,
+checks the `MANIFEST` digest against it and every file against the `MANIFEST` (missing, extra,
+changed or linked file), and only then hands over to **that version's own launcher**, which loads
+that version's CLI — launcher and runtime always come from the version `ACTIVE` names. Any
+mismatch exits `2` with `harness install: …` — no decision, no provider call, no fallback to a
+checkout; `HARNESS_DEV` or any other variable changes nothing. A launcher run from a checkout
+refuses to start, and so does an install whose real path (symlinks resolved) is inside a git
+checkout or worktree: prepare, activation and every run check it.
 
-Activation takes `activate.lock`, appends the history line, then replaces `bin/harness.mts` and,
-last, `ACTIVE` by rename: an interrupted activation leaves the previous version running. If the
-lock is left behind, compare `ACTIVE` with the last line of `history.jsonl` (a line whose `to`
-is not `ACTIVE` did not finish), then remove the lock and activate again. A rollback is an
-activation of an earlier SHA and is recorded as `rollback`.
+`ACTIVE` is the only switch. Activation takes `activate.lock`, writes the bootstrap only if there
+is none, appends the history line and, last, replaces `ACTIVE` by rename: an activation that fails
+or is interrupted at any step leaves the previous version — launcher and runtime — running. If the
+lock is left behind, compare `ACTIVE` with the last line of `history.jsonl` (a line whose `to` is
+not `ACTIVE` did not finish), then remove the lock and activate again. If `ACTIVE` itself is
+broken, run the wanted version's own launcher (`versions/<sha>/harness/src/install/launcher.ts
+activate <sha> …`, the command prepare prints) to recover. A rollback is an activation of an
+earlier SHA and is recorded as `rollback`.
 
 **Limits.** This stops checkout edits from taking effect and the harness from approving its own
 change. It does not stop the same OS user from rewriting payload, `MANIFEST` and `ACTIVE`

@@ -9,7 +9,7 @@
  *     versions/<full-sha>/harness/...     `git archive <sha> harness`, read-only
  *     ACTIVE                              { sha, manifestDigest } — the running version
  *     history.jsonl                       one line per activation or rollback
- *     bin/harness.mts                     this file, copied from the active version
+ *     bin/harness.mts                     bootstrap: a copy of this file from the first activation
  *
  *   node ~/.gogo-harness/install/bin/harness.mts decide --input task.json
  *   node ~/.gogo-harness/install/bin/harness.mts install-verify
@@ -20,6 +20,17 @@
  * matches the MANIFEST (no missing, extra or linked file). A mismatch exits 2;
  * there is no fallback to a checkout and no development bypass here.
  * `prepare.ts` publishes candidates; only `activate` changes what runs.
+ *
+ * ACTIVE is the one switch (PR #253 review P2): the bootstrap in bin/ is
+ * written once, at the first activation, and never replaced; it verifies the
+ * version ACTIVE names and hands over to *that version's* launcher (`main`,
+ * below — keep its signature), which then loads that version's CLI. Launcher
+ * and runtime therefore always come from the same version, and an activation
+ * that fails at any step before ACTIVE is renamed leaves the previous pair.
+ *
+ * An install inside a git checkout is refused wherever it is touched —
+ * prepare, activation and every run — after resolving symlinks (PR #253
+ * review P1): a checkout is where a session may write.
  *
  * Threat model (shape review on #245): this stops edits in a checkout from
  * taking effect and the harness from approving its own change. It does not
@@ -135,12 +146,38 @@ export function readActive(installDir: string): Version {
 }
 
 /**
+ * The git checkout (a `.git` directory, or the `.git` file of a worktree)
+ * that holds `path`, judged on the real path of its nearest existing ancestor.
+ */
+export function checkoutAbove(path: string): string | null {
+  let existing = path;
+  while (!existsSync(existing) && dirname(existing) !== existing) existing = dirname(existing);
+  let dir: string;
+  try {
+    dir = realpathSync(existing);
+  } catch {
+    return null;
+  }
+  for (; ; dir = dirname(dir)) {
+    if (existsSync(join(dir, '.git'))) return dir;
+    if (dirname(dir) === dir) return null;
+  }
+}
+
+export function assertOutsideCheckout(installDir: string): void {
+  const checkout = checkoutAbove(installDir);
+  if (checkout) throw new IntegrityError(`install directory ${installDir} is inside the git checkout ${checkout}; installs live outside every checkout (HARNESS_INSTALL_DIR)`);
+}
+
+/**
  * Make `sha` the running version. The owner's confirmation sees the full SHA
  * and MANIFEST digest, old → new, and the approval reference; nothing changes
  * unless it returns true. One activation at a time (`activate.lock`). The
- * history line is written first and ACTIVE is replaced last, by rename: an
- * interrupted run leaves the previous version running, and a history line
- * whose `to` is not ACTIVE says an activation did not finish.
+ * bootstrap is written only when there is none; the history line comes
+ * next and ACTIVE is replaced last, by rename — the only step that changes
+ * what runs. An interrupted or failed run leaves the previous version
+ * running, launcher included, and a history line whose `to` is not ACTIVE
+ * says an activation did not finish.
  */
 export async function activate(
   o: { installDir: string; sha: string; approval: string; actor?: string; now?: () => Date },
@@ -148,6 +185,7 @@ export async function activate(
 ): Promise<ActivationPlan> {
   const approval = o.approval.trim();
   if (!approval) throw new UsageError('--approval <reference to the owner approval> is required');
+  assertOutsideCheckout(o.installDir);
   mkdirSync(o.installDir, { recursive: true });
   const lock = join(o.installDir, 'activate.lock');
   let fd: number;
@@ -174,12 +212,14 @@ export async function activate(
     if (!(await confirm(plan))) throw new UsageError('activation not confirmed; nothing changed');
 
     const bin = join(o.installDir, 'bin');
-    mkdirSync(bin, { recursive: true });
     const launcher = join(bin, 'harness.mts');
-    const launcherTmp = join(bin, `.harness.mts.${process.pid}`);
-    copyFileSync(join(dir, 'harness/src/install/launcher.ts'), launcherTmp);
-    chmodSync(launcherTmp, 0o555);
-    renameSync(launcherTmp, launcher);
+    if (!existsSync(launcher)) {
+      mkdirSync(bin, { recursive: true });
+      const launcherTmp = join(bin, `.harness.mts.${process.pid}`);
+      copyFileSync(join(dir, 'harness/src/install/launcher.ts'), launcherTmp);
+      chmodSync(launcherTmp, 0o555);
+      renameSync(launcherTmp, launcher);
+    }
 
     appendFileSync(join(o.installDir, 'history.jsonl'), `${JSON.stringify({ at: (o.now?.() ?? new Date()).toISOString(), ...plan })}\n`);
 
@@ -215,9 +255,16 @@ export function installRootOf(file: string): string | null {
   return null;
 }
 
-/** Read ACTIVE once, verify that exact directory, then load its CLI from there. */
-export async function run(installDir: string, argv: string[]): Promise<number> {
-  const active = readActive(installDir);
+/** The version a launcher file belongs to when it runs from `versions/<sha>/…`, else null. */
+function versionOf(file: string): string | null {
+  const parts = realpathSync(file).split('/');
+  const n = parts.length;
+  return n >= 7 && parts.slice(n - 4).join('/') === 'harness/src/install/launcher.ts' && parts[n - 6] === 'versions' && FULL_SHA.test(parts[n - 5]!) ? parts[n - 5]! : null;
+}
+
+/** Verify the given ACTIVE snapshot (or read it once), then load that version's CLI. */
+export async function run(installDir: string, argv: string[], snapshot?: Version): Promise<number> {
+  const active = snapshot ?? readActive(installDir);
   const { dir } = verifyVersion(installDir, active.sha, active.manifestDigest);
   const cli = (await import(pathToFileURL(join(dir, 'harness/src/cli.ts')).href)) as { run(argv: string[]): Promise<number> };
   return cli.run(argv);
@@ -237,10 +284,34 @@ async function askOnTerminal(plan: ActivationPlan): Promise<boolean> {
   }
 }
 
-async function main(argv: string[]): Promise<number> {
+/**
+ * Process entry. As the bin/ bootstrap: verify the version ACTIVE names and
+ * hand over to that version's own launcher. Run directly from
+ * `versions/<sha>/…` (first activation, or recovery when ACTIVE is broken):
+ * only `activate` and `install-verify`, with this version's code.
+ */
+async function entry(argv: string[]): Promise<number> {
   const self = fileURLToPath(import.meta.url);
   const installDir = installRootOf(self);
   if (!installDir) throw new IntegrityError(`${self} is not an installed launcher; run ~/.gogo-harness/install/bin/harness.mts (docs/ai-harness.md, "Installed copy")`);
+  assertOutsideCheckout(installDir);
+  if (versionOf(self)) {
+    if (argv[0] !== 'activate' && argv[0] !== 'install-verify') throw new UsageError('a prepared version\'s launcher only activates; run ~/.gogo-harness/install/bin/harness.mts');
+    return main(argv, { installDir });
+  }
+  const active = readActive(installDir);
+  const { dir } = verifyVersion(installDir, active.sha, active.manifestDigest);
+  const own = (await import(pathToFileURL(join(dir, 'harness/src/install/launcher.ts')).href)) as { main(argv: string[], ctx: { installDir: string; active?: Version }): Promise<number> };
+  return own.main(argv, { installDir, active });
+}
+
+/**
+ * A version's launcher commands. Called by the bootstrap of any version, so
+ * this signature is the bootstrap's contract: keep it.
+ */
+export async function main(argv: string[], ctx: { installDir: string; active?: Version }): Promise<number> {
+  const { installDir } = ctx;
+  assertOutsideCheckout(installDir);
   const [command, ...rest] = argv;
   if (command === 'activate') {
     const { values, positionals } = parseArgs({ args: rest, options: { approval: { type: 'string' } }, allowPositionals: true });
@@ -251,12 +322,12 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
   if (command === 'install-verify') {
-    const active = readActive(installDir);
+    const active = ctx.active ?? readActive(installDir);
     verifyVersion(installDir, active.sha, active.manifestDigest);
     process.stdout.write(`${JSON.stringify(active)}\n`);
     return 0;
   }
-  return run(installDir, argv);
+  return run(installDir, argv, ctx.active);
 }
 
 function lstatOrNull(path: string) {
@@ -268,7 +339,7 @@ function lstatOrNull(path: string) {
 }
 
 if (process.argv[1] !== undefined && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
-  main(process.argv.slice(2)).then(
+  entry(process.argv.slice(2)).then(
     (code) => process.exit(code),
     (e: unknown) => {
       process.stderr.write(`harness install: ${(e as Error).message}\n`);

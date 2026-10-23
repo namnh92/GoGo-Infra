@@ -116,8 +116,10 @@ stops the harness from authorizing its own edit. Hooks and automation run an app
 outside every checkout (GoGo-Infra#245, shape review 2026-10-23), so an edit in a worktree does
 not change the verdicts either: `versions/<full-sha>` holds `git archive` of a commit on
 `develop` (checked against a fresh fetch) with a per-file SHA-256 `MANIFEST`; `ACTIVE` names the
-running SHA and `MANIFEST` digest; a standard-library launcher verifies both before it imports
-anything from the version, exits 2 on any mismatch and has no checkout fallback or dev bypass.
+running SHA and `MANIFEST` digest and is the only switch; a standard-library bootstrap verifies
+both before it imports anything from the version, then hands over to that version's own launcher
+and CLI, exits 2 on any mismatch and has no checkout fallback or dev bypass. An install whose
+real path is inside a git checkout is refused at prepare, activation and run (PR #253 review).
 Preparing a candidate changes nothing; activation and rollback are an owner act on a terminal,
 bound to old → new SHA and digest, with an approval reference in `history.jsonl`. The same OS
 user can still rewrite an install and its metadata together — that remains the sandbox's
