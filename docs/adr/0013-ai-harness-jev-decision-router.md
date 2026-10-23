@@ -153,8 +153,9 @@ questions, labels, paths (not contents), sources already searched, quoted rules 
 credentials and minimized for personal data (emails; Vietnamese phone numbers in every common
 spelling — `0…`, `+84`, `84`, `0084`, trunk `0`, separators of up to five spaces, dots, dashes,
 parentheses or brackets between any two digits, replaced whole; decimal
-coordinate pairs and `lat=`/`lng=` labeled values; home-directory names; PR #242 A-F-04 — matched
-on the whitespace-collapsed text that is sent), capped at 8,000 characters. The provider's
+coordinate pairs and `lat=`/`lng=` labeled values; home-directory names; PR #242 A-F-04 — found in
+one span pass over the whitespace-collapsed text that is sent, overlapping spans merged and replaced
+once, so no rule sees text another rule changed), capped at 8,000 characters. The provider's
 `session_id` is a digest of the task id, never the id. Not caught by pattern, and therefore part
 of what the privacy review in D-2 attests to: prose names, streets and places; non-Vietnamese
 phone numbers, which are not supported and not minimized (owner decision 2026-10-22); DMS or

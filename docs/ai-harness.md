@@ -68,7 +68,11 @@ One request per JEV call, to OpenRouter, built by `sanitizeSummary` and the ques
 
 Minimization is pattern matching (`harness/src/runtime/sanitize.ts`) applied to each field after
 its whitespace is collapsed to single spaces — the text that is sent, so a number broken across
-lines is still seen whole — and `JEV_PRIVACY_REVIEWED` attests to exactly this coverage:
+lines is still seen whole. It runs as one pass: every rule (credentials and personal data alike)
+marks the spans it finds on that same text, overlapping or touching spans merge, and each merged
+span is replaced once with the strictest member's label — so two dotted phone numbers separated by
+a comma can never be read as a coordinate pair that splits both. `JEV_PRIVACY_REVIEWED` attests to
+exactly this coverage:
 
 | Data | Caught | Not caught (residual — keep it out of the summary) |
 | --- | --- | --- |

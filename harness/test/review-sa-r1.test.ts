@@ -688,3 +688,92 @@ describe('A-F-04 residual (Astra r5): every generated Vietnamese form is replace
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Astra SA round 6 @9d18c83: A-F-04 — neighbours. Sequential replacement passes fragmented each
+// other's matches (`0912.345.678, 028.3822.1234` → `0912.[COORDS].1234`). Minimization must be one
+// span pass over the sent text: every rule finds spans on the same string, overlaps merge, each merged
+// span is replaced once.
+// ---------------------------------------------------------------------------
+
+describe('A-F-04 residual (Astra r6): claimed phone forms survive no neighbour, through sanitizeSummary', () => {
+  const NSN = ['912345678', '2838221234'];
+  const PREFIXES: Array<{ plus: boolean; digits: string; trunk: boolean }> = [
+    { plus: false, digits: '0', trunk: false },
+    { plus: false, digits: '84', trunk: false },
+    { plus: true, digits: '84', trunk: false },
+    { plus: true, digits: '84', trunk: true },
+    { plus: false, digits: '0084', trunk: false },
+  ];
+  /** A representative spelling set per prefix × NSN: plain, grouped by space/dot/dash, bracketed, every-separator. */
+  function forms(): string[] {
+    const out: string[] = [];
+    for (const p of PREFIXES) {
+      for (const nsn of NSN) {
+        const digits = `${p.digits}${p.trunk ? '0' : ''}${nsn}`;
+        const plus = p.plus ? '+' : '';
+        const groupAt = new Set(nsn.length === 9 ? [3, 6] : [2, 6]);
+        const grouped = (sep: string) => {
+          let s = `${plus}${p.digits}${p.trunk ? ' (0) ' : ''}`;
+          for (let i = 0; i < nsn.length; i += 1) s += (groupAt.has(i) ? sep : '') + nsn[i];
+          return s;
+        };
+        out.push(`${plus}${digits}`, grouped(' '), grouped('.'), grouped('-'), `(${plus}${p.digits}) ${nsn.slice(0, 3)} ${nsn.slice(3)}`, [...digits].join(' '));
+      }
+    }
+    return out;
+  }
+  const NEIGHBOURS: Array<{ name: string; text: string; expect: (sent: string) => void }> = [
+    { name: 'another phone', text: '028.3822.1234', expect: () => {} },
+    { name: 'a coordinate pair', text: '10.7769, 106.7009', expect: (s) => assert.ok(!s.includes('7769') && !s.includes('7009'), s) },
+    { name: 'a labeled coordinate', text: 'lat=10.7769', expect: (s) => assert.ok(!s.includes('7769'), s) },
+    { name: 'an email', text: 'an.nguyen@example.com', expect: (s) => assert.ok(!s.includes('example.com') && s.includes('[EMAIL]'), s) },
+    { name: 'a home path', text: '/Users/devuser/work/x.ts', expect: (s) => assert.ok(!s.includes('devuser') && s.includes('~/work/x.ts'), s) },
+    { name: 'a credential', text: 'password=hunterxsecret', expect: (s) => assert.ok(!s.includes('hunterxsecret') && s.includes('[REDACTED]'), s) },
+  ];
+  const JOINERS = [', ', ',', '; ', ' / ', ' and ', '\n'];
+
+  function sentFor(text: string): string {
+    const state = sanitizeSummary(summary({ description: `note: ${text}`, openQuestions: [text] }));
+    const task = state.task as Record<string, unknown>;
+    return `${String(task.description)} ${JSON.stringify(task.open_questions)}`;
+  }
+
+  for (const neighbour of NEIGHBOURS) {
+    it(`phone × ${neighbour.name} × every joiner, both orders`, () => {
+      for (const phone of forms()) {
+        for (const joiner of JOINERS) {
+          for (const text of [`${phone}${joiner}${neighbour.text}`, `${neighbour.text}${joiner}${phone}`]) {
+            const sent = sentFor(text);
+            assert.ok(!/\d/.test(sent), `digits survived in ${JSON.stringify(text)}: ${sent}`);
+            neighbour.expect(sent);
+          }
+        }
+      }
+    });
+  }
+
+  it('Astra r6 example: two dotted phones separated by a comma', () => {
+    const sent = sentFor('0912.345.678, 028.3822.1234');
+    assert.ok(!/\d/.test(sent), sent);
+  });
+
+  it('a phone between a coordinate pair and an email on one line', () => {
+    const sent = sentFor('pin 10.7769, 106.7009, call 0912 345 678, mail an.nguyen@example.com, see /Users/devuser/x');
+    assert.ok(!/\d/.test(sent), sent);
+    assert.ok(sent.includes('[EMAIL]') && sent.includes('~/x') && !sent.includes('devuser'), sent);
+  });
+
+  it('a credential whose value is a phone or a coordinate is removed whole with its neighbours', () => {
+    for (const text of ['token=0912345678, 028 3822 1234', 'secret=10.7769, 106.7009', 'api_key=10.7769,106.7009 then 0912345678']) {
+      const sent = sentFor(text);
+      assert.ok(!/\d/.test(sent), `${JSON.stringify(text)} → ${sent}`);
+    }
+  });
+
+  it('code-text negatives still hold', () => {
+    for (const text of ['cells[0][1][2] = +1', 'f(0, 1, 2, 3, 4, 5, 6, 7, 8, 9)', 'exit(+1) then exit(0)', '@@ -1,3 +1,3 @@', 'v[0] = (1 + 2) * 3', 'node 22.18.0', 'port 8081, pid 84', 'pid 84 and 0 errors', 'HTTP 404 at 2026-10-22T10:30:00Z', '8 4 items, 0 errors', 'the token bucket refills every second']) {
+      assert.equal(redact(text), text);
+    }
+  });
+});
