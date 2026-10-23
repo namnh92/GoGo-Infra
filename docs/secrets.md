@@ -574,8 +574,14 @@ Agent sessions wrap every write to GitHub — push, pull request, comment — in
 It mints a token narrowed to the checkout's repository (`--repo` overrides), hands it to the
 command as `GH_TOKEN` and through a git credential helper that reads it from the environment —
 the owner's keychain helper is reset for that command, so git never falls back to the owner's
-login — and refuses to run the command at all if no token can be minted. Tests:
-`scripts/secrets/as-agent.test.sh`.
+login — and refuses to run the command at all if no token can be minted. The token is the only
+way the command can authenticate to GitHub: SSH remotes (`git@github.com:…`, `ssh://…`,
+`pushurl` included) are rewritten to HTTPS for that process, git's SSH transport is disabled and
+the SSH agent is not passed on, and inherited `http.extraHeader` values for github.com are
+reset. Before minting it checks the checkout: a remote that still reaches GitHub over anything
+but HTTPS (your own `insteadOf` wins over the rewrite), an extra header configured for a more
+specific GitHub URL, or inherited `GIT_CONFIG_COUNT` / `GIT_CONFIG_PARAMETERS` is refused rather
+than worked around. Tests: `scripts/secrets/as-agent.test.sh`.
 
 The lower-level form, for anything else:
 
