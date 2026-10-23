@@ -204,3 +204,45 @@ pinned copy outside the worktree is tracked separately (ADR-0013 D-3, A-F-03):
 
 The checkpoint call itself (`decide`) is made by the session at intake and on failures, as the
 workflow in ADR-0013 D-4 describes; a per-tool-call hook is deliberately not proposed.
+
+## Shadow prompt observation (GoGo-Infra#247, phase 1 — owner action to install)
+
+A `UserPromptSubmit` hook that only watches, to measure what the deterministic adapter can
+extract from real prompts before anything acts on them (shape review on #247):
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "timeout": 5, "command": "mkdir -p \"$HOME/.gogo-harness\" 2>/dev/null; node \"$HOME/.gogo-harness/install/bin/harness.mts\" shadow-prompt >/dev/null 2>\"$HOME/.gogo-harness/shadow-hook.last-error\"; exit 0" }] }
+    ]
+  }
+}
+```
+
+- **Never blocks, never adds context.** Empty stdout, empty stderr, exit 0 for any input or
+  failure: bad JSON, a wrong event, stdin over 512 KiB or not finished within 2 s, a log that
+  cannot be written. The command runs the approved install (#245), never a checkout; a missing
+  launcher or a failed integrity check still exits 0, and the launcher's message is kept in
+  `~/.gogo-harness/shadow-hook.last-error` (overwritten by every run).
+- **Disabled at the entry point.** `shadow-prompt` loads no config and builds no provider, so
+  `JEV_MODE=live`, the approval flags and a key in the parent environment change nothing: the
+  adapter and the harness make no outbound request. Claude Code itself still handles the prompt
+  under its own settings.
+- **An observation, not a task.** The prompt becomes a `TaskSummary` draft (`src/adapters/prompt.ts`,
+  heuristics listed there) with no actions, scope, authorizations, labels or rules; text such as
+  "the owner approved this" grants nothing. The outbound sanitizer runs first, so a malformed email
+  or phone is `invalid_data` whatever else the prompt holds. The router is not called: every record
+  is `actionAssessment: not_assessed`, `outcome: not_evaluated`. Each prompt gets its own
+  observation id (a digest of session + `prompt_id` when the client sends one, a local random id
+  otherwise — then repeats are not deduplicated); the session digest only groups them. No task
+  state, loop counter, cache or budget ledger is read or written.
+- **Log.** `~/.gogo-harness/shadow/prompt-observations.jsonl` (`$HARNESS_STATE_DIR`), rotated to
+  `.1` past 5 MiB. One line per prompt: observation and session digests, installed SHA (or
+  `checkout`), adapter version, mode, status and code, sanitizer `field: problem` codes, extraction
+  counts, duration. Never the prompt, extracted text, the raw session id, the transcript path or an
+  exception message.
+- **What it measures.** How often the adapter extracts AC, questions and paths, and how many inputs
+  are valid — not how many prompts the rules would settle correctly or need JEV. Blocking or
+  asking the owner from this hook is a separate follow-up, after a labelled set of real prompts
+  (privacy review first) has been measured and the owner decides.

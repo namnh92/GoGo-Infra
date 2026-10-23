@@ -6,6 +6,7 @@
  *   node harness/src/cli.ts status
  *   node harness/src/cli.ts billing --mode interactive|automation
  *   node harness/src/cli.ts handoff --input handoff.json --out docs/handoffs/<file>.md
+ *   node harness/src/cli.ts shadow-prompt < hook.json   # #247 phase 1: logs, prints nothing, exits 0
  *
  * Live mode, through the SSM wrapper so the key reaches this process only:
  *
@@ -37,11 +38,18 @@ import { LoopController } from './runtime/loop.ts';
 import { JsonlSink, summarize } from './runtime/metrics.ts';
 import { withStateLock } from './runtime/lock.ts';
 import { loadTaskState, saveTaskState } from './runtime/task-state.ts';
+import { observePrompt } from './shadow/prompt-observation.ts';
 
 const EXIT = { AUTO_EXECUTE: 0, RESEARCH_AND_CONTINUE: 10, HUMAN_APPROVAL: 20 } as const;
 
 async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
+  // Shadow phase 1 (#247): before argument parsing and config, so neither a live
+  // environment nor a bad flag can reach a provider, print, or exit non-zero.
+  if (command === 'shadow-prompt') {
+    await observePrompt({ input: process.stdin, env: process.env });
+    return 0;
+  }
   const { values } = parseArgs({
     args: rest,
     options: { input: { type: 'string' }, fixture: { type: 'string' }, out: { type: 'string' }, mode: { type: 'string' } },
