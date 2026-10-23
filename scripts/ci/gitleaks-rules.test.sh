@@ -84,6 +84,26 @@ expect 0 'documented placeholders are not secrets' \
   "REDIS_URL=${RD}default:PASSWORD@host:6379
 DATABASE_URL=${PG}USER:PASSWORD@host/db"
 
+# PR #242 A-F-12: the harness fixture exceptions match the exact fixture values
+# only. Assembled from pieces so this file holds no credential-shaped literal.
+FX_OR="sk-or-""v1-abcdefghijklmnop"
+FX_HX="hunter""xsecret0912"
+KEY="api_""key"
+
+expect 0 'the harness fixture values themselves are allowed' \
+  "${KEY}='${FX_OR}qrstuvwxyz'
+${KEY}=\"${FX_OR}\"
+password=${FX_HX}345678"
+
+expect 1 'a longer value behind the OpenRouter fixture prefix is caught' \
+  "${KEY}='${FX_OR}qrstuvwxyz${FAKE_PW}'"
+
+expect 1 'a longer value behind the hunterxsecret fixture is caught' \
+  "password=${FX_HX}345678${FAKE_PW}"
+
+expect 1 'a postgres URL whose username is the fixture word is caught' \
+  "db=\"${PG}${FX_HX}:${FAKE_PW}@db.internal/gogo\""
+
 echo
 echo "  ${pass} passed, ${fail} failed"
 [[ "$fail" -eq 0 ]]
