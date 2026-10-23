@@ -186,17 +186,74 @@ The BE POC's key, when created, is `gogo_be_<env>` → `openrouter.decisions`. A
 `openrouter.jev_shared`, neither harness nor product. Any other name lands in
 `openrouter.other_keys`. Nothing is summed across services.
 
+## Installed copy (hooks and automation)
+
+`node harness/src/cli.ts` above runs the checkout: that is the development and CI entry point.
+Hooks and automation run an approved install outside every checkout instead, so an edit in a
+worktree never changes the verdicts the session receives (ADR-0013 D-3, GoGo-Infra#245):
+
+```
+~/.gogo-harness/install/          ($HARNESS_INSTALL_DIR for prepare.ts; separate from ledger/logs)
+  versions/<full-sha>/MANIFEST    sha256 of every file of the version, package.json included
+  versions/<full-sha>/harness/    `git archive <sha> harness`, read-only
+  ACTIVE                          { sha, manifestDigest } of the running version
+  history.jsonl                   actor, time, old → new SHA + digest, approval reference
+  bin/harness.mts                 bootstrap, written once at the first activation
+```
+
+```bash
+# 1. Prepare (anyone; changes nothing that runs). Fetches develop first and refuses if the fetch
+#    fails or the commit is not on it; installs from Git objects; runs the commit's own tests
+#    against the staged bytes; publishes read-only. Prints the activation command.
+node harness/src/install/prepare.ts <commit> [--install-dir DIR]
+
+# 2. Activate or roll back (owner, on a terminal). Shows old → new SHA and MANIFEST digest and
+#    the approval reference, and asks the owner to type "<old-sha12|none> <new-sha12> <digest12>".
+#    The first activation runs the prepared version's own launcher (the command prepare prints);
+#    later ones run the installed one:
+node ~/.gogo-harness/install/bin/harness.mts activate <full-sha> --approval <link to the approval>
+
+# 3. Use. Same commands and exit codes as cli.ts:
+node ~/.gogo-harness/install/bin/harness.mts decide --input task.json
+node ~/.gogo-harness/install/bin/harness.mts install-verify     # { sha, manifestDigest } or exit 2
+```
+
+The launcher uses Node's standard library only. Per process the bootstrap reads `ACTIVE` once,
+checks the `MANIFEST` digest against it and every file against the `MANIFEST` (missing, extra,
+changed or linked file), and only then hands over to **that version's own launcher**, which loads
+that version's CLI — launcher and runtime always come from the version `ACTIVE` names. Any
+mismatch exits `2` with `harness install: …` — no decision, no provider call, no fallback to a
+checkout; `HARNESS_DEV` or any other variable changes nothing. A launcher run from a checkout
+refuses to start, and so does an install whose real path (symlinks resolved) is inside a git
+checkout or worktree, or whose `versions/` (or a version under it) is a symbolic link: prepare,
+activation and every run check it.
+
+`ACTIVE` is the only switch. Activation takes `activate.lock`, writes the bootstrap only if there
+is none, appends the history line and, last, replaces `ACTIVE` by rename: an activation that fails
+or is interrupted at any step leaves the previous version — launcher and runtime — running. If the
+lock is left behind, compare `ACTIVE` with the last line of `history.jsonl` (a line whose `to` is
+not `ACTIVE` did not finish), then remove the lock and activate again. If `ACTIVE` itself is
+broken, run the wanted version's own launcher (`versions/<sha>/harness/src/install/launcher.ts
+activate <sha> …`, the command prepare prints) to recover. A rollback is an activation of an
+earlier SHA and is recorded as `rollback`.
+
+**Limits.** This stops checkout edits from taking effect and the harness from approving its own
+change. It does not stop the same OS user from rewriting payload, `MANIFEST` and `ACTIVE`
+together, or swapping a file between verification and import; the manifest and history are not
+tamper evidence against that user. That boundary is Claude Code's sandbox and permissions on
+writes outside the workspace. A declared write to the install is a hard gate anyway: it is
+outside the checkout, so the policy engine classifies it `unknown`.
+
 ## Proposed Claude Code hook (owner action — not installed)
 
 Installing this edits `.claude/settings.json`, a permission-policy change. Proposed shape, for
-the owner to adopt or not. It runs the harness from an editable checkout; running an approved,
-pinned copy outside the worktree is tracked separately (ADR-0013 D-3, A-F-03):
+the owner to adopt or not. It runs the installed copy above, never the checkout:
 
 ```json
 {
   "hooks": {
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR\"/../GoGo-Infra/harness/src/cli.ts status >/dev/null" }] }
+      { "hooks": [{ "type": "command", "command": "node \"$HOME\"/.gogo-harness/install/bin/harness.mts status >/dev/null" }] }
     ]
   }
 }
