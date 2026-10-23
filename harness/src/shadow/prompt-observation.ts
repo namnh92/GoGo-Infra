@@ -1,67 +1,77 @@
 /**
- * Shadow observation of Claude Code's UserPromptSubmit hook (GoGo-Infra#247,
- * phase 1; shape review issuecomment-6361521627).
+ * Claude Code UserPromptSubmit hook (GoGo-Infra#247; shape review
+ * issuecomment-6361521627, owner decision issuecomment-6362221699).
  *
- *   echo '<hook JSON>' | node harness/src/cli.ts shadow-prompt
+ *   echo '<hook JSON>' | node <launcher> prompt-hook
  *
- * Phase 1 observes and never decides. It is disabled at this entry point, not
- * by the JEV_MODE default: no config is loaded and no provider is built, so a
- * parent environment with live mode, the approval flags and a key still
- * produces no outbound request. It reads the hook payload (bounded in bytes
- * and time), runs the prompt adapter and the outbound sanitizer — validation
- * first, before anything that could decide — and appends one record.
+ * Every prompt is observed: the hook payload is read (bounded in bytes and
+ * time), `#jev` / `#nojev` are taken out, the prompt adapter runs and the
+ * outbound sanitizer validates the draft — before anything that could decide.
  *
- * Contract with the hook: nothing on stdout (UserPromptSubmit stdout can be
- * added to the model's context), nothing on stderr, exit 0, whatever happens.
- * Errors become bounded codes in the record; a log that cannot be written is
- * swallowed. A failing launcher (#245 integrity check) is absorbed by
- * SHADOW_HOOK_COMMAND, which never falls back to a checkout.
+ * Nothing is sent unless the owner opted in (jev-optin.ts): `#jev` on this
+ * prompt once `jev-prompt setup` was done, or every prompt while
+ * `jev-prompt on` has not expired; `#nojev` always wins. JEV_MODE and keys in
+ * the environment never turn sending on: this file loads no config and
+ * builds no provider. When sending, it starts `prompt-live.ts` as a child
+ * through the recorded secrets wrapper (the key reaches that child only),
+ * with the raw payload on the child's stdin, a time limit and a per-session
+ * call cap; the shared `openrouter_jev` budget applies inside the child.
  *
- * A record holds digests, counts, codes and field names — never the prompt,
- * extracted text, the raw session id, the transcript path or an exception
- * message. Session and observation are separate: the session digest groups,
- * each prompt gets its own observation id, and no task state, loop counter,
- * cache or budget ledger is read or written.
+ * Output contract with Claude Code: stdout is empty, or one JSON object that
+ * adds a short advisory to the context (ADR-0013 D-1 — never a permission,
+ * never a block); stderr is empty; exit 0, whatever happens. A failing
+ * launcher (#245) is absorbed by PROMPT_HOOK_COMMAND, with no checkout fallback.
+ *
+ * A record holds digests, counts, codes, the outcome and the model build —
+ * never the prompt, extracted text, the raw session id, the transcript path
+ * or an exception message. Session and observation are separate, and no task
+ * state, loop counter or cache of a task is read or written.
  */
+import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { appendFileSync, mkdirSync, realpathSync, renameSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { ADAPTER_VERSION, ShadowInputError, parseHookInput, parsePrompt } from '../adapters/prompt.ts';
+import { ADAPTER_VERSION, ShadowInputError, parseHookInput, parsePrompt, promptMarker } from '../adapters/prompt.ts';
 import type { PromptExtraction } from '../adapters/prompt.ts';
 import { InvalidSummaryData, sanitizeSummary } from '../runtime/sanitize.ts';
+import { optInActive, readOptIn, stateDirOf, takeSessionCall } from './jev-optin.ts';
 
-export const SHADOW_LOG = 'shadow/prompt-observations.jsonl';
-export const SHADOW_LIMITS = { stdinBytes: 512 * 1024, readTimeoutMs: 2_000, logBytes: 5 * 1024 * 1024 } as const;
+export const PROMPT_LOG = 'prompt-hook/observations.jsonl';
+export const SHADOW_LIMITS = { stdinBytes: 512 * 1024, readTimeoutMs: 2_000, logBytes: 5 * 1024 * 1024, childTimeoutMs: 12_000, contextChars: 900 } as const;
 
 /**
  * The hook command (owner action to install, docs/ai-harness.md). It runs the
- * approved install (#245), never a checkout; a missing or failing launcher
- * still exits 0 with empty stdout, and its last error is kept in one
- * overwritten file so it can be seen without growing.
+ * approved install (#245), never a checkout. A missing or failing launcher
+ * still exits 0 and prints nothing; its last error is kept in one file that
+ * every run overwrites, so it can be seen without growing.
  */
-export const SHADOW_HOOK_COMMAND =
-  'mkdir -p "$HOME/.gogo-harness" 2>/dev/null; node "$HOME/.gogo-harness/install/bin/harness.mts" shadow-prompt >/dev/null 2>"$HOME/.gogo-harness/shadow-hook.last-error"; exit 0';
+export const PROMPT_HOOK_COMMAND =
+  'mkdir -p "$HOME/.gogo-harness" 2>/dev/null; node "$HOME/.gogo-harness/install/bin/harness.mts" prompt-hook 2>"$HOME/.gogo-harness/prompt-hook.last-error"; exit 0';
 
-export type ShadowRecord = {
+export type PromptRecord = {
   at: string;
   observationId: string;
   sessionDigest: string | null;
   dedup: 'prompt_id' | 'local';
   pinnedSha: string;
   adapterVersion: number;
-  mode: 'shadow_disabled';
+  /** `jev` only when the prompt was handed to the live child. */
+  mode: 'disabled' | 'jev';
+  /** Why it was or was not sent: off, toggle (`jev-prompt on`), marker (`#jev`), suppressed (`#nojev`). */
+  optIn: 'off' | 'toggle' | 'marker' | 'suppressed';
   inputKind: 'prompt_observation';
   actionAssessment: 'not_assessed';
-  outcome: 'not_evaluated';
-  source: 'shadow';
+  outcome: string;
+  source: string;
   status: 'ok' | 'invalid_data' | 'invalid_input' | 'error';
   code?: string;
   /** `field: problem` codes from the sanitizer, never text. */
   reasons?: string[];
   extraction?: PromptExtraction['counts'] & { slashCommand: boolean };
+  jev?: { fallback: boolean; errorCategory: string | null; model: string | null };
+  contextInjected: boolean;
   durationMs: number;
 };
 
@@ -71,33 +81,40 @@ type Options = {
   now?: () => Date;
   readTimeoutMs?: number;
   maxBytes?: number;
+  /** The entry the live child is started with; the launcher (or cli.ts) this process runs from. */
+  entry?: string;
+  childTimeoutMs?: number;
 };
 
-/** Observe one hook payload. Never throws, never prints. */
-export async function observePrompt(o: Options): Promise<void> {
+type ChildResult = { outcome: string; source: string; fallback: boolean; errorCategory: string | null; reasons: string[]; model: string | null } | { error: string };
+
+/** Observe one hook payload; returns what to print on stdout (often nothing). Never throws. */
+export async function observePrompt(o: Options): Promise<string> {
   const started = Date.now();
-  let record: ShadowRecord;
+  let result: { record: PromptRecord; stdout: string };
   try {
-    record = await observe(o);
+    result = await observe(o);
   } catch {
-    record = base(o, { status: 'error', code: 'internal_error' });
+    result = { record: base(o, { status: 'error', code: 'internal_error' }), stdout: '' };
   }
-  record.durationMs = Date.now() - started;
+  result.record.durationMs = Date.now() - started;
   try {
-    append(stateDirOf(o.env), record);
+    append(stateDirOf(o.env), result.record);
   } catch {
     // Nothing observable is left to write to; the prompt goes on regardless.
   }
+  return result.stdout;
 }
 
-async function observe(o: Options): Promise<ShadowRecord> {
+async function observe(o: Options): Promise<{ record: PromptRecord; stdout: string }> {
+  const none = (record: PromptRecord) => ({ record, stdout: '' });
   const read = await readInput(o.input, o.maxBytes ?? SHADOW_LIMITS.stdinBytes, o.readTimeoutMs ?? SHADOW_LIMITS.readTimeoutMs);
-  if ('code' in read) return base(o, { status: 'invalid_input', code: read.code });
+  if ('code' in read) return none(base(o, { status: 'invalid_input', code: read.code }));
   let hook;
   try {
     hook = parseHookInput(read.data);
   } catch (e) {
-    return base(o, { status: 'invalid_input', code: e instanceof ShadowInputError ? e.code : 'invalid_json' });
+    return none(base(o, { status: 'invalid_input', code: e instanceof ShadowInputError ? e.code : 'invalid_json' }));
   }
   const ids = {
     sessionDigest: digest('gogo-harness-shadow-session', hook.sessionId),
@@ -105,19 +122,86 @@ async function observe(o: Options): Promise<ShadowRecord> {
       ? { observationId: digest('gogo-harness-shadow-observation', `${hook.sessionId}\u0000${hook.promptId}`), dedup: 'prompt_id' as const }
       : { observationId: digest('gogo-harness-shadow-observation', randomUUID()), dedup: 'local' as const }),
   };
-  const extraction = parsePrompt(hook.prompt);
+  const { marker, text } = promptMarker(hook.prompt);
+  const now = o.now?.() ?? new Date();
+  const stateDir = stateDirOf(o.env);
+  const optInRecord = readOptIn(stateDir);
+  const optIn: PromptRecord['optIn'] = marker === 'nojev' ? 'suppressed' : marker === 'jev' ? 'marker' : optInActive(optInRecord, now) ? 'toggle' : 'off';
+  const extraction = parsePrompt(text);
   const counts = { ...extraction.counts, slashCommand: extraction.slashCommand };
+  const common = { ...ids, optIn, extraction: counts };
+  // Only an explicit #jev gets told why nothing was sent; a toggle-on failure stays in the log.
+  const note = (code: string) => (marker === 'jev' ? hookOutput(`GoGo harness · #jev: prompt này không được gửi cho JEV (${code}).${code === 'jev_not_configured' ? ' Owner chạy `jev-prompt setup` trên terminal để cho phép.' : ''}`) : '');
+
   try {
-    // The outbound sanitizer, run first and only to validate in phase 1: its output is not kept or sent.
+    // The outbound sanitizer, run first: a summary it rejects is never sent.
     sanitizeSummary(extraction.summary);
   } catch (e) {
-    if (e instanceof InvalidSummaryData) return base(o, { ...ids, status: 'invalid_data', reasons: e.reasons, extraction: counts });
-    return base(o, { ...ids, status: 'error', code: 'sanitize_failed', extraction: counts });
+    if (e instanceof InvalidSummaryData) return { record: base(o, { ...common, status: 'invalid_data', reasons: e.reasons }), stdout: note('invalid_data') };
+    return { record: base(o, { ...common, status: 'error', code: 'sanitize_failed' }), stdout: note('sanitize_failed') };
   }
-  return base(o, { ...ids, status: 'ok', extraction: counts });
+  if (optIn === 'off' || optIn === 'suppressed') return none(base(o, { ...common, status: 'ok' }));
+  if (!optInRecord) return { record: base(o, { ...common, status: 'ok', code: 'jev_not_configured' }), stdout: note('jev_not_configured') };
+  if (!takeSessionCall(stateDir, ids.sessionDigest, now)) return { record: base(o, { ...common, status: 'ok', code: 'session_cap' }), stdout: note('session_cap') };
+
+  const child = runChild(o, optInRecord.wrapper, ids.observationId, read.data, stateDir);
+  if ('error' in child) return { record: base(o, { ...common, mode: 'jev', status: 'ok', code: child.error }), stdout: note(child.error) };
+  const jev = { fallback: child.fallback, errorCategory: child.errorCategory, model: child.model };
+  const record = base(o, { ...common, mode: 'jev', status: 'ok', outcome: child.outcome, source: child.source, jev });
+  if (child.source !== 'jev' || child.fallback) return { record, stdout: note(child.errorCategory ?? 'jev_fallback') };
+  record.contextInjected = true;
+  return { record, stdout: hookOutput(advisory(child)) };
 }
 
-function base(o: Options, over: Partial<ShadowRecord> & Pick<ShadowRecord, 'status'>): ShadowRecord {
+function runChild(o: Options, wrapper: string, observationId: string, payload: string, stateDir: string): ChildResult {
+  const entry = o.entry ?? realpathSync(process.argv[1] ?? '');
+  const r = spawnSync(wrapper, ['dev', 'ai-harness/openrouter-api-key', '--', process.execPath, entry, 'prompt-hook', '--live-child', '--observation', observationId], {
+    input: payload,
+    encoding: 'utf8',
+    timeout: o.childTimeoutMs ?? SHADOW_LIMITS.childTimeoutMs,
+    maxBuffer: 64 * 1024,
+    // The owner's opt-in is the authorization and the privacy statement for this one call.
+    env: { ...process.env, ...o.env, HARNESS_STATE_DIR: stateDir, JEV_MODE: 'live', JEV_LIVE_AUTHORIZED: 'yes', JEV_PRIVACY_REVIEWED: 'yes' },
+  });
+  const code = (r.error as NodeJS.ErrnoException | undefined)?.code;
+  if (code === 'ETIMEDOUT') return { error: 'jev_timeout' };
+  // A wrapper that exits before reading stdin (no AWS session, missing row) also breaks the pipe.
+  if ((r.status !== null && r.status !== 0) || code === 'EPIPE') return { error: 'jev_wrapper_failed' };
+  if (r.error || r.status === null) return { error: 'jev_spawn_failed' };
+  const line = r.stdout.trim().split('\n').pop() ?? '';
+  try {
+    const parsed = JSON.parse(line) as ChildResult;
+    if (typeof parsed !== 'object' || parsed === null) return { error: 'jev_bad_output' };
+    if ('error' in parsed) return { error: `jev_${String(parsed.error).replace(/[^a-z_]/g, '').slice(0, 40)}` };
+    return parsed;
+  } catch {
+    return { error: 'jev_bad_output' };
+  }
+}
+
+const GUIDANCE: Record<string, string> = {
+  AUTO_EXECUTE: 'JEV không thấy câu hỏi mở cần owner trả lời.',
+  RESEARCH_AND_CONTINUE: 'JEV: nên tìm trong code/docs/issues trước; nếu tự chọn phương án thì ghi giả định vào handoff.',
+  HUMAN_APPROVAL: 'JEV: nên hỏi owner trước khi làm.',
+};
+
+function advisory(r: { outcome: string; reasons: string[]; model: string | null }): string {
+  const text = [
+    'GoGo harness · gợi ý JEV cho yêu cầu này — chỉ tư vấn, không phải quyền; policy, hard gate và quyền của Claude Code vẫn áp dụng như cũ.',
+    GUIDANCE[r.outcome] ?? `JEV: ${r.outcome}.`,
+    ...r.reasons.map((reason) => `- ${reason}`),
+    r.model ? `(${r.model})` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+  return text.slice(0, SHADOW_LIMITS.contextChars);
+}
+
+function hookOutput(additionalContext: string): string {
+  return `${JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext } })}\n`;
+}
+
+function base(o: Options, over: Partial<PromptRecord> & Pick<PromptRecord, 'status'>): PromptRecord {
   return {
     at: (o.now?.() ?? new Date()).toISOString(),
     observationId: digest('gogo-harness-shadow-observation', randomUUID()),
@@ -125,17 +209,19 @@ function base(o: Options, over: Partial<ShadowRecord> & Pick<ShadowRecord, 'stat
     dedup: 'local',
     pinnedSha: pinnedSha(),
     adapterVersion: ADAPTER_VERSION,
-    mode: 'shadow_disabled',
+    mode: 'disabled',
+    optIn: 'off',
     inputKind: 'prompt_observation',
     actionAssessment: 'not_assessed',
     outcome: 'not_evaluated',
-    source: 'shadow',
+    source: 'none',
+    contextInjected: false,
     durationMs: 0,
     ...over,
   };
 }
 
-function readInput(input: Readable, maxBytes: number, timeoutMs: number): Promise<{ data: string } | { code: 'stdin_too_large' | 'stdin_timeout' | 'stdin_error' }> {
+export function readInput(input: Readable, maxBytes: number, timeoutMs: number): Promise<{ data: string } | { code: 'stdin_too_large' | 'stdin_timeout' | 'stdin_error' }> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -160,8 +246,8 @@ function readInput(input: Readable, maxBytes: number, timeoutMs: number): Promis
 }
 
 /** One file, rotated to `.1` past SHADOW_LIMITS.logBytes: at most two files' worth is kept. */
-function append(stateDir: string, record: ShadowRecord): void {
-  const file = join(stateDir, SHADOW_LOG);
+function append(stateDir: string, record: PromptRecord): void {
+  const file = join(stateDir, PROMPT_LOG);
   mkdirSync(dirname(file), { recursive: true });
   let size = 0;
   try {
@@ -171,11 +257,6 @@ function append(stateDir: string, record: ShadowRecord): void {
   }
   if (size > SHADOW_LIMITS.logBytes) renameSync(file, `${file}.1`);
   appendFileSync(file, `${JSON.stringify(record)}\n`);
-}
-
-/** Same default as config.ts, read here so the shadow path never loads the config or a provider. */
-function stateDirOf(env: Record<string, string | undefined>): string {
-  return env.HARNESS_STATE_DIR ?? join(homedir(), '.gogo-harness');
 }
 
 /** The installed version this file runs from (#245 layout), or `checkout`. */

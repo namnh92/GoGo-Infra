@@ -1,10 +1,10 @@
 /**
- * GoGo-Infra#247 — prompt → observation adapter and the shadow
- * UserPromptSubmit entry point (shape review issuecomment-6361521627).
+ * GoGo-Infra#247 — prompt → observation adapter and the UserPromptSubmit
+ * entry point (shape review issuecomment-6361521627).
  *
- * Phase 1 is shadow and disabled: the entry point never blocks, never writes
- * to stdout, never builds a provider, never touches task state, and logs only
- * digests, counts and codes.
+ * Without the owner's opt-in (prompt-jev.test.ts) the hook only observes: it
+ * never blocks, prints nothing, never builds a provider, never touches task
+ * state, and logs only digests, counts and codes.
  */
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -15,8 +15,8 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import { parseHookInput, parsePrompt } from '../src/adapters/prompt.ts';
-import { SHADOW_HOOK_COMMAND, SHADOW_LOG, observePrompt } from '../src/shadow/prompt-observation.ts';
-import type { ShadowRecord } from '../src/shadow/prompt-observation.ts';
+import { PROMPT_HOOK_COMMAND, PROMPT_LOG, observePrompt } from '../src/shadow/prompt-observation.ts';
+import type { PromptRecord } from '../src/shadow/prompt-observation.ts';
 
 const HARNESS = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = join(HARNESS, 'src/cli.ts');
@@ -37,9 +37,9 @@ function hookJson(prompt: string, over: Record<string, unknown> = {}): string {
   });
 }
 
-function records(dir: string): ShadowRecord[] {
-  const file = join(dir, SHADOW_LOG);
-  return readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as ShadowRecord);
+function records(dir: string): PromptRecord[] {
+  const file = join(dir, PROMPT_LOG);
+  return readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as PromptRecord);
 }
 
 /** In-process run with a counting fetch: phase 1 must never reach the network. */
@@ -49,7 +49,7 @@ async function observe(raw: string | PassThrough, dir: string, opts: { env?: Rec
   let calls = 0;
   globalThis.fetch = (async () => {
     calls += 1;
-    throw new Error('network must not be reached in shadow phase 1');
+    throw new Error('network must not be reached without the owner opt-in');
   }) as typeof fetch;
   try {
     await observePrompt({ input, env: { HARNESS_STATE_DIR: dir, ...opts.env }, now: opts.now, readTimeoutMs: opts.readTimeoutMs, maxBytes: opts.maxBytes });
@@ -131,7 +131,7 @@ describe('#247 AC3: the hook never blocks and never injects context', () => {
   it('the CLI entry point: exit 0, empty stdout and stderr, for good and bad input, even with live set in the parent', () => {
     const dir = stateDir();
     for (const input of [hookJson('Fix the typo in docs/ai-harness.md\nAC:\n- typo gone'), '{oops', '']) {
-      const r = spawnSync(process.execPath, [CLI, 'shadow-prompt'], { input, env: { ...process.env, ...LIVE_ENV, JEV_LIVE_AUTHORIZED: '', HARNESS_STATE_DIR: dir }, encoding: 'utf8' });
+      const r = spawnSync(process.execPath, [CLI, 'prompt-hook'], { input, env: { ...process.env, ...LIVE_ENV, JEV_LIVE_AUTHORIZED: '', HARNESS_STATE_DIR: dir }, encoding: 'utf8' });
       assert.deepEqual([r.status, r.stdout, r.stderr], [0, '', '']);
     }
     assert.deepEqual(records(dir).map((r) => r.status), ['ok', 'invalid_input', 'invalid_input']);
@@ -139,7 +139,7 @@ describe('#247 AC3: the hook never blocks and never injects context', () => {
 
   it('the hook command absorbs a missing or failing launcher and keeps stdout empty', () => {
     const home = stateDir();
-    const run = () => spawnSync('sh', ['-c', SHADOW_HOOK_COMMAND], { input: hookJson('x'), env: { ...process.env, HOME: home }, encoding: 'utf8' });
+    const run = () => spawnSync('sh', ['-c', PROMPT_HOOK_COMMAND], { input: hookJson('x'), env: { ...process.env, HOME: home }, encoding: 'utf8' });
     // No install at all.
     let r = run();
     assert.deepEqual([r.status, r.stdout], [0, '']);
@@ -149,7 +149,7 @@ describe('#247 AC3: the hook never blocks and never injects context', () => {
     writeFileSync(launcher, "process.stderr.write('harness install: harness/src/cli.ts does not match its MANIFEST\\n'); process.exit(2);\n");
     r = run();
     assert.deepEqual([r.status, r.stdout], [0, '']);
-    assert.match(readFileSync(join(home, '.gogo-harness/shadow-hook.last-error'), 'utf8'), /does not match its MANIFEST/);
+    assert.match(readFileSync(join(home, '.gogo-harness/prompt-hook.last-error'), 'utf8'), /does not match its MANIFEST/);
     // A working launcher: the observation is logged, nothing reaches stdout.
     writeFileSync(launcher, `import { spawnSync } from 'node:child_process';\nprocess.exit(spawnSync(process.execPath, [${JSON.stringify(CLI)}, ...process.argv.slice(2)], { stdio: 'inherit' }).status ?? 2);\n`);
     r = run();
@@ -158,16 +158,16 @@ describe('#247 AC3: the hook never blocks and never injects context', () => {
   });
 });
 
-describe('#247 AC4: phase 1 is disabled at the entry point, not by default', () => {
+describe('#247 AC4: the environment alone never turns sending on', () => {
   it('a parent environment with live mode, approval flags and a key makes no request', async () => {
     const dir = stateDir();
     const { calls } = await observe(hookJson('Có nên đổi tên biến môi trường này không?'), dir, { env: LIVE_ENV });
     assert.equal(calls, 0);
-    assert.equal(records(dir)[0]!.mode, 'shadow_disabled');
+    assert.equal(records(dir)[0]!.mode, 'disabled');
   });
 
-  it('the shadow modules do not import the provider or the config', () => {
-    for (const file of ['src/shadow/prompt-observation.ts', 'src/adapters/prompt.ts']) {
+  it('the hook-side modules do not import the provider or the config (only prompt-live.ts, the child, does)', () => {
+    for (const file of ['src/shadow/prompt-observation.ts', 'src/shadow/jev-optin.ts', 'src/adapters/prompt.ts']) {
       const text = readFileSync(join(HARNESS, file), 'utf8');
       assert.doesNotMatch(text, /from '\.\.\/(config|decisions\/openrouter|decisions\/mock|router\/router)\.ts'/, file);
     }
@@ -196,7 +196,7 @@ describe('#247 AC5: session and observation have their own lifetimes', () => {
     assert.equal(rs[4]!.observationId, rs[5]!.observationId);
     assert.equal(rs[4]!.dedup, 'prompt_id');
     const after = snapshot(dir);
-    delete after[SHADOW_LOG];
+    delete after[PROMPT_LOG];
     assert.deepEqual(after, before, 'shadow changed task state, the ledger or the decision log');
   });
 });
@@ -210,7 +210,7 @@ describe('#247 AC6: nothing raw is stored or printed', () => {
       transcript_path: `/tmp/${sentinel}/t.jsonl`,
       cwd: `/work/${sentinel}`,
     });
-    const r = spawnSync(process.execPath, [CLI, 'shadow-prompt'], { input, env: { ...process.env, HARNESS_STATE_DIR: dir }, encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [CLI, 'prompt-hook'], { input, env: { ...process.env, HARNESS_STATE_DIR: dir }, encoding: 'utf8' });
     assert.deepEqual([r.status, r.stdout, r.stderr], [0, '', '']);
     for (const [path, text] of Object.entries(snapshot(dir))) assert.equal(text.includes(sentinel), false, `${path} holds the sentinel`);
     const [rec] = records(dir);
@@ -220,10 +220,10 @@ describe('#247 AC6: nothing raw is stored or printed', () => {
 
   it('the shadow log rotates instead of growing without bound', async () => {
     const dir = stateDir();
-    mkdirSync(dirname(join(dir, SHADOW_LOG)), { recursive: true });
-    writeFileSync(join(dir, SHADOW_LOG), `${'x'.repeat(5 * 1024 * 1024 + 1)}\n`);
+    mkdirSync(dirname(join(dir, PROMPT_LOG)), { recursive: true });
+    writeFileSync(join(dir, PROMPT_LOG), `${'x'.repeat(5 * 1024 * 1024 + 1)}\n`);
     await observe(hookJson('Sửa docs'), dir);
-    assert.ok(statSync(join(dir, `${SHADOW_LOG}.1`)).size > 5 * 1024 * 1024);
+    assert.ok(statSync(join(dir, `${PROMPT_LOG}.1`)).size > 5 * 1024 * 1024);
     assert.equal(records(dir).length, 1);
   });
 });
@@ -231,7 +231,7 @@ describe('#247 AC6: nothing raw is stored or printed', () => {
 describe('#247 docs', () => {
   it('the documented hook command is the one the tests run', () => {
     const docs = readFileSync(join(HARNESS, '../docs/ai-harness.md'), 'utf8');
-    assert.ok(docs.includes(JSON.stringify(SHADOW_HOOK_COMMAND)), 'docs/ai-harness.md hook snippet drifted from SHADOW_HOOK_COMMAND');
+    assert.ok(docs.includes(JSON.stringify(PROMPT_HOOK_COMMAND)), 'docs/ai-harness.md hook snippet drifted from PROMPT_HOOK_COMMAND');
   });
 });
 

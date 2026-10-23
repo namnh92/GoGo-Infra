@@ -180,3 +180,18 @@ export function parsePrompt(prompt: string): PromptExtraction {
     },
   };
 }
+
+/**
+ * The owner's per-prompt choice (#247, owner decision 2026-10-23): `#jev`
+ * asks for JEV on this prompt, `#nojev` refuses it even while sending is on.
+ * Both present is `nojev`. The markers are removed before parsing, so they
+ * are never part of what is summarized or sent.
+ */
+export function promptMarker(prompt: string): { marker: 'jev' | 'nojev' | null; text: string } {
+  const found = new Set<string>();
+  const text = prompt.replace(/(^|\s)#(no)?jev(?=\s|$)/gi, (_, lead: string, no: string | undefined) => {
+    found.add(no ? 'nojev' : 'jev');
+    return lead;
+  });
+  return { marker: found.has('nojev') ? 'nojev' : found.has('jev') ? 'jev' : null, text };
+}

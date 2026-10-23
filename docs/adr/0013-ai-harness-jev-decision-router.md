@@ -148,9 +148,12 @@ attempt), review planning. Never before a file read or a shell command. Question
 are in `harness/src/router/questions.ts`; each is one judgment, with a no-match option where
 nothing may fit. A user prompt is not a checkpoint input: it is a prompt observation
 (GoGo-Infra#247, shape review 2026-10-23), turned into a `TaskSummary` draft with no actions,
-scope or authorizations, validated by the outbound sanitizer first, and in phase 1 only logged
-(`shadow-prompt`: disabled at the entry point, never blocks, never adds context, never touches
-task state). Acting on prompts is a later, separate owner decision.
+scope or authorizations and validated by the outbound sanitizer first. It is sent to JEV only
+when the owner opted in — `#jev` on that prompt after `jev-prompt setup`, or every prompt while
+`jev-prompt on` (at most 24 h) has not expired; `#nojev` refuses — never because of the
+environment (owner decision 2026-10-23). The answer is added to the context as advice; the hook
+never blocks a prompt and never touches task state. Blocking or asking the owner from the hook
+is a separate decision.
 
 **D-5 State.** A sanitized `TaskSummary` — title, description, acceptance criteria, open
 questions, labels, paths (not contents), sources already searched, quoted rules — redacted for
