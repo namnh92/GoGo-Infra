@@ -204,3 +204,75 @@ pinned copy outside the worktree is tracked separately (ADR-0013 D-3, A-F-03):
 
 The checkpoint call itself (`decide`) is made by the session at intake and on failures, as the
 workflow in ADR-0013 D-4 describes; a per-tool-call hook is deliberately not proposed.
+
+## Prompt hook and JEV opt-in (GoGo-Infra#247 — owner action to install)
+
+A `UserPromptSubmit` hook. Every prompt is observed; a prompt goes to JEV only when the owner
+opted in (owner decision 2026-10-23 on #247), and then a short advisory is added to the context:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "timeout": 20, "command": "mkdir -p \"$HOME/.gogo-harness\" 2>/dev/null; node \"$HOME/.gogo-harness/install/bin/harness.mts\" prompt-hook 2>\"$HOME/.gogo-harness/prompt-hook.last-error\"; exit 0" }] }
+    ]
+  }
+}
+```
+
+**Opting in** (owner, on a terminal; off by default):
+
+```bash
+node ~/.gogo-harness/install/bin/harness.mts jev-prompt setup      # allow `#jev` on single prompts
+node ~/.gogo-harness/install/bin/harness.mts jev-prompt on --for 8h # every prompt, 1–24 h, then off by itself
+node ~/.gogo-harness/install/bin/harness.mts jev-prompt off         # stop sending every prompt (#jev still allowed)
+node ~/.gogo-harness/install/bin/harness.mts jev-prompt status
+```
+
+`setup` and `on` show what is sent where and ask the owner to type a confirmation; they record the
+secrets wrapper the key comes through (`scripts/secrets/exec-with.sh` found above the working
+directory, or `--wrapper <path>`) in `~/.gogo-harness/jev-prompt.json`, and every change is a line
+in `jev-prompt-history.jsonl`. In a prompt, a control line `#jev` asks for JEV on that prompt
+(after `setup`) and `#nojev` refuses it even while `on`. A control line is the whole first or last
+non-empty line, outside fenced code and `<pasted_content>`; a marker in a quote, in pasted or
+fenced material or inside a sentence is text, not a choice, and sends nothing. Control lines are
+removed before anything is summarized. Each session's call count is taken under its own lock and
+replaced atomically; a counter file that cannot be read refuses every call (`session_unreadable`)
+until the owner removes `~/.gogo-harness/prompt-hook/sessions.json`.
+`JEV_MODE`, the approval flags or a key in the environment never turn sending on by themselves.
+The owner's opt-in stands in for `JEV_LIVE_AUTHORIZED` and `JEV_PRIVACY_REVIEWED` for these calls;
+privacy review + DPA for real prompts (#244) is not done, and the confirmation says so.
+
+- **Never blocks.** stdout is empty, or one JSON object whose `additionalContext` is the advisory
+  (at most 900 characters): what JEV suggests (research first, ask the owner, or no open question),
+  up to three harness-written reasons and the model build, stated as advice, never a permission —
+  policy, hard gates and Claude Code's permissions apply as before. stderr is empty; exit 0 for any
+  input or failure (bad JSON, a wrong event, stdin over 512 KiB or not finished within 2 s, an
+  unwritable log, a failing wrapper, a timeout). A `#jev` that could not be sent gets a one-line
+  note with the reason code; a failure while `on` stays in the log. The command runs the approved
+  install (#245), never a checkout; a missing launcher or a failed integrity check still exits 0
+  with empty stdout, and the launcher's message is kept in `~/.gogo-harness/prompt-hook.last-error`
+  (overwritten by every run).
+- **One JEV call, the key in one child.** The hook process loads no config and builds no provider.
+  When sending, it starts `prompt-hook --live-child` through the recorded wrapper
+  (`<wrapper> dev ai-harness/openrouter-api-key -- node <launcher> …`) with the payload on the
+  child's stdin, never in a file, and a 12 s limit. The child asks the `intake` questions as a
+  prompt observation: the "criteria stated, no question → AUTO" shortcut does not apply, the only
+  action is `read`, no scope or authorization comes from the text. Cost goes to the shared
+  `openrouter_jev` budget ($2/month) and `decisions.jsonl` like any checkpoint; each session is
+  capped at 20 calls.
+- **An observation, not a task.** The prompt becomes a `TaskSummary` draft (`src/adapters/prompt.ts`,
+  heuristics listed there) with no actions, scope, authorizations, labels or rules; text such as
+  "the owner approved this" grants nothing. The outbound sanitizer runs first, so a malformed email
+  or phone is `invalid_data` and nothing is sent. Each prompt gets its own observation id (a digest
+  of session + `prompt_id` when the client sends one, a local random id otherwise — then repeats are
+  not deduplicated); the session digest only groups them. No task state, loop counter or task cache
+  is read or written.
+- **Log.** `~/.gogo-harness/prompt-hook/observations.jsonl` (`$HARNESS_STATE_DIR`), rotated to `.1`
+  past 5 MiB. One line per prompt: observation and session digests, installed SHA (or `checkout`),
+  adapter version, opt-in (`off`, `toggle`, `marker`, `suppressed`), mode, status and code,
+  sanitizer `field: problem` codes, extraction counts, JEV outcome, fallback and model build,
+  whether context was added, duration. Never the prompt, extracted text, the raw session id, the
+  transcript path or an exception message.
+- **Not in this change.** Blocking a prompt or asking the owner from the hook; measuring JEV's
+  accuracy on real prompts needs a labelled set and the privacy review first.

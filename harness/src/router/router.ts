@@ -91,6 +91,13 @@ export type RouterInput = {
   repoRoot?: string;
   /** Repeated-failure checkpoint: the failure being recorded now. */
   failure?: { failureClass: string; signature: string };
+  /**
+   * A user prompt, not a declared plan (#247 review, point 1): its `read`
+   * action says nothing about what the prompt asks for, so the deterministic
+   * "criteria stated, no questions → AUTO" shortcut does not apply; JEV or
+   * the fallback answers.
+   */
+  observation?: boolean;
 };
 
 export type DecisionSource = 'policy' | 'loop' | 'rules' | 'jev' | 'fallback';
@@ -160,7 +167,7 @@ export class DecisionRouter {
     if (stop) return this.#log(input, '', { ...base, loop: verdict, outcome: 'HUMAN_APPROVAL', source: 'loop', reasons: [`stop condition: ${stop}`] });
 
     // 3. Deterministic rules.
-    const settled = rulesOutcome(input, verdict);
+    const settled = input.observation ? null : rulesOutcome(input, verdict);
     if (settled) return this.#log(input, '', { ...base, loop: verdict, outcome: settled.outcome, source: 'rules', reasons: settled.reasons });
 
     const fallback = (category: RouterDecision['errorCategory'], note: string): RouterDecision => {

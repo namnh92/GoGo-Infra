@@ -6,6 +6,8 @@
  *   node harness/src/cli.ts status
  *   node harness/src/cli.ts billing --mode interactive|automation
  *   node harness/src/cli.ts handoff --input handoff.json --out docs/handoffs/<file>.md
+ *   node harness/src/cli.ts prompt-hook < hook.json   # #247 UserPromptSubmit hook: always exit 0
+ *   node harness/src/cli.ts jev-prompt setup|on [--for 8h]|off|status   # owner opt-in for prompts
  *
  * Live mode, through the SSM wrapper so the key reaches this process only:
  *
@@ -37,11 +39,26 @@ import { LoopController } from './runtime/loop.ts';
 import { JsonlSink, summarize } from './runtime/metrics.ts';
 import { withStateLock } from './runtime/lock.ts';
 import { loadTaskState, saveTaskState } from './runtime/task-state.ts';
+import { jevPromptCommand } from './shadow/jev-optin.ts';
+import { runLiveChild } from './shadow/prompt-live.ts';
+import { observePrompt } from './shadow/prompt-observation.ts';
 
 const EXIT = { AUTO_EXECUTE: 0, RESEARCH_AND_CONTINUE: 10, HUMAN_APPROVAL: 20 } as const;
 
 async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
+  // Prompt hook (#247): before argument parsing and config, so neither the environment nor a
+  // bad flag can turn sending on, print, or exit non-zero; only the owner's opt-in sends.
+  if (command === 'prompt-hook') {
+    if (rest[0] === '--live-child') {
+      const at = rest.indexOf('--observation');
+      process.stdout.write(`${JSON.stringify(await runLiveChild({ input: process.stdin, env: process.env, observationId: rest[at + 1] ?? '' }))}\n`);
+      return 0;
+    }
+    process.stdout.write(await observePrompt({ input: process.stdin, env: process.env }));
+    return 0;
+  }
+  if (command === 'jev-prompt') return jevPromptCommand(rest, process.env);
   const { values } = parseArgs({
     args: rest,
     options: { input: { type: 'string' }, fixture: { type: 'string' }, out: { type: 'string' }, mode: { type: 'string' } },
@@ -91,7 +108,7 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     default:
-      throw new Usage('commands: decide | status | billing | handoff');
+      throw new Usage('commands: decide | status | billing | handoff | prompt-hook | jev-prompt');
   }
 }
 
