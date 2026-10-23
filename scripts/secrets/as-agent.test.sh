@@ -114,6 +114,14 @@ out="$(cd "$REPO" && bash -x "$AS" -- "${SANDBOX}/child" 2>&1)"; rc=$?
 [[ "$rc" != 0 ]] && ! grep -q "$TOKEN" <<<"$out" && grep -q 'refusing to run with shell tracing' <<<"$out" \
   && ok "bash -x is refused before a token exists" || bad "tracing" "rc=$rc"
 
+# The owner's workstation is macOS, whose bash is 3.2, while CI runs bash 5 and would not notice
+# a bash-4-only expansion. Refuse the case-conversion forms statically.
+if grep -nE '\$\{[A-Za-z_][A-Za-z0-9_]*(,,?|\^\^?)\}' "${DIR}/as-agent.sh" >/dev/null; then
+  bad "bash 3.2" "as-agent.sh uses \${var,,} or \${var^^} (bash 4 only)"
+else
+  ok "no bash-4-only case conversion (macOS bash 3.2)"
+fi
+
 # --- PR #255 review: the token must be the only way the command can authenticate to GitHub ---
 
 # A checkout whose origin is SSH, with a commit to push, and an owner SSH command that records use.

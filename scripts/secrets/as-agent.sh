@@ -36,6 +36,8 @@ case "$-" in
 esac
 
 die() { echo "error: $*" >&2; exit 2; }
+# macOS ships bash 3.2, which has no case-conversion expansion; the owner's workstation runs this script.
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 usage="usage: as-agent.sh [--repo <name>]... -- <command> [args...]"
 
@@ -98,7 +100,7 @@ for r in "${repos[@]}"; do github_urls+=("https://github.com/namnh92/${r}.git" "
 if git rev-parse --git-dir >/dev/null 2>&1; then
   while IFS= read -r remote; do
     while IFS= read -r url; do
-      lower="${url,,}"
+      lower="$(lower "$url")"
       [[ "$lower" == *github.com* ]] || continue
       if [[ "$lower" != https://github.com/* ]]; then
         die "remote '${remote}' still reaches GitHub as '${url}' after the rewrite to HTTPS (an insteadOf in your git config?); the agent token only works over HTTPS — refusing"
@@ -119,7 +121,7 @@ while IFS= read -r line; do
   key="${line%% *}"
   value=""; [[ "$line" == *" "* ]] && value="${line#* }"
   [[ -n "$value" ]] || continue
-  case "${key,,}" in
+  case "$(lower "$key")" in
     http.extraheader | http.https://github.com/.extraheader) ;; # reset above; the effective check covers what remains
     *github.com*) die "an extra header is configured for ${key%.*} and cannot be reset for this process; refusing to send it alongside the agent token" ;;
   esac
