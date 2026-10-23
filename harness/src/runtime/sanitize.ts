@@ -102,8 +102,18 @@ export const VN_PHONE = /^(?:(?:\+84|0084|84)(?:[ .-]?0)?|0)[ .-]?(?:[35789](?:[
  * two or more letters.
  */
 export const EMAIL = /^[A-Za-z0-9_%+-]+(?:\.[A-Za-z0-9_%+-]+)*@(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$/;
-/** The one 8+-digit shape that is a plain value, not a candidate: an ISO date or timestamp. */
-export const ISO_DATE_TIME = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
+/**
+ * An 8+-digit shape that is a plain value, not a candidate: an ISO date or timestamp. Fractional seconds
+ * stop at nine digits (Astra r9 A-F-04): a valid phone has at least ten, so none can hide in one.
+ */
+export const ISO_DATE_TIME = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
+/**
+ * Labelled ids (owner decision 2026-10-23, "Thêm dạng id được phép"): a run of 8+ digits is kept as is
+ * only right after one of these labels — `run `, `runs/`, `job/`, `jobs/`, `issuecomment-`, `#` — and
+ * only when the digits are not a valid phone (a phone behind a label is still a phone: the safe
+ * direction). A bare run, or one glued to letters, stays a data error.
+ */
+export const LABELLED_ID = /(?:\brun |\b(?:runs|jobs?)\/|\bissuecomment-|(?<![\w#])#)(\d{8,})(?![\w@])/gi;
 /** A token ending in a decimal fraction of up to seven digits (`lat=10.7769`, `v1.2`, a price): plain, so one right before a number does not make it ambiguous. */
 const ENDS_WITH_DECIMAL = /\d\.\d{1,7}$/;
 
@@ -160,7 +170,13 @@ type Token = { start: number; end: number; text: string };
  */
 export function minimize(input: string): Minimized {
   const problems: DataProblem[] = [];
-  let text = replaceSpans(input.replace(/\s+/g, ' '), shapeSpans(input.replace(/\s+/g, ' ')));
+  const collapsed = input.replace(/\s+/g, ' ');
+  // Labelled ids are set aside before tokenizing and restored last, so neither a step nor the post-check
+  // reads them as a number; their placeholder holds no digit. A valid phone behind a label stays a phone.
+  const ids: string[] = [];
+  let text = replaceSpans(collapsed, shapeSpans(collapsed)).replace(LABELLED_ID, (whole: string, digits: string) =>
+    VN_PHONE.test(digits) ? whole : `${whole.slice(0, -digits.length)}[ID_${idKey(ids.push(digits) - 1)}]`,
+  );
 
   const tokens = tokenize(text);
   const spans: Span[] = [];
@@ -217,8 +233,22 @@ export function minimize(input: string): Minimized {
     ...checked,
     text: checked.text
       .replace(/(?<![\d.])-?\d{1,3}\.\d{3,7}\s*,\s*-?\d{1,3}\.\d{3,7}(?![\d.])/g, '[COORDS]')
-      .replace(/(\b(?:lat(?:itude)?|lng|lon(?:gitude)?)\s*[:=]\s*)-?\d{1,3}\.\d{1,7}(?![\d.])/gi, '$1[COORD]'),
+      .replace(/(\b(?:lat(?:itude)?|lng|lon(?:gitude)?)\s*[:=]\s*)-?\d{1,3}\.\d{1,7}(?![\d.])/gi, '$1[COORD]')
+      .replace(/\[ID_([A-Z]+)\]/g, (_m, key: string) => ids[idIndex(key)] ?? INVALID),
   };
+}
+
+/** A digit-free key for the n-th set-aside id: 0 → A, 25 → Z, 26 → BA. */
+function idKey(n: number): string {
+  let key = '';
+  do {
+    key = String.fromCharCode(65 + (n % 26)) + key;
+    n = Math.floor(n / 26);
+  } while (n > 0);
+  return key;
+}
+function idIndex(key: string): number {
+  return [...key].reduce((n, c) => n * 26 + c.charCodeAt(0) - 65, 0);
 }
 
 /** The minimized text alone. Never throws: an invalid candidate is replaced. For handoffs and error text. */
@@ -226,12 +256,19 @@ export function redact(text: string): string {
   return minimize(text).text;
 }
 
+/**
+ * Every shape match, overlapping ones included (Astra r9 A-F-13): the scan resumes one character after
+ * each match start, as 890079e did, so `token="password="…` finds the embedded assignment too. The
+ * spans are unioned by {@link replaceSpans}.
+ */
 function shapeSpans(text: string): Span[] {
   const spans: Span[] = [];
   for (const rule of SHAPE_RULES) {
-    for (const m of text.matchAll(rule.pattern)) {
+    const pattern = new RegExp(rule.pattern.source, rule.pattern.flags);
+    for (let m = pattern.exec(text); m; m = pattern.exec(text)) {
       const [start, end] = rule.span ? rule.span(m) : [m.index, m.index + m[0].length];
       if (end > start) spans.push({ start, end, label: rule.label });
+      pattern.lastIndex = m.index + 1;
     }
   }
   return spans;
@@ -266,7 +303,7 @@ function tokenize(text: string): Token[] {
 const digitCount = (t: string) => t.replace(/\D/g, '').length;
 
 function isCandidate(t: string): boolean {
-  if (t.includes('@')) return !/^@+$/.test(t); // `@@`, a diff hunk marker, is plain
+  if (t.includes('@')) return true; // a lone `@` too (Astra r9 A-F-11): any `@` is checked
   return DIGIT_TOKEN.test(t) && digitCount(t) >= MIN_CANDIDATE_DIGITS && !ISO_DATE_TIME.test(t);
 }
 
@@ -298,7 +335,6 @@ function postCheck(text: string, problems: DataProblem[]): Minimized {
   const spans: Span[] = [];
   const plain = text.replace(/\[[A-Z_]+\]/g, (l) => ' '.repeat(l.length));
   for (const m of plain.matchAll(/[^\s,;()[\]<>"']*@[^\s,;()[\]<>"']*/g)) {
-    if (/^@+$/.test(m[0])) continue;
     problems.push('email_malformed');
     spans.push({ start: m.index, end: m.index + m[0].length, label: INVALID });
   }

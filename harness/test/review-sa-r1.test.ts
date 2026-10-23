@@ -418,7 +418,7 @@ describe('A-F-04 residual (Astra r2): the outbound contract states what minimiza
   });
 
   it('diff headers, version lists and timestamps are not phone numbers or coordinates', () => {
-    for (const text of ['@@ -1,3 +1,3 @@', 'node 22.18.0, typescript 5.9.3', 'at 2026-10-22T10:30:00Z', 'exit code +1', 'p95 688 ms']) {
+    for (const text of ['--- a/x.ts +++ b/x.ts -1,3 +1,3', 'node 22.18.0, typescript 5.9.3', 'at 2026-10-22T10:30:00Z', 'exit code +1', 'p95 688 ms']) {
       assert.equal(redact(text), text);
     }
   });
@@ -489,7 +489,7 @@ describe('A-F-04 residual (Astra r3): repeated separators and the whitespace tha
   });
 
   it('ordinary text with doubled spaces is unchanged apart from the spaces', () => {
-    for (const text of ['@@ -1,3  +1,3 @@', 'node  22.18.0,  typescript 5.9.3', 'retry  +1  then  +2', 'pid 84  and  0  errors']) {
+    for (const text of ['--- a/x.ts  +++ b/x.ts  -1,3  +1,3', 'node  22.18.0,  typescript 5.9.3', 'retry  +1  then  +2', 'pid 84  and  0  errors']) {
       assert.equal(redact(text).replace(/\s+/g, ' '), text.replace(/\s+/g, ' '));
     }
   });
@@ -602,7 +602,7 @@ describe('A-F-04 residual (Astra r4): every Vietnamese form the contract table c
   }
 
   it('brackets, parentheses and digit lists in ordinary code text are not phone numbers', () => {
-    for (const text of ['cells[0][1][2] = +1', 'f(0, 1, 2, 3, 4, 5, 6, 7, 8)', 'exit(+1) then exit(0)', '@@ -1,3 +1,3 @@', 'v[0] = (1 + 2) * 3', 'node 22.18.0', 'port 8081, pid 84', 'HTTP 404 at 2026-10-22T10:30:00Z']) {
+    for (const text of ['cells[0][1][2] = +1', 'f(0, 1, 2, 3, 4, 5, 6, 7, 8)', 'exit(+1) then exit(0)', '--- a/x.ts +++ b/x.ts -1,3 +1,3', 'v[0] = (1 + 2) * 3', 'node 22.18.0', 'port 8081, pid 84', 'HTTP 404 at 2026-10-22T10:30:00Z']) {
       assert.equal(redact(text), text);
     }
   });
@@ -719,7 +719,7 @@ describe('A-F-04 residual (Astra r5): every generated Vietnamese form is replace
   });
 
   it('code-text negatives still hold', () => {
-    for (const text of ['cells[0][1][2] = +1', 'f(0, 1, 2, 3, 4, 5, 6, 7, 8)', 'exit(+1) then exit(0)', '@@ -1,3 +1,3 @@', 'v[0] = (1 + 2) * 3', 'node 22.18.0', 'port 8081, pid 84', 'pid 84 and 0 errors', 'HTTP 404 at 2026-10-22T10:30:00Z', '8 4 items, 0 errors']) {
+    for (const text of ['cells[0][1][2] = +1', 'f(0, 1, 2, 3, 4, 5, 6, 7, 8)', 'exit(+1) then exit(0)', '--- a/x.ts +++ b/x.ts -1,3 +1,3', 'v[0] = (1 + 2) * 3', 'node 22.18.0', 'port 8081, pid 84', 'pid 84 and 0 errors', 'HTTP 404 at 2026-10-22T10:30:00Z', '8 4 items, 0 errors']) {
       assert.equal(redact(text), text);
     }
   });
@@ -793,7 +793,7 @@ describe('A-F-04 residual (Astra r6): claimed phone forms survive no neighbour, 
   });
 
   it('code-text negatives still hold', () => {
-    for (const text of ['cells[0][1][2] = +1', 'f(0, 1, 2, 3, 4, 5, 6, 7, 8, 9)', 'exit(+1) then exit(0)', '@@ -1,3 +1,3 @@', 'v[0] = (1 + 2) * 3', 'node 22.18.0', 'port 8081, pid 84', 'pid 84 and 0 errors', 'HTTP 404 at 2026-10-22T10:30:00Z', '8 4 items, 0 errors', 'the token bucket refills every second']) {
+    for (const text of ['cells[0][1][2] = +1', 'f(0, 1, 2, 3, 4, 5, 6, 7, 8, 9)', 'exit(+1) then exit(0)', '--- a/x.ts +++ b/x.ts -1,3 +1,3', 'v[0] = (1 + 2) * 3', 'node 22.18.0', 'port 8081, pid 84', 'pid 84 and 0 errors', 'HTTP 404 at 2026-10-22T10:30:00Z', '8 4 items, 0 errors', 'the token bucket refills every second']) {
       assert.equal(redact(text), text);
     }
   });
@@ -966,7 +966,7 @@ describe('A-F-04 (Astra r7, owner 2026-10-23): phones and emails are minimized o
   });
 
   it('plain numbers, dates, versions and code are neither minimized nor rejected', () => {
-    for (const text of ['@@ -1,3 +1,3 @@', 'node 22.18.0, typescript 5.9.3', 'at 2026-10-22T10:30:00Z', 'exit code +1', 'p95 688 ms', 'cells[0][1][2] = +1', 'f(0, 1, 2, 3, 4, 5, 6, 7, 8, 9)', 'exit(+1) then exit(0)', 'v[0] = (1 + 2) * 3', 'port 8081, pid 84', 'pid 84 and 0 errors', '8 4 items, 0 errors', 'the token bucket refills every second', '0 errors, 1 warning, 0.5 s', '1,000,000 VND', 'issue #241 and PR #242', 'merged 9d83060 on 2026-10-22T10:30:00Z']) {
+    for (const text of ['--- a/x.ts +++ b/x.ts -1,3 +1,3', 'node 22.18.0, typescript 5.9.3', 'at 2026-10-22T10:30:00Z', 'exit code +1', 'p95 688 ms', 'cells[0][1][2] = +1', 'f(0, 1, 2, 3, 4, 5, 6, 7, 8, 9)', 'exit(+1) then exit(0)', 'v[0] = (1 + 2) * 3', 'port 8081, pid 84', 'pid 84 and 0 errors', '8 4 items, 0 errors', 'the token bucket refills every second', '0 errors, 1 warning, 0.5 s', '1,000,000 VND', 'issue #241 and PR #242', 'merged 9d83060 on 2026-10-22T10:30:00Z']) {
       const r = r7Try(text);
       assert.ok('sent' in r, `${JSON.stringify(text)} rejected: ${'error' in r ? r.error.message : ''}`);
       assert.equal(r.sent, text);
@@ -1203,5 +1203,68 @@ describe('A-F-04/A-F-11 (Astra r8): the invariant over adversarial inputs', () =
 
   it('the generator exercised both outcomes', () => {
     assert.ok(counts.sent > 500 && counts.rejected > 500, `sent ${counts.sent}, rejected ${counts.rejected}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Astra r9 @9126280 — A-F-04 (ISO exemption hides a phone), A-F-11 (bare `@`), A-F-13 (overlapping
+// credentials) — and the owner decision 2026-10-23 on labelled ids ("Thêm dạng id được phép").
+// ---------------------------------------------------------------------------
+
+describe('A-F-04 (Astra r9): the ISO exemption cannot hide a phone or a long fractional payload', () => {
+  for (const text of ['2026-10-22T10:30:00.0912345678Z', 'at 2026-10-22T10:30:00.0912345678+07:00 ok', '2026-10-22 10:30:00.1234567890', '2026-10-22T10:30:00.123456789012Z']) {
+    it(JSON.stringify(text), () => assert.equal(r8Invariant(text), 'rejected', text));
+  }
+  it('an ISO timestamp with up to nine fractional digits is still plain', () => {
+    for (const text of ['at 2026-10-22T10:30:00Z', 'at 2026-10-22T10:30:00.123+07:00', 'at 2026-10-22T10:30:00.123456789Z']) {
+      const r = r7Try(text);
+      assert.ok('sent' in r && r.sent === text, `${text} → ${JSON.stringify(r)}`);
+    }
+  });
+});
+
+describe('A-F-11 (Astra r9): any surviving @ is a data error, a lone one included', () => {
+  for (const text of ['a @ b.vn', 'mail a @b.vn', 'a@ b.vn', '@', 'x @ y', '@@ -1,3 +1,3 @@']) {
+    it(JSON.stringify(text), () => assert.equal(r8Invariant(text), 'rejected', text));
+  }
+  it('redact replaces it too', () => {
+    for (const text of ['a @ b.vn', '@@ -1,3 +1,3 @@']) assert.ok(!redact(text).includes('@'), redact(text));
+  });
+});
+
+describe('A-F-13 (Astra r9): overlapping credential assignments are all found', () => {
+  const pw = ['hun', 'ter2'].join('');
+  for (const text of [`token="password="${pw}`, `token='password='${pw}`, `api_key="secret=${pw}"`, `password=token=${pw}`, `{"token": "password=${pw}"}`]) {
+    it(JSON.stringify(text), () => {
+      for (const out of [redact(text), String((sanitizeSummary(summary({ description: text })).task as Record<string, string>).description)]) {
+        assert.ok(!out.includes(pw) && out.includes('[REDACTED]'), `${JSON.stringify(text)} → ${out}`);
+      }
+    });
+  }
+});
+
+describe('labelled ids (owner 2026-10-23): kept when labelled, a bare 8+-digit run stays a data error', () => {
+  const kept = [
+    'CI run 38932420082 failed',
+    'https://github.com/o/r/actions/runs/38932420082/job/120185124446',
+    'see issuecomment-6287223969',
+    'PR #38932420082 and #241',
+    'Run 39883180924 passed',
+  ];
+  for (const text of kept) {
+    it(`kept: ${JSON.stringify(text)}`, () => {
+      const r = r7Try(text);
+      assert.ok('sent' in r && r.sent === text, `${text} → ${JSON.stringify('sent' in r ? r.sent : r.error.message)}`);
+    });
+  }
+  for (const text of ['38932420082', 'id 38932420082', 'run38932420082', 'run 38932420082abc', 'runs/38932420082x', 'issuecomment6287223969', '##38932420082']) {
+    it(`data error: ${JSON.stringify(text)}`, () => assert.equal(r8Invariant(text), 'rejected', text));
+  }
+  it('a valid phone behind a label is a phone, not an id (the safe direction)', () => {
+    for (const [text, sent] of [['run 0912345678', 'run [PHONE]'], ['#0912345678', '#[PHONE]'], ['issuecomment-0912345678', 'issuecomment-[PHONE]'], ['runs/84912345678', 'runs/[PHONE]']] as const) {
+      const r = r7Try(text);
+      assert.ok('sent' in r ? r.sent === sent : isDataError(r), `${text} → ${JSON.stringify(r)}`);
+      if ('sent' in r) assert.ok(!r8HasPhoneSubstring(r.sent), r.sent);
+    }
   });
 });

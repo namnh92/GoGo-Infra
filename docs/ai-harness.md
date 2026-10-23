@@ -73,11 +73,16 @@ Minimization (`harness/src/runtime/sanitize.ts`) runs on each field in five step
 whitespace-collapsed text — the text that is sent (owner decision 2026-10-23: phone numbers and
 email addresses are checked by regex; anything ambiguous is a data error, never a leak):
 
-1. **Credentials and home directories** are replaced by shape (`[REDACTED]`, `~`).
+1. **Credentials and home directories** are replaced by shape (`[REDACTED]`, `~`); overlapping
+   credential assignments (`token="password=…`) are all found and their spans unioned.
+   **Labelled ids** are then set aside and restored unchanged at the end: a run of 8 or more digits
+   right after `run `, `runs/`, `job/`, `jobs/`, `issuecomment-` or `#` (`LABELLED_ID`, owner
+   decision 2026-10-23). A valid phone behind a label is still a phone; a bare or letter-glued run
+   is not an id.
 2. **Tokens**: the text is split on whitespace and on `, ; ( ) [ ] < > " '`; trailing `. ? ! :` is
    dropped; `. - + @` never split a token. A token is a *candidate* when it holds an `@`, or is made
    of digits and phone separators with 8 or more digits (an ISO date or timestamp such as
-   `2026-10-22T10:30:00Z` is plain). A phone written with spaces is the longest window of up to five
+   `2026-10-22T10:30:00Z` is plain, with at most nine fractional-second digits, so no phone fits). A phone written with spaces is the longest window of up to five
    tokens that matches `VN_PHONE`.
 3. **Two anchored regexes** decide validity, nothing else: `VN_PHONE` and `EMAIL` (table below,
    unit-tested in `harness/test/pii-regex.test.ts`). A match → `[PHONE]` / `[EMAIL]`.
@@ -87,9 +92,9 @@ email addresses are checked by regex; anything ambiguous is a data error, never 
    stands right before a number (`x.ts+84 (0) 912 345 678`; an ISO date excepted), it is a **data error**:
    `sanitizeSummary` raises `InvalidSummaryData` (field names and reason codes, never the text),
    `decide` answers deterministically with `errorCategory: invalid_data`, and nothing leaves.
-5. **Coordinates** by shape, then a **post-check** on what would be sent: a surviving `@` (a lone
-   `@@` hunk marker aside), or a run of 8 or more digits — one `.`, `-` or space between digits —
-   outside a placeholder and not an ISO date, is a data error. This holds the invariant whatever the
+5. **Coordinates** by shape, then a **post-check** on what would be sent: any surviving `@` (a lone
+   one or a `@@` diff hunk marker included), or a run of 8 or more digits — one `.`, `-` or space
+   between digits — outside a placeholder, not an ISO date and not a labelled id, is a data error. This holds the invariant whatever the
    steps above missed.
 
 Text that is never sent (handoffs, a provider's error message) goes through `redact`, which does not

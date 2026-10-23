@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { EMAIL, ISO_DATE_TIME, VN_PHONE } from '../src/runtime/sanitize.ts';
+import { EMAIL, ISO_DATE_TIME, LABELLED_ID, VN_PHONE } from '../src/runtime/sanitize.ts';
 
 describe('VN_PHONE', () => {
   const valid = [
@@ -38,6 +38,21 @@ describe('EMAIL', () => {
 });
 
 describe('ISO_DATE_TIME (the one plain 8+-digit shape)', () => {
-  for (const t of ['2026-10-22', '2026-10-22T10:30:00Z', '2026-10-22 10:30', '2026-10-22T10:30:00.123+07:00', '2026-10-22T10:30:00-0700']) it(`accepts ${JSON.stringify(t)}`, () => assert.ok(ISO_DATE_TIME.test(t)));
-  for (const t of ['20261022', '2026-10-22 0912345678', '2026-10-2210', '1729580000000', '0912345678', '2026-10-22T']) it(`rejects ${JSON.stringify(t)}`, () => assert.ok(!ISO_DATE_TIME.test(t)));
+  for (const t of ['2026-10-22', '2026-10-22T10:30:00Z', '2026-10-22 10:30', '2026-10-22T10:30:00.123+07:00', '2026-10-22T10:30:00-0700', '2026-10-22T10:30:00.123456789Z']) it(`accepts ${JSON.stringify(t)}`, () => assert.ok(ISO_DATE_TIME.test(t)));
+  for (const t of ['20261022', '2026-10-22 0912345678', '2026-10-2210', '1729580000000', '0912345678', '2026-10-22T', '2026-10-22T10:30:00.0912345678Z', '2026-10-22T10:30:00.1234567890Z']) it(`rejects ${JSON.stringify(t)}`, () => assert.ok(!ISO_DATE_TIME.test(t)));
+});
+
+describe('LABELLED_ID (owner 2026-10-23: labelled ids are kept)', () => {
+  const ids = (t: string) => [...t.matchAll(LABELLED_ID)].map((m) => m[1]);
+  for (const [t, want] of [
+    ['run 38932420082', ['38932420082']],
+    ['Run 39883180924', ['39883180924']],
+    ['actions/runs/38932420082/job/120185124446', ['38932420082', '120185124446']],
+    ['jobs/120185124446', ['120185124446']],
+    ['issuecomment-6287223969', ['6287223969']],
+    ['PR #38932420082', ['38932420082']],
+  ] as const) it(`accepts ${JSON.stringify(t)}`, () => assert.deepEqual(ids(t), want));
+  for (const t of ['38932420082', 'run38932420082', 'run  38932420082', 'rerun 38932420082', 'run 38932420082abc', 'runs/38932420082x', 'issuecomment6287223969', '##38932420082', 'a#38932420082', '#1234567', 'run 1234567', 'run 38932420082@x']) {
+    it(`rejects ${JSON.stringify(t)}`, () => assert.deepEqual(ids(t), []));
+  }
 });

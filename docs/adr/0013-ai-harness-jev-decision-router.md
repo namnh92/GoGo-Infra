@@ -162,8 +162,9 @@ address or address + phone, otherwise a **data error** — `sanitizeSummary` rai
 (field names and reason codes, never the text), the router answers with its deterministic fallback
 under `errorCategory: invalid_data`, the decision log, metrics and `status` show that category, and
 nothing leaves the machine; (5) coordinates by shape, then a post-check on what would be sent: a
-surviving `@` or any run of 8 or more digits outside a placeholder (an ISO date or timestamp aside) is
-a data error, so the invariant holds whatever the earlier steps missed. Anything ambiguous is a data
+surviving `@` (a lone one included) or any run of 8 or more digits outside a placeholder is a data
+error — an ISO date or timestamp (≤ 9 fractional digits) and a labelled id (`run `, `runs/`, `job/`,
+`issuecomment-`, `#` + digits, not a valid phone; owner decision 2026-10-23) aside — so the invariant holds whatever the earlier steps missed. Anything ambiguous is a data
 error — an accepted cost, never a leak. A differential test holds an earlier implementation as a
 frozen oracle: nothing it removed is sent now. The provider's `session_id` is a digest of the task id,
 never the id. Not caught by pattern, and therefore part of what the privacy review in D-2 attests to:
