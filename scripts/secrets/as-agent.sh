@@ -57,7 +57,9 @@ done
 # Least privilege by default: only the repository this checkout pushes to.
 if [[ ${#repos[@]} -eq 0 ]]; then
   origin="$(git remote get-url origin 2>/dev/null || true)"
+  shopt -s nocasematch # host names match without case (GITHUB.COM is github.com)
   if [[ "$origin" =~ github\.com[:/]namnh92/([A-Za-z0-9._-]+)$ ]]; then
+    shopt -u nocasematch
     repos=("${BASH_REMATCH[1]%.git}")
   else
     die "cannot tell the repository from origin ('${origin:-none}'); pass --repo <name>"
@@ -89,23 +91,37 @@ export GIT_TERMINAL_PROMPT=0
 export GIT_SSH_COMMAND='sh -c "echo \"as-agent.sh: SSH is disabled; GitHub writes go over HTTPS as the agent App\" >&2; exit 1"'
 unset GIT_SSH SSH_AUTH_SOCK
 
-# Check the effective configuration before a token exists.
+# Check the effective configuration before a token exists. Hostnames compare without case
+# (git matches them that way: https://GITHUB.COM/… is github.com).
+github_urls=()
+for r in "${repos[@]}"; do github_urls+=("https://github.com/namnh92/${r}.git" "https://github.com/namnh92/${r}"); done
 if git rev-parse --git-dir >/dev/null 2>&1; then
   while IFS= read -r remote; do
     while IFS= read -r url; do
-      if [[ "$url" == *github.com* && "$url" != https://github.com/* ]]; then
+      lower="${url,,}"
+      [[ "$lower" == *github.com* ]] || continue
+      if [[ "$lower" != https://github.com/* ]]; then
         die "remote '${remote}' still reaches GitHub as '${url}' after the rewrite to HTTPS (an insteadOf in your git config?); the agent token only works over HTTPS — refusing"
       fi
+      github_urls+=("$url")
     done < <(git remote get-url --all "$remote"; git remote get-url --all --push "$remote")
   done < <(git remote)
 fi
+# Effective: what git would send to each GitHub URL this command can reach, after our reset
+# (PR #256 review: a more specific URL key, in any case, outranks the reset).
+for url in "${github_urls[@]}"; do
+  if [[ -n "$(git config --get-urlmatch http.extraheader "$url" 2>/dev/null || true)" ]]; then
+    die "an extra header still applies to ${url} after the reset (a more specific http.<url>.extraHeader in your git config?); refusing to send it alongside the agent token"
+  fi
+done
+# Declared: any other GitHub-scoped header, which another repository or path could pick up.
 while IFS= read -r line; do
   key="${line%% *}"
   value=""; [[ "$line" == *" "* ]] && value="${line#* }"
   [[ -n "$value" ]] || continue
-  case "$key" in
-    http.extraheader | http.https://github.com/.extraheader) ;; # reset above
-    *github.com*) die "an extra header is configured for ${key%.extraheader} and cannot be reset for this process; refusing to send it alongside the agent token" ;;
+  case "${key,,}" in
+    http.extraheader | http.https://github.com/.extraheader) ;; # reset above; the effective check covers what remains
+    *github.com*) die "an extra header is configured for ${key%.*} and cannot be reset for this process; refusing to send it alongside the agent token" ;;
   esac
 done < <(git config --get-regexp '^http\..*extraheader$' 2>/dev/null || true)
 

@@ -133,7 +133,7 @@ cat >"${SANDBOX}/pusher" <<'CHILD'
 echo "pusher: push-url=$(git remote get-url --push origin)"
 echo "pusher: extraheader=[$(git config --get-urlmatch http.extraheader https://github.com/namnh92/GoGo-Ssh.git)]"
 # A real push. HTTPS goes to a closed local port, so nothing leaves the machine.
-https_proxy=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 timeout 20 git push origin HEAD:refs/heads/agent-test 2>&1 | sed 's/^/pusher: git: /'
+https_proxy=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 git push origin HEAD:refs/heads/agent-test 2>&1 | sed 's/^/pusher: git: /'
 CHILD
 chmod +x "${SANDBOX}/pusher"
 
@@ -179,6 +179,36 @@ out="$(cd "$SSH_REPO" && "$AS" -- "${SANDBOX}/pusher" 2>&1)"; rc=$?
 git -C "$SSH_REPO" config --unset 'http.https://github.com/namnh92/GoGo-Ssh.git.extraheader'
 git -C "$SSH_REPO" config --unset 'http.https://github.com/.extraheader'
 git config --file "${SANDBOX}/gitconfig" --unset http.extraheader
+
+# PR #256 review r2: hostnames in URL subsections match without case.
+for scope in local global; do
+  for key in 'http.https://GITHUB.COM/namnh92/.extraheader' 'http.https://GitHub.com/namnh92/GoGo-Ssh.git.extraheader'; do
+    : >"$CALLS"
+    if [[ "$scope" == local ]]; then git -C "$SSH_REPO" config "$key" 'AUTHORIZATION: basic CASE_STUB'; else git config --file "${SANDBOX}/gitconfig" "$key" 'AUTHORIZATION: basic CASE_STUB'; fi
+    out="$(cd "$SSH_REPO" && "$AS" -- "${SANDBOX}/pusher" 2>&1)"; rc=$?
+    [[ "$rc" != 0 ]] && ! grep -q 'pusher:' <<<"$out" && grep -q 'extra header' <<<"$out" && ! grep -q 'CASE_STUB' <<<"$out" && ! grep -q exec-with "$CALLS" \
+      && ok "a ${scope} header under ${key%%/namnh92*}/… for a more specific path is refused, without printing it" || bad "case ${scope} ${key}" "rc=$rc out=$out"
+    if [[ "$scope" == local ]]; then git -C "$SSH_REPO" config --unset "$key"; else git config --file "${SANDBOX}/gitconfig" --unset "$key"; fi
+  done
+done
+git -C "$SSH_REPO" config 'http.https://GITHUB.COM/.extraheader' 'AUTHORIZATION: basic ROOT_CASE_STUB'
+out="$(cd "$SSH_REPO" && "$AS" -- "${SANDBOX}/pusher" 2>&1)"
+grep -q 'pusher: extraheader=\[\]' <<<"$out" && ! grep -q 'ROOT_CASE_STUB' <<<"$out" \
+  && ok "an upper-case github.com root header is reset like the lower-case one" || bad "root upper case" "$out"
+git -C "$SSH_REPO" config --unset 'http.https://GITHUB.COM/.extraheader'
+
+: >"$CALLS"
+git -C "$SSH_REPO" remote set-url origin https://GITHUB.COM/namnh92/GoGo-Ssh.git
+out="$(cd "$SSH_REPO" && "$AS" -- "${SANDBOX}/pusher" 2>&1)"
+grep -q 'pusher: push-url=https://GITHUB.COM/namnh92/GoGo-Ssh.git' <<<"$out" && grep -q 'token-script --repo GoGo-Ssh' "$CALLS" \
+  && ok "an upper-case GitHub host over HTTPS is recognized and used" || bad "upper-case https host" "out=$out calls=$(cat "$CALLS")"
+: >"$CALLS"
+git -C "$SSH_REPO" remote set-url origin git@GITHUB.COM:namnh92/GoGo-Ssh.git
+: >"$SSH_LOG"
+out="$(cd "$SSH_REPO" && "$AS" -- "${SANDBOX}/pusher" 2>&1)"; rc=$?
+[[ "$rc" != 0 ]] && ! grep -q 'pusher:' <<<"$out" && grep -q 'over HTTPS' <<<"$out" && [[ ! -s "$SSH_LOG" ]] && ! grep -q exec-with "$CALLS" \
+  && ok "an upper-case GitHub host over SSH is recognized and refused before minting" || bad "upper-case ssh host" "rc=$rc out=$out"
+git -C "$SSH_REPO" remote set-url origin git@github.com:namnh92/GoGo-Ssh.git
 
 out="$(cd "$REPO" && GIT_CONFIG_PARAMETERS="'http.extraheader'='AUTHORIZATION: basic X'" "$AS" -- "${SANDBOX}/child" 2>&1)"; rc=$?
 [[ "$rc" != 0 ]] && ! grep -q 'child:' <<<"$out" && ok "inherited GIT_CONFIG_PARAMETERS (git -c from a parent) is refused" || bad "GIT_CONFIG_PARAMETERS" "rc=$rc out=$out"
