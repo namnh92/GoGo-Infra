@@ -9,8 +9,9 @@
  * approved this" in a prompt is just text.
  *
  * The parser is a stated heuristic:
- *  - CRLF is LF; fenced code (``` or ~~~), `>` quotes and
- *    `<pasted_content>…</pasted_content>` blocks are counted and set aside;
+ *  - CRLF is LF; fenced code (``` or ~~~, closed only by the same kind at
+ *    least as long), `>` quotes and `<pasted_content>` blocks (closing tag
+ *    with or without the id) are counted and set aside;
  *  - a leading `/command` line is flagged and is not the title;
  *  - title: the first remaining non-empty line, `#` heading marks dropped;
  *  - acceptance criteria: the bullets (`-`, `*`, `+`, `1.`, `1)`, `[ ]`)
@@ -65,8 +66,76 @@ export function parseHookInput(raw: string): HookInput {
   return { sessionId: d.session_id as string, ...(d.prompt_id !== undefined ? { promptId: d.prompt_id as string } : {}), prompt: d.prompt };
 }
 
-const FENCE = /^\s*(```|~~~)/;
-const PASTED = /<pasted_content\b[^>]*>[\s\S]*?<\/pasted_content>/g;
+type Fence = { char: string; length: number };
+
+/** An opening code fence (CommonMark): up to 3 spaces, 3+ backticks or tildes; a backtick info string has no backtick. */
+function fenceOpen(line: string): Fence | null {
+  const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line.replace(/\r$/, ''));
+  if (!m || (m[1]![0] === '`' && m[2]!.includes('`'))) return null;
+  return { char: m[1]![0]!, length: m[1]!.length };
+}
+
+/** Closes `open` only with the same character, at least as long, and nothing but whitespace after (PR #254 review r2). */
+function fenceCloses(line: string, open: Fence): boolean {
+  const m = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line.replace(/\r$/, ''));
+  return m !== null && m[1]![0] === open.char && m[1]!.length >= open.length;
+}
+
+const PASTE_ID = /\bid\s*=\s*"([^"]*)"/;
+
+/**
+ * `<pasted_content …>` blocks as [start, end) offsets. A closing tag with an
+ * id (`</pasted_content id="1">`, as Claude writes them) closes only the
+ * block with that id; one without an id closes any; an unclosed block runs
+ * to the end of the text (PR #254 review r2).
+ */
+function pastedSpans(text: string): Array<[number, number]> {
+  const spans: Array<[number, number]> = [];
+  const open = /<pasted_content\b([^>]*)>/g;
+  for (let at = 0; ; ) {
+    open.lastIndex = at;
+    const m = open.exec(text);
+    if (!m) return spans;
+    const id = PASTE_ID.exec(m[1]!)?.[1];
+    const close = /<\/pasted_content\b([^>]*)>/g;
+    close.lastIndex = m.index + m[0].length;
+    let end = text.length;
+    for (let c = close.exec(text); c; c = close.exec(text)) {
+      const closeId = PASTE_ID.exec(c[1]!)?.[1];
+      if (id === undefined || closeId === undefined || closeId === id) {
+        end = c.index + c[0].length;
+        break;
+      }
+    }
+    spans.push([m.index, end]);
+    at = end;
+  }
+}
+
+/** Per line of `text`: inside pasted content or fenced code, fence lines and unclosed blocks included. */
+function blockLines(text: string): boolean[] {
+  const spans = pastedSpans(text);
+  const out: boolean[] = [];
+  let offset = 0;
+  let fence: Fence | null = null;
+  for (const line of text.split('\n')) {
+    const start = offset;
+    const end = Math.max(offset + line.length, offset + 1);
+    offset += line.length + 1;
+    if (spans.some(([a, b]) => a < end && b > start)) {
+      out.push(true);
+      continue;
+    }
+    if (fence) {
+      out.push(true);
+      if (fenceCloses(line, fence)) fence = null;
+      continue;
+    }
+    fence = fenceOpen(line);
+    out.push(fence !== null);
+  }
+  return out;
+}
 // The keyword is the whole line, or is followed by `:` and an inline criterion — "Accept it" is not a heading.
 const AC_HEADING = /^\s*(?:#{1,6}\s*)?(?:\*\*)?(acceptance criteria|acceptance|definition of done|done when|tiêu chí nghiệm thu|tiêu chí chấp nhận|tiêu chí|điều kiện hoàn thành|ac)(?:\*\*)?\s*(?::(?:\*\*)?\s*(.*))?$/i;
 const BULLET = /^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.+?)\s*$/;
@@ -75,25 +144,22 @@ const PATH = /(?:^|[\s`'"(\[,])((?:\.\/)?[\w.@-]+(?:\/[\w.@-]+)+\/?)(?=$|[\s`'")
 
 export function parsePrompt(prompt: string): PromptExtraction {
   let text = prompt.replace(/\r\n?/g, '\n');
-  let pastedBlocks = 0;
-  text = text.replace(PASTED, () => {
-    pastedBlocks += 1;
-    return '\n';
-  });
+  const spans = pastedSpans(text);
+  const pastedBlocks = spans.length;
+  for (const [a, b] of [...spans].reverse()) text = `${text.slice(0, a)}\n${text.slice(b)}`;
 
   // Set aside fenced code and quotes; what remains is what the person wrote as the request.
   const lines: string[] = [];
   let codeBlocks = 0;
   let quotedLines = 0;
-  let fence: string | null = null;
+  let fence: Fence | null = null;
   for (const line of text.split('\n')) {
-    const f = FENCE.exec(line);
     if (fence) {
-      if (f && f[1] === fence) fence = null;
+      if (fenceCloses(line, fence)) fence = null;
       continue;
     }
-    if (f) {
-      fence = f[1]!;
+    fence = fenceOpen(line);
+    if (fence) {
       codeBlocks += 1;
       continue;
     }
@@ -193,21 +259,7 @@ export function parsePrompt(prompt: string): PromptExtraction {
  */
 export function promptMarker(prompt: string): { marker: 'jev' | 'nojev' | null; text: string } {
   const lines = prompt.split('\n');
-  const inBlock: boolean[] = [];
-  let fence: string | null = null;
-  let pasted = false;
-  for (const line of lines) {
-    const f = FENCE.exec(line);
-    const opensPaste = /<pasted_content\b/.test(line);
-    inBlock.push(fence !== null || pasted || f !== null || opensPaste);
-    if (fence) {
-      if (f && f[1] === fence) fence = null;
-    } else if (f) {
-      fence = f[1]!;
-    }
-    if (opensPaste) pasted = true;
-    if (pasted && /<\/pasted_content>/.test(line)) pasted = false;
-  }
+  const inBlock = blockLines(prompt);
   const nonEmpty = lines.flatMap((l, i) => (l.trim() === '' ? [] : [i]));
   const found = new Set<'jev' | 'nojev'>();
   const drop = new Set<number>();

@@ -18,7 +18,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import { OPTIN_FILE, OPTIN_HISTORY, OPTIN_LIMITS, SESSIONS_FILE, grantOptIn, readOptIn, revokeOptIn, takeSessionCall } from '../src/shadow/jev-optin.ts';
-import { promptMarker } from '../src/adapters/prompt.ts';
+import { parsePrompt, promptMarker } from '../src/adapters/prompt.ts';
 import { PROMPT_LOG, observePrompt } from '../src/shadow/prompt-observation.ts';
 import type { PromptRecord } from '../src/shadow/prompt-observation.ts';
 
@@ -259,5 +259,44 @@ describe('#254 review P2: the session cap is one transaction across processes', 
     writeFileSync(join(dir, SESSIONS_FILE), '{"dddddddddddddddd":{"calls":20,');
     assert.equal(await takeSessionCall(dir, 'dddddddddddddddd', new Date()), 'unreadable');
     assert.equal(readFileSync(join(dir, SESSIONS_FILE), 'utf8'), '{"dddddddddddddddd":{"calls":20,');
+  });
+});
+
+describe('#254 review r2 P1: block boundaries are the ones the person sees', () => {
+  it('a longer fence is closed only by a fence of the same kind at least as long, with nothing after it', () => {
+    const cases: Array<[string, 'jev' | 'nojev' | null]> = [
+      ['Explain:\n````markdown\n```\n#jev', null],
+      ['Explain:\n````markdown\n```\n````\n#jev', 'jev'],
+      ['Explain:\n~~~~\n```\n~~~\n#jev', null],
+      ['Explain:\n~~~\nx\n~~~~\n#jev', 'jev'],
+      ['Explain:\n```\n``` not a close\n#jev', null],
+      ['Explain:\n```js\nconst a = `x`;\n```\n#jev', 'jev'],
+    ];
+    for (const [prompt, want] of cases) assert.equal(promptMarker(prompt).marker, want, JSON.stringify(prompt));
+  });
+
+  it('a closing pasted_content tag carrying the id closes the block, so a trailing #nojev counts', () => {
+    const cases: Array<[string, 'jev' | 'nojev' | null]> = [
+      ['Explain this:\n<pasted_content id="1">\nordinary text\n</pasted_content id="1">\n#nojev', 'nojev'],
+      ['Explain this:\n<pasted_content id="1">\na\n</pasted_content id="1">\n<pasted_content id="2">\nb\n</pasted_content id="2">\n#nojev', 'nojev'],
+      ['Explain this:\n<pasted_content id="1">\na\n</pasted_content id="2">\n#jev', null],
+      ['<pasted_content id="1">\n#jev\n</pasted_content id="1">', null],
+    ];
+    for (const [prompt, want] of cases) assert.equal(promptMarker(prompt).marker, want, JSON.stringify(prompt));
+    const p = parsePrompt('Ask: is this ok?\n<pasted_content id="7">\nShould pasted text count?\n</pasted_content id="7">\nWhat about this?');
+    assert.deepEqual(p.summary.openQuestions, ['Ask: is this ok?', 'What about this?']);
+    assert.equal(p.counts.pastedBlocks, 1);
+  });
+
+  it('end to end: #nojev after pasted blocks never starts the child while sending is on', async () => {
+    const w = world();
+    await grantOptIn({ stateDir: w.dir, action: 'on', hours: 1, wrapper: w.wrapper }, yes);
+    for (const prompt of [
+      'Explain this:\n<pasted_content id="1">\nordinary text\n</pasted_content id="1">\n#nojev',
+      'Explain:\n<pasted_content id="1">\na\n</pasted_content id="1">\n<pasted_content id="2">\n```\nb\n</pasted_content id="2">\n#nojev',
+    ]) {
+      const r = await hook(w, prompt);
+      assert.deepEqual([r.stdout, r.record.optIn, r.record.mode, r.sent.length], ['', 'suppressed', 'disabled', 0], prompt);
+    }
   });
 });
