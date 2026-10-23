@@ -562,11 +562,28 @@ The key goes in by redirect: typed at the prompt, `put.sh` reads one line and a 
 
 ### Using it
 
+Agent sessions wrap every write to GitHub — push, pull request, comment — in `as-agent.sh`
+(the rule is in each repository's `CLAUDE.md`):
+
+```bash
+./scripts/secrets/as-agent.sh -- git push -u origin feature/GOGO-123-x
+./scripts/secrets/as-agent.sh -- gh pr create --base develop --title "…" --body-file pr.md
+../GoGo-Infra/scripts/secrets/as-agent.sh -- gh issue comment 42 --body-file note.md   # from a sibling repo
+```
+
+It mints a token narrowed to the checkout's repository (`--repo` overrides), hands it to the
+command as `GH_TOKEN` and through a git credential helper that reads it from the environment —
+the owner's keychain helper is reset for that command, so git never falls back to the owner's
+login — and refuses to run the command at all if no token can be minted. Tests:
+`scripts/secrets/as-agent.test.sh`.
+
+The lower-level form, for anything else:
+
 ```bash
 GH_TOKEN="$(./scripts/secrets/exec-with.sh dev \
     github/agent-app-private-key github/agent-app-id github/agent-app-installation-id -- \
     ./scripts/secrets/github-app-token.sh --repo GoGo-Infra)" \
-  gh pr create --repo namnh92/GoGo-Infra …
+  gh api /installation/repositories -q '.repositories[].name'
 ```
 
 `github-app-token.sh` signs a 10-minute RS256 JWT and exchanges it for a one-hour installation
