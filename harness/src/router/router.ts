@@ -62,6 +62,15 @@ export const stricter = (a: Outcome, b: Outcome): Outcome => (SEVERITY[a] >= SEV
 export const THRESHOLDS = {
   /** Risk level (0-based) at or above which a person approves. 2 = "serious". Wrong-low: a risky task proceeds to normal review; wrong-high: one extra question. */
   riskApprovalLevel: 2,
+  /**
+   * P(risk ≥ riskApprovalLevel) at or above which a person approves, in addition to
+   * the most probable level reaching riskApprovalLevel (owner decision 2026-10-23,
+   * GoGo-Infra#241 D-10 option B): either signal escalates, so no answer that
+   * escalated before stops escalating, and mass split across levels (.1/.4/.1/.4)
+   * now counts. PROVISIONAL pending regression evidence. Live probes 2026-10-23:
+   * serious tasks 0.56–1.00, low-risk tasks 0.00–0.20.
+   */
+  riskApprovalMinP: 0.5,
   /** P(an authorized reversible default exists) needed to proceed on a product question. Wrong-high: a reversible choice made without asking. */
   reversibleDefaultMin: 0.8,
   /** Below this `missing_context` confidence, never AUTO_EXECUTE. Wrong: one research step too many. */
@@ -306,6 +315,14 @@ export function scoreLevel(answer: ScoreAnswer): number {
   return Math.round(answer.score);
 }
 
+/** P(level ≥ `level`) from a score answer's distribution; without one, 1 or 0 from the rounded position. */
+export function probabilityAtOrAbove(answer: ScoreAnswer, level: number): number {
+  if (!answer.probabilities) return Math.round(answer.score) >= level ? 1 : 0;
+  let p = 0;
+  for (const [l, q] of Object.entries(answer.probabilities)) if (Number(l) >= level) p += q;
+  return p;
+}
+
 function as<T extends Answer['type']>(answers: Record<string, Answer>, key: string, type: T): Extract<Answer, { type: T }> {
   const a = answers[key];
   if (!a || a.type !== type) throw new Error(`answer ${key} is not a ${type}`);
@@ -314,9 +331,17 @@ function as<T extends Answer['type']>(answers: Record<string, Answer>, key: stri
 
 export function mapAnswers(input: RouterInput, answers: Record<string, Answer>, verdict: FailureVerdict | null): Mapped {
   const reasons: string[] = [];
-  const risk = scoreLevel(as(answers, 'risk', 'score'));
+  const riskAnswer = as(answers, 'risk', 'score');
+  const risk = scoreLevel(riskAnswer);
   if (risk >= THRESHOLDS.riskApprovalLevel) {
     return { outcome: 'HUMAN_APPROVAL', reasons: [`JEV risk level ${risk} ≥ ${THRESHOLDS.riskApprovalLevel}`] };
+  }
+  const pRisk = probabilityAtOrAbove(riskAnswer, THRESHOLDS.riskApprovalLevel);
+  if (pRisk >= THRESHOLDS.riskApprovalMinP) {
+    return {
+      outcome: 'HUMAN_APPROVAL',
+      reasons: [`JEV P(risk ≥ ${THRESHOLDS.riskApprovalLevel}) = ${Number(pRisk.toFixed(2))} ≥ ${THRESHOLDS.riskApprovalMinP}`],
+    };
   }
 
   if (input.checkpoint === 'review_planning') {
