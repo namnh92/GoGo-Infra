@@ -225,7 +225,8 @@ that version's CLI — launcher and runtime always come from the version `ACTIVE
 mismatch exits `2` with `harness install: …` — no decision, no provider call, no fallback to a
 checkout; `HARNESS_DEV` or any other variable changes nothing. A launcher run from a checkout
 refuses to start, and so does an install whose real path (symlinks resolved) is inside a git
-checkout or worktree: prepare, activation and every run check it.
+checkout or worktree, or whose `versions/` (or a version under it) is a symbolic link: prepare,
+activation and every run check it.
 
 `ACTIVE` is the only switch. Activation takes `activate.lock`, writes the bootstrap only if there
 is none, appends the history line and, last, replaces `ACTIVE` by rename: an activation that fails

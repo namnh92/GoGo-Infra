@@ -19,7 +19,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { MANIFEST, assertOutsideCheckout, buildManifest, verifyDir } from './launcher.ts';
+import { MANIFEST, assertOutsideCheckout, assertOwnPath, buildManifest, verifyDir, verifyVersion } from './launcher.ts';
 
 export type Prepared = { sha: string; manifestDigest: string; dir: string; existed: boolean };
 
@@ -51,7 +51,10 @@ export function prepare(o: { repo: string; rev: string; installDir: string; remo
   if (ancestor.status !== 0) throw new Error(`${sha} is not an ancestor of ${remote}/${branch} (${tip}); only merged code is installed`);
 
   const dir = join(o.installDir, 'versions', sha);
-  if (existsSync(dir)) return { sha, manifestDigest: verifyDir(dir, sha).digest, dir, existed: true };
+  if (existsSync(dir)) return { sha, manifestDigest: verifyVersion(o.installDir, sha).digest, dir, existed: true };
+  // PR #253 review r2: never stage or publish through a link out of the install.
+  assertOwnPath(o.installDir, 'versions');
+  assertOwnPath(o.installDir, 'staging');
 
   const staging = join(o.installDir, 'staging', `${sha}.${process.pid}`);
   rmSync(staging, { recursive: true, force: true });

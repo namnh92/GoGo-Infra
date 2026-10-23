@@ -30,7 +30,8 @@
  *
  * An install inside a git checkout is refused wherever it is touched —
  * prepare, activation and every run — after resolving symlinks (PR #253
- * review P1): a checkout is where a session may write.
+ * review P1): a checkout is where a session may write. Below the root, no
+ * component on the way to a version may be a link (review r2).
  *
  * Threat model (shape review on #245): this stops edits in a checkout from
  * taking effect and the harness from approving its own change. It does not
@@ -130,7 +131,24 @@ export function verifyDir(dir: string, sha: string, expectedDigest?: string): { 
 }
 
 export function verifyVersion(installDir: string, sha: string, expectedDigest?: string): { dir: string; digest: string } {
+  if (!FULL_SHA.test(sha)) throw new IntegrityError(`${sha} is not a full commit SHA`);
+  assertOwnPath(installDir, `versions/${sha}`);
   return verifyDir(join(installDir, 'versions', sha), sha, expectedDigest);
+}
+
+/**
+ * Every component from the install root down to `rel` is the install's own:
+ * not a symbolic link, and its real path outside every checkout (PR #253
+ * review r2) — a linked `versions/` would run a payload a session can edit
+ * while the install root itself looks fine.
+ */
+export function assertOwnPath(installDir: string, rel: string): void {
+  let current = installDir;
+  for (const part of rel.split('/')) {
+    current = join(current, part);
+    if (lstatOrNull(current)?.isSymbolicLink()) throw new IntegrityError(`${current} is a symbolic link; an install holds its own versions`);
+  }
+  assertOutsideCheckout(current);
 }
 
 export function readActive(installDir: string): Version {

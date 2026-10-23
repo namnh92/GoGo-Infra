@@ -446,3 +446,50 @@ describe('#253 review P2: ACTIVE alone switches launcher and runtime', () => {
     assert.deepEqual(JSON.parse(launch(w, ['install-verify']).stdout), { sha: a.sha, manifestDigest: a.manifestDigest });
   });
 });
+
+describe('#253 review r2 P1: no link from the install root to a version', () => {
+  /** A checkout holding a copy of `w.install/versions`, and a second install whose `versions` links to it. */
+  function linkedVersions(w: World): { checkout: string; linked: string } {
+    const checkout = join(w.root, 'agent-checkout');
+    mkdirSync(join(checkout, '.git'), { recursive: true });
+    copyTree(join(w.install, 'versions'), join(checkout, 'versions'));
+    const linked = join(w.root, 'install-linked');
+    mkdirSync(linked);
+    symlinkSync(join(checkout, 'versions'), join(linked, 'versions'));
+    return { checkout, linked };
+  }
+
+  it('activate refuses a version reached through a link into a checkout', async () => {
+    const w = world();
+    const a = prep(w);
+    const { linked } = linkedVersions(w);
+    await assert.rejects(activate({ installDir: linked, sha: a.sha, approval: 'x' }, yes), /symbolic link|inside the git checkout/);
+    assert.equal(existsSync(join(linked, 'ACTIVE')), false);
+  });
+
+  it('a working install whose versions/ links into a checkout does not run the checkout payload', async () => {
+    const w = world();
+    const a = prep(w);
+    await activateAs(w, a.sha);
+    const { checkout, linked } = linkedVersions(w);
+    copyTree(join(w.install, 'bin'), join(linked, 'bin'));
+    writeFileSync(join(linked, 'ACTIVE'), readFileSync(join(w.install, 'ACTIVE')));
+    // The checkout copy is what a session could edit: make it announce that it ran.
+    const cli = join(checkout, 'versions', a.sha, 'harness/src/cli.ts');
+    chmodSync(cli, 0o644);
+    appendFileSync(cli, `\nimport { writeFileSync as __w } from 'node:fs'; __w(${JSON.stringify(join(w.root, 'CHECKOUT_PAYLOAD_RAN'))}, 'x');\n`);
+    const r = spawnSync(process.execPath, [join(linked, 'bin/harness.mts'), 'install-verify'], { cwd: w.root, encoding: 'utf8' });
+    assert.equal(r.status, 2, r.stdout);
+    assert.match(r.stderr, /symbolic link|inside the git checkout/);
+    assert.equal(existsSync(join(w.root, 'CHECKOUT_PAYLOAD_RAN')), false);
+  });
+
+  it('prepare refuses to publish through a linked versions/ directory', () => {
+    const w = world();
+    prep(w);
+    const { linked } = linkedVersions(w);
+    tamperCheckoutRouter(w);
+    const b = commit(w.work, 'B');
+    assert.throws(() => prepare({ repo: w.work, rev: b, installDir: linked, runTests: false }), /symbolic link|inside the git checkout/);
+  });
+});
