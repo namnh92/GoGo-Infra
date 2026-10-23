@@ -57,7 +57,7 @@ fi
 repo_args=()
 for r in "${repos[@]}"; do repo_args+=(--repo "$r"); done
 
-token="$(GOGO_ASSUME_YES= "${DIR}/exec-with.sh" dev \
+token="$("${DIR}/exec-with.sh" dev \
     github/agent-app-private-key github/agent-app-id github/agent-app-installation-id -- \
     "${DIR}/github-app-token.sh" "${repo_args[@]}")" \
   || die "could not mint an agent token (AWS credentials? see docs/secrets.md → Agent GitHub App). Not falling back to the owner's identity."
