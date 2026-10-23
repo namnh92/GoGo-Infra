@@ -359,6 +359,10 @@ jobs:
       # and never an empty value handed on as if it were "no token".
       - name: exec-with.sh hands one parameter to one command
         run: ./scripts/secrets/exec-with.test.sh
+      # GoGo-Infra#250. The agent App's private key and the JWT it signs reach
+      # openssl and curl through pipes only; stdout is the installation token.
+      - name: github-app-token.sh signs a valid JWT and leaks neither key nor JWT
+        run: ./scripts/secrets/github-app-token.test.sh
 
       # NTF-BE-008. The identity signing key is the one credential here that is
       # neither a token nor a string: it is a PEM, and the runtime env renderers
