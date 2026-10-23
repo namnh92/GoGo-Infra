@@ -18,6 +18,7 @@
  * writes outside the workspace; this file records consent, it cannot prove it.
  */
 import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { LockTimeoutError, withStateLock } from '../runtime/lock.ts';
 import { hostname, homedir, userInfo } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -95,27 +96,59 @@ function write(stateDir: string, next: OptIn, action: string, now: Date): void {
   renameSync(tmp, join(stateDir, OPTIN_FILE));
 }
 
+export type SessionAdmission = 'ok' | 'cap' | 'unreadable' | 'busy';
+
 /**
  * One more JEV call for this session, if its cap allows (#247 review: a cap
  * per session before live; the $2/month account budget stays shared and is
  * enforced by the ledger). Sessions idle for a week are forgotten.
+ *
+ * One transaction across processes (PR #254 review P2): read, check and
+ * increment run under their own lock (`prompt-hook/harness.lock`, not the
+ * decide lock, which the live child takes next), held for that step only,
+ * and the table is replaced by rename. A table that cannot be read is
+ * `unreadable` — nothing is reset and nothing is admitted until the owner
+ * removes the file; a lock not obtained in 2 s is `busy`.
  */
-export function takeSessionCall(stateDir: string, sessionDigest: string, now: Date): boolean {
+export async function takeSessionCall(stateDir: string, sessionDigest: string, now: Date): Promise<SessionAdmission> {
   const file = join(stateDir, SESSIONS_FILE);
-  let table: Record<string, { calls: number; last: string }> = {};
-  try {
-    table = JSON.parse(readFileSync(file, 'utf8')) as typeof table;
-  } catch {
-    // first call, or unreadable: start over — the account budget still bounds spend
-  }
-  const cutoff = now.getTime() - OPTIN_LIMITS.sessionKeepDays * 86_400_000;
-  for (const [k, v] of Object.entries(table)) if (Date.parse(v.last) < cutoff) delete table[k];
-  const entry = table[sessionDigest] ?? { calls: 0, last: now.toISOString() };
-  if (entry.calls >= OPTIN_LIMITS.sessionCalls) return false;
-  table[sessionDigest] = { calls: entry.calls + 1, last: now.toISOString() };
   mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, `${JSON.stringify(table)}\n`);
-  return true;
+  try {
+    return await withStateLock(
+      dirname(file),
+      async (): Promise<SessionAdmission> => {
+        let table: Record<string, { calls: number; last: string }> = {};
+        let raw: string | null = null;
+        try {
+          raw = readFileSync(file, 'utf8');
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code !== 'ENOENT') return 'unreadable';
+        }
+        if (raw !== null) {
+          try {
+            const parsed: unknown = JSON.parse(raw);
+            if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return 'unreadable';
+            table = parsed as typeof table;
+          } catch {
+            return 'unreadable';
+          }
+        }
+        const cutoff = now.getTime() - OPTIN_LIMITS.sessionKeepDays * 86_400_000;
+        for (const [k, v] of Object.entries(table)) if (Date.parse(v.last) < cutoff) delete table[k];
+        const entry = table[sessionDigest] ?? { calls: 0, last: now.toISOString() };
+        if (entry.calls >= OPTIN_LIMITS.sessionCalls) return 'cap';
+        table[sessionDigest] = { calls: entry.calls + 1, last: now.toISOString() };
+        const tmp = `${file}.${process.pid}`;
+        writeFileSync(tmp, `${JSON.stringify(table)}\n`);
+        renameSync(tmp, file);
+        return 'ok';
+      },
+      { timeoutMs: 2_000, pollMs: 5 },
+    );
+  } catch (e) {
+    if (e instanceof LockTimeoutError) return 'busy';
+    throw e;
+  }
 }
 
 /** `jev-prompt <setup|on|off|status>` — returns the exit code; prints to stdout/stderr like the rest of the CLI. */
@@ -170,7 +203,7 @@ function findWrapper(start: string): string | null {
 }
 
 async function askOnTerminal(plan: OptInPlan): Promise<boolean> {
-  const scope = plan.action === 'on' ? `MỌI prompt cho tới ${plan.enabledUntil} (trừ prompt có #nojev)` : 'chỉ prompt có #jev';
+  const scope = plan.action === 'on' ? `MỌI prompt cho tới ${plan.enabledUntil} (trừ prompt có dòng #nojev)` : 'chỉ prompt có dòng #jev (một dòng riêng, đầu hoặc cuối prompt)';
   process.stderr.write(
     [
       `jev-prompt ${plan.action}`,

@@ -232,8 +232,13 @@ node ~/.gogo-harness/install/bin/harness.mts jev-prompt status
 `setup` and `on` show what is sent where and ask the owner to type a confirmation; they record the
 secrets wrapper the key comes through (`scripts/secrets/exec-with.sh` found above the working
 directory, or `--wrapper <path>`) in `~/.gogo-harness/jev-prompt.json`, and every change is a line
-in `jev-prompt-history.jsonl`. In a prompt, `#jev` asks for JEV on that prompt (after `setup`) and
-`#nojev` refuses it even while `on`; the markers are removed before anything is summarized.
+in `jev-prompt-history.jsonl`. In a prompt, a control line `#jev` asks for JEV on that prompt
+(after `setup`) and `#nojev` refuses it even while `on`. A control line is the whole first or last
+non-empty line, outside fenced code and `<pasted_content>`; a marker in a quote, in pasted or
+fenced material or inside a sentence is text, not a choice, and sends nothing. Control lines are
+removed before anything is summarized. Each session's call count is taken under its own lock and
+replaced atomically; a counter file that cannot be read refuses every call (`session_unreadable`)
+until the owner removes `~/.gogo-harness/prompt-hook/sessions.json`.
 `JEV_MODE`, the approval flags or a key in the environment never turn sending on by themselves.
 The owner's opt-in stands in for `JEV_LIVE_AUTHORIZED` and `JEV_PRIVACY_REVIEWED` for these calls;
 privacy review + DPA for real prompts (#244) is not done, and the confirmation says so.

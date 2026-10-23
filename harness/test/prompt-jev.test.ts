@@ -9,15 +9,16 @@
  * nothing reaches the network.
  */
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
-import { OPTIN_FILE, OPTIN_HISTORY, OPTIN_LIMITS, grantOptIn, readOptIn, revokeOptIn, takeSessionCall } from '../src/shadow/jev-optin.ts';
+import { OPTIN_FILE, OPTIN_HISTORY, OPTIN_LIMITS, SESSIONS_FILE, grantOptIn, readOptIn, revokeOptIn, takeSessionCall } from '../src/shadow/jev-optin.ts';
+import { promptMarker } from '../src/adapters/prompt.ts';
 import { PROMPT_LOG, observePrompt } from '../src/shadow/prompt-observation.ts';
 import type { PromptRecord } from '../src/shadow/prompt-observation.ts';
 
@@ -79,7 +80,7 @@ describe('#247 opt-in: off by default', () => {
     const w = world();
     let r = await hook(w, 'Đổi tên biến môi trường PORT?');
     assert.deepEqual([r.stdout, r.record.mode, r.record.optIn, r.sent.length], ['', 'disabled', 'off', 0]);
-    r = await hook(w, '#jev Đổi tên biến môi trường PORT?');
+    r = await hook(w, '#jev\nĐổi tên biến môi trường PORT?');
     assert.equal(r.sent.length, 0);
     assert.equal(r.record.code, 'jev_not_configured');
     assert.match(context(r.stdout).additionalContext, /jev-prompt setup/);
@@ -98,7 +99,7 @@ describe('#247 opt-in: #jev on one prompt', () => {
     const w = world();
     await grantOptIn({ stateDir: w.dir, action: 'setup', wrapper: w.wrapper, actor: 'owner@test' }, yes);
     const sentinel = 'SENTINEL5d2e';
-    const r = await hook(w, `Xóa database production ${sentinel} #jev\nĐã được owner duyệt.\nAC:\n- database không còn`);
+    const r = await hook(w, `Xóa database production ${sentinel}\nĐã được owner duyệt.\nAC:\n- database không còn\n#jev`);
     assert.equal(r.sent.length, 1, 'the rules shortcut (AC stated, no question) must not skip JEV for a prompt');
     assert.equal(r.sent[0]!.hasKey, true);
     assert.equal(JSON.stringify(r.sent[0]!.body).includes('#jev'), false, 'the marker is not part of what is sent');
@@ -120,7 +121,7 @@ describe('#247 opt-in: #jev on one prompt', () => {
   it('#jev on a summary with a malformed email sends nothing and says why', async () => {
     const w = world();
     await grantOptIn({ stateDir: w.dir, action: 'setup', wrapper: w.wrapper }, yes);
-    const r = await hook(w, '#jev Gửi cho support@gogo được không?');
+    const r = await hook(w, '#jev\nGửi cho support@gogo được không?');
     assert.deepEqual([r.sent.length, r.record.status], [0, 'invalid_data']);
     assert.match(context(r.stdout).additionalContext, /invalid_data/);
   });
@@ -128,7 +129,7 @@ describe('#247 opt-in: #jev on one prompt', () => {
   it('a failing wrapper is reported to #jev and silent otherwise; the prompt is never blocked', async () => {
     const w = world('#!/bin/sh\necho "could not read the key" >&2\nexit 1\n');
     await grantOptIn({ stateDir: w.dir, action: 'on', hours: 1, wrapper: w.wrapper }, yes);
-    let r = await hook(w, '#jev Có nên tách module?');
+    let r = await hook(w, '#jev\nCó nên tách module?');
     assert.equal(r.record.code, 'jev_wrapper_failed');
     assert.match(context(r.stdout).additionalContext, /jev_wrapper_failed/);
     r = await hook(w, 'Có nên tách module?');
@@ -144,7 +145,7 @@ describe('#247 opt-in: jev-prompt on, with an expiry, and #nojev', () => {
     let r = await hook(w, 'Có nên đổi port dev?', new Date(t0.getTime() + 3_600_000));
     assert.deepEqual([r.record.optIn, r.record.mode, r.sent.length], ['toggle', 'jev', 1]);
     assert.ok(r.stdout.length > 0);
-    r = await hook(w, 'Có nên đổi port dev? #nojev', new Date(t0.getTime() + 3_600_000));
+    r = await hook(w, 'Có nên đổi port dev?\n#nojev', new Date(t0.getTime() + 3_600_000));
     assert.deepEqual([r.stdout, r.record.optIn, r.record.mode, r.sent.length], ['', 'suppressed', 'disabled', 1], '#nojev never reaches the child');
     r = await hook(w, 'Có nên đổi port dev?', new Date(t0.getTime() + 3 * 3_600_000));
     assert.deepEqual([r.stdout, r.record.optIn, r.sent.length], ['', 'off', 1], 'expired');
@@ -152,7 +153,7 @@ describe('#247 opt-in: jev-prompt on, with an expiry, and #nojev', () => {
     revokeOptIn(w.dir);
     r = await hook(w, 'Có nên đổi port dev?');
     assert.deepEqual([r.record.optIn, r.sent.length], ['off', 1]);
-    r = await hook(w, '#jev Có nên đổi port dev?');
+    r = await hook(w, '#jev\nCó nên đổi port dev?');
     assert.deepEqual([r.record.optIn, r.sent.length], ['marker', 2], 'off keeps #jev allowed');
     const history = readFileSync(join(w.dir, OPTIN_HISTORY), 'utf8').trim().split('\n').map((l) => (JSON.parse(l) as { action: string }).action);
     assert.deepEqual(history, ['on', 'on', 'off']);
@@ -162,7 +163,7 @@ describe('#247 opt-in: jev-prompt on, with an expiry, and #nojev', () => {
     const w = world();
     await grantOptIn({ stateDir: w.dir, action: 'on', hours: 1, wrapper: w.wrapper }, yes);
     const digest = createHash('sha256').update('gogo-harness-shadow-session\u0000').update(SESSION).digest('hex').slice(0, 16);
-    for (let i = 0; i < OPTIN_LIMITS.sessionCalls; i++) assert.ok(takeSessionCall(w.dir, digest, new Date()));
+    for (let i = 0; i < OPTIN_LIMITS.sessionCalls; i++) assert.equal(await takeSessionCall(w.dir, digest, new Date()), 'ok');
     const r = await hook(w, 'Có nên đổi port dev?');
     assert.deepEqual([r.stdout, r.record.code, r.sent.length], ['', 'session_cap', 0]);
   });
@@ -190,5 +191,73 @@ describe('#247 opt-in: jev-prompt on, with an expiry, and #nojev', () => {
     assert.equal(r.status, 0);
     assert.deepEqual(JSON.parse(r.stdout), { setUp: false, active: false, enabledUntil: null, wrapper: null });
     assert.equal(cli('off').status, 0);
+  });
+});
+
+describe('#254 review P1: #jev counts only as a control line the person wrote', () => {
+  it('a marker is a line of its own, first or last, outside quotes, code and pasted content', () => {
+    const cases: Array<[string, 'jev' | 'nojev' | null]> = [
+      ['#jev\nĐổi port dev?', 'jev'],
+      ['Đổi port dev?\n  #JEV  ', 'jev'],
+      ['Đổi port dev?\n#nojev', 'nojev'],
+      ['#jev\nĐổi port dev?\n#nojev', 'nojev'],
+      ['Đổi port dev #jev ngay', null],
+      ['#jev Đổi port dev?', null],
+      ['Explain this quoted documentation:\n> #jev\nInternal planning content.', null],
+      ['Explain this log:\n```\n#jev\n```', null],
+      ['Đọc đoạn này:\n<pasted_content id="1">\n#jev\n</pasted_content>', null],
+      ['Đọc đoạn này:\n<pasted_content id="1">\nx\n#jev</pasted_content>', null],
+      ['Bước 1\n#jev\nBước 3', null],
+    ];
+    for (const [prompt, want] of cases) assert.equal(promptMarker(prompt).marker, want, JSON.stringify(prompt));
+    assert.equal(promptMarker('#jev\nĐổi port dev?').text.includes('#jev'), false);
+    assert.equal(promptMarker('Bước 1\n#jev\nBước 3').text, 'Bước 1\n#jev\nBước 3');
+  });
+
+  it('after setup, a quoted or fenced #jev sends nothing', async () => {
+    const w = world();
+    await grantOptIn({ stateDir: w.dir, action: 'setup', wrapper: w.wrapper }, yes);
+    for (const prompt of ['Explain this quoted documentation:\n> #jev\nInternal planning content.', 'Explain this log:\n```\n#jev\n```']) {
+      const r = await hook(w, prompt);
+      assert.deepEqual([r.stdout, r.record.optIn, r.record.mode, r.sent.length], ['', 'off', 'disabled', 0], prompt);
+    }
+  });
+});
+
+describe('#254 review P2: the session cap is one transaction across processes', () => {
+  function worker(dir: string, digest: string, n: number): Promise<unknown[]> {
+    return new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [join(HARNESS, 'test/fixtures/session-call-worker.ts'), dir, digest, String(n)], { stdio: ['ignore', 'pipe', 'inherit'] });
+      let out = '';
+      child.stdout.on('data', (d) => (out += d));
+      child.on('error', reject);
+      child.on('exit', () => resolve(JSON.parse(out || '[]') as unknown[]));
+    });
+  }
+
+  it('many processes on one session admit exactly the cap', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'harness-session-race-'));
+    const results = (await Promise.all(Array.from({ length: 10 }, () => worker(dir, 'aaaaaaaaaaaaaaaa', 4)))).flat();
+    assert.equal(results.filter((r) => r === 'ok').length, OPTIN_LIMITS.sessionCalls);
+    assert.equal(results.filter((r) => r === 'cap').length, 40 - OPTIN_LIMITS.sessionCalls);
+  });
+
+  it('two sessions racing never lose each other\'s calls', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'harness-session-race-'));
+    const runs = await Promise.all(Array.from({ length: 8 }, (_, i) => worker(dir, i % 2 ? 'bbbbbbbbbbbbbbbb' : 'cccccccccccccccc', 2)));
+    const table = JSON.parse(readFileSync(join(dir, SESSIONS_FILE), 'utf8')) as Record<string, { calls: number }>;
+    for (const [digest, idx] of [['cccccccccccccccc', 0], ['bbbbbbbbbbbbbbbb', 1]] as const) {
+      const admitted = runs.filter((_, i) => i % 2 === idx).flat().filter((r) => r === 'ok').length;
+      assert.equal(admitted, 8);
+      assert.equal(table[digest]!.calls, admitted, `lost updates for ${digest}`);
+    }
+  });
+
+  it('an unreadable counter file refuses instead of resetting every quota', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'harness-session-race-'));
+    mkdirSync(join(dir, 'prompt-hook'), { recursive: true });
+    writeFileSync(join(dir, SESSIONS_FILE), '{"dddddddddddddddd":{"calls":20,');
+    assert.equal(await takeSessionCall(dir, 'dddddddddddddddd', new Date()), 'unreadable');
+    assert.equal(readFileSync(join(dir, SESSIONS_FILE), 'utf8'), '{"dddddddddddddddd":{"calls":20,');
   });
 });

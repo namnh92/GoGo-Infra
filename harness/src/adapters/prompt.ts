@@ -182,16 +182,42 @@ export function parsePrompt(prompt: string): PromptExtraction {
 }
 
 /**
- * The owner's per-prompt choice (#247, owner decision 2026-10-23): `#jev`
- * asks for JEV on this prompt, `#nojev` refuses it even while sending is on.
- * Both present is `nojev`. The markers are removed before parsing, so they
- * are never part of what is summarized or sent.
+ * The owner's per-prompt choice (#247, owner decision 2026-10-23): a control
+ * line `#jev` asks for JEV on this prompt, `#nojev` refuses it even while
+ * sending is on. A control line is the whole first or last non-empty line,
+ * outside fenced code and `<pasted_content>` (PR #254 review P1): a marker
+ * inside quoted, pasted or fenced material, or in the middle of a sentence,
+ * is text the person was showing, not a choice they made. Both present is
+ * `nojev`. Control lines are removed before parsing, so they are never part
+ * of what is summarized or sent.
  */
 export function promptMarker(prompt: string): { marker: 'jev' | 'nojev' | null; text: string } {
-  const found = new Set<string>();
-  const text = prompt.replace(/(^|\s)#(no)?jev(?=\s|$)/gi, (_, lead: string, no: string | undefined) => {
-    found.add(no ? 'nojev' : 'jev');
-    return lead;
-  });
-  return { marker: found.has('nojev') ? 'nojev' : found.has('jev') ? 'jev' : null, text };
+  const lines = prompt.split('\n');
+  const inBlock: boolean[] = [];
+  let fence: string | null = null;
+  let pasted = false;
+  for (const line of lines) {
+    const f = FENCE.exec(line);
+    const opensPaste = /<pasted_content\b/.test(line);
+    inBlock.push(fence !== null || pasted || f !== null || opensPaste);
+    if (fence) {
+      if (f && f[1] === fence) fence = null;
+    } else if (f) {
+      fence = f[1]!;
+    }
+    if (opensPaste) pasted = true;
+    if (pasted && /<\/pasted_content>/.test(line)) pasted = false;
+  }
+  const nonEmpty = lines.flatMap((l, i) => (l.trim() === '' ? [] : [i]));
+  const found = new Set<'jev' | 'nojev'>();
+  const drop = new Set<number>();
+  for (const i of new Set([nonEmpty[0], nonEmpty[nonEmpty.length - 1]])) {
+    if (i === undefined || inBlock[i]) continue;
+    const m = /^\s*#(no)?jev\s*$/i.exec(lines[i]!.replace(/\r$/, ''));
+    if (!m) continue;
+    found.add(m[1] ? 'nojev' : 'jev');
+    drop.add(i);
+  }
+  const marker = found.has('nojev') ? 'nojev' : found.has('jev') ? 'jev' : null;
+  return { marker, text: drop.size ? lines.filter((_, i) => !drop.has(i)).join('\n') : prompt };
 }

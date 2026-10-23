@@ -5,7 +5,7 @@
  *   echo '<hook JSON>' | node <launcher> prompt-hook
  *
  * Every prompt is observed: the hook payload is read (bounded in bytes and
- * time), `#jev` / `#nojev` are taken out, the prompt adapter runs and the
+ * time), a `#jev` / `#nojev` control line is taken out, the prompt adapter runs and the
  * outbound sanitizer validates the draft — before anything that could decide.
  *
  * Nothing is sent unless the owner opted in (jev-optin.ts): `#jev` on this
@@ -142,7 +142,8 @@ async function observe(o: Options): Promise<{ record: PromptRecord; stdout: stri
   }
   if (optIn === 'off' || optIn === 'suppressed') return none(base(o, { ...common, status: 'ok' }));
   if (!optInRecord) return { record: base(o, { ...common, status: 'ok', code: 'jev_not_configured' }), stdout: note('jev_not_configured') };
-  if (!takeSessionCall(stateDir, ids.sessionDigest, now)) return { record: base(o, { ...common, status: 'ok', code: 'session_cap' }), stdout: note('session_cap') };
+  const admission = await takeSessionCall(stateDir, ids.sessionDigest, now);
+  if (admission !== 'ok') return { record: base(o, { ...common, status: 'ok', code: `session_${admission}` }), stdout: note(`session_${admission}`) };
 
   const child = runChild(o, optInRecord.wrapper, ids.observationId, read.data, stateDir);
   if ('error' in child) return { record: base(o, { ...common, mode: 'jev', status: 'ok', code: child.error }), stdout: note(child.error) };
