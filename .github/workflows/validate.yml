@@ -363,6 +363,8 @@ jobs:
       # openssl and curl through pipes only; stdout is the installation token.
       - name: github-app-token.sh signs a valid JWT and leaks neither key nor JWT
         run: ./scripts/secrets/github-app-token.test.sh
+      - name: as-agent.sh runs a command as the agent App, never as the owner
+        run: ./scripts/secrets/as-agent.test.sh
 
       # NTF-BE-008. The identity signing key is the one credential here that is
       # neither a token nor a string: it is a PEM, and the runtime env renderers
