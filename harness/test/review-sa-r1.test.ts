@@ -1268,3 +1268,34 @@ describe('labelled ids (owner 2026-10-23): kept when labelled, a bare 8+-digit r
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Astra r10 @de198c6 — A-F-04 (a phone across ISO seconds + fraction), A-F-14 (a phone inside or around
+// a labelled id), A-F-15 (input-authored id placeholders). The final output is checked as sent.
+// ---------------------------------------------------------------------------
+
+describe('A-F-04 (Astra r10): no phone hides across ISO seconds, fraction or offset', () => {
+  for (const text of ['2026-10-22T10:30:09.12345678Z', 'at 2026-10-22T10:30:03.12345678+07:00', '2026-10-22 10:30:09.12345678']) {
+    it(JSON.stringify(text), () => assert.equal(r8Invariant(text), 'rejected', text));
+  }
+});
+
+describe('A-F-14 (Astra r10): a labelled id carries no phone', () => {
+  for (const text of ['run 10912345678', 'run 09123456 78', '#10912345678', 'issuecomment-80912345678', 'actions/runs/12340912345678', 'run 38932420082 0912345678x']) {
+    it(JSON.stringify(text), () => assert.equal(r8Invariant(text), 'rejected', text));
+  }
+});
+
+describe('A-F-15 (Astra r10): placeholders written in the input restore nothing', () => {
+  for (const text of ['run 12345678; 09[ID_A]', 'run 38932420082 and 09[ID_A]', '[ID_A][ID_B]', 'run 38932420082 A']) {
+    it(JSON.stringify(text), () => {
+      const r = r7Try(text);
+      if ('sent' in r) assert.ok(!r8HasPhoneSubstring(r.sent), `${JSON.stringify(text)} → ${r.sent}`);
+      else assert.ok(isDataError(r), r.error.message);
+    });
+  }
+  it('a literal [ID_A] with no id stays literal text', () => {
+    const r = r7Try('see [ID_A] here');
+    assert.ok('sent' in r && r.sent === 'see [ID_A] here', JSON.stringify(r));
+  });
+});

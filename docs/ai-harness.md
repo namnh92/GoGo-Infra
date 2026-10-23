@@ -94,7 +94,11 @@ email addresses are checked by regex; anything ambiguous is a data error, never 
    `decide` answers deterministically with `errorCategory: invalid_data`, and nothing leaves.
 5. **Coordinates** by shape, then a **post-check** on what would be sent: any surviving `@` (a lone
    one or a `@@` diff hunk marker included), or a run of 8 or more digits — one `.`, `-` or space
-   between digits — outside a placeholder, not an ISO date and not a labelled id, is a data error. This holds the invariant whatever the
+   between digits — outside a placeholder, not an ISO date and not a labelled id, is a data error.
+   Last, the **final check** reads the text exactly as it will be sent, ids restored: any numeric run
+   that contains a valid Vietnamese number anywhere inside it (`10:30:09.12345678`, `run 10912345678`)
+   is a data error, so no exemption can carry a phone across its edge. Id placeholders are
+   private-use characters the input cannot supply; any in the input is dropped first. This holds the invariant whatever the
    steps above missed.
 
 Text that is never sent (handoffs, a provider's error message) goes through `redact`, which does not

@@ -170,12 +170,14 @@ type Token = { start: number; end: number; text: string };
  */
 export function minimize(input: string): Minimized {
   const problems: DataProblem[] = [];
-  const collapsed = input.replace(/\s+/g, ' ');
+  // The id sentinels are private-use characters; one written in the input is dropped, so only spans
+  // this function set aside are ever restored (Astra r10 A-F-15).
+  const collapsed = input.replace(/\s+/g, ' ').replace(SENTINELS, '');
   // Labelled ids are set aside before tokenizing and restored last, so neither a step nor the post-check
   // reads them as a number; their placeholder holds no digit. A valid phone behind a label stays a phone.
   const ids: string[] = [];
   let text = replaceSpans(collapsed, shapeSpans(collapsed)).replace(LABELLED_ID, (whole: string, digits: string) =>
-    VN_PHONE.test(digits) ? whole : `${whole.slice(0, -digits.length)}[ID_${idKey(ids.push(digits) - 1)}]`,
+    VN_PHONE.test(digits) ? whole : `${whole.slice(0, -digits.length)}${ID_OPEN}${idKey(ids.push(digits) - 1)}${ID_CLOSE}`,
   );
 
   const tokens = tokenize(text);
@@ -229,13 +231,44 @@ export function minimize(input: string): Minimized {
   // Step 5: the post-check first — a coordinate label must not hide the digits of a glued number
   // (`lat=10.77690912 345 678`) — then coordinates by shape, which can introduce nothing.
   const checked = postCheck(text, problems);
-  return {
-    ...checked,
-    text: checked.text
-      .replace(/(?<![\d.])-?\d{1,3}\.\d{3,7}\s*,\s*-?\d{1,3}\.\d{3,7}(?![\d.])/g, '[COORDS]')
-      .replace(/(\b(?:lat(?:itude)?|lng|lon(?:gitude)?)\s*[:=]\s*)-?\d{1,3}\.\d{1,7}(?![\d.])/gi, '$1[COORD]')
-      .replace(/\[ID_([A-Z]+)\]/g, (_m, key: string) => ids[idIndex(key)] ?? INVALID),
-  };
+  const restored = checked.text
+    .replace(/(?<![\d.])-?\d{1,3}\.\d{3,7}\s*,\s*-?\d{1,3}\.\d{3,7}(?![\d.])/g, '[COORDS]')
+    .replace(/(\b(?:lat(?:itude)?|lng|lon(?:gitude)?)\s*[:=]\s*)-?\d{1,3}\.\d{1,7}(?![\d.])/gi, '$1[COORD]')
+    .replace(ID_SPAN, (_m, key: string) => ids[idIndex(key)] ?? INVALID);
+  // The last word is the text as sent (Astra r10 A-F-04/A-F-14): the exemptions above (ISO dates,
+  // labelled ids) are judged on their own pieces, so a phone can sit across a piece's edge —
+  // `10:30:09.12345678`, `run 10912345678`. Any numeric run that holds a valid Vietnamese number
+  // anywhere inside it is a data error.
+  return finalCheck(restored, checked.problems);
+}
+
+const ID_OPEN = '\uE000';
+const ID_CLOSE = '\uE001';
+const SENTINELS = /[\uE000\uE001]/g;
+const ID_SPAN = /\uE000([A-Z]+)\uE001/g;
+
+/** A digit string that is a Vietnamese number of the current plan: the same set {@link VN_PHONE} accepts. */
+function isPhoneDigits(d: string): boolean {
+  const nsn = (n: string) => /^(?:[35789]\d{8}|2\d{9})$/.test(n);
+  const national = (n: string) => (n.startsWith('0') ? nsn(n.slice(1)) : nsn(n));
+  if (d.startsWith('0084')) return national(d.slice(4));
+  if (d.startsWith('84')) return national(d.slice(2));
+  return d.startsWith('0') && nsn(d.slice(1));
+}
+
+function finalCheck(text: string, problems: DataProblem[]): Minimized {
+  const spans: Span[] = [];
+  for (const m of text.matchAll(/\d(?:[ .()[\]-]{0,3}\d)*/g)) {
+    const d = m[0].replace(/\D/g, '');
+    let found = false;
+    for (let i = 0; i < d.length && !found; i += 1) {
+      for (let j = i + 10; j <= Math.min(d.length, i + 15) && !found; j += 1) found = isPhoneDigits(d.slice(i, j));
+    }
+    if (!found) continue;
+    problems.push('phone_ambiguous_boundary');
+    spans.push({ start: m.index, end: m.index + m[0].length, label: INVALID });
+  }
+  return { text: spans.length ? replaceSpans(text, spans) : text, problems };
 }
 
 /** A digit-free key for the n-th set-aside id: 0 → A, 25 → Z, 26 → BA. */
