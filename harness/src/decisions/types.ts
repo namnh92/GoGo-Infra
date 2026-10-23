@@ -109,7 +109,9 @@ export type DecisionErrorCategory =
   | 'rate_limit'
   | 'invalid_request'
   | 'server'
-  | 'invalid_response';
+  | 'invalid_response'
+  /** The summary held an invalid phone or email candidate; nothing was sent (owner decision 2026-10-23). */
+  | 'invalid_data';
 
 export type DecisionError = {
   category: DecisionErrorCategory;

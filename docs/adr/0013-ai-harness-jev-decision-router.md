@@ -150,17 +150,27 @@ nothing may fit.
 
 **D-5 State.** A sanitized `TaskSummary` — title, description, acceptance criteria, open
 questions, labels, paths (not contents), sources already searched, quoted rules — redacted for
-credentials and minimized for personal data (emails; Vietnamese phone numbers in every common
-spelling — `0…`, `+84`, `84`, `0084`, trunk `0`, separators of up to five spaces, dots, dashes,
-parentheses or brackets between any two digits, replaced whole; decimal
-coordinate pairs and `lat=`/`lng=` labeled values; home-directory names; PR #242 A-F-04 — found in
-one span pass over the whitespace-collapsed text that is sent, overlapping spans merged and replaced
-once, so no rule sees text another rule changed), capped at 8,000 characters. The provider's
-`session_id` is a digest of the task id, never the id. Not caught by pattern, and therefore part
-of what the privacy review in D-2 attests to: prose names, streets and places; non-Vietnamese
-phone numbers, which are not supported and not minimized (owner decision 2026-10-22); DMS or
-whitespace-only coordinate pairs. The full outbound contract, with the caught/not-caught table, is
-in `docs/ai-harness.md`. Identical context is answered from cache.
+credentials and minimized for personal data, capped at 8,000 characters. **Phone numbers and email
+addresses are minimized only when valid** (owner decision 2026-10-23, PR #242 A-F-04): a Vietnamese
+number of the current plan (mobile `0[35789]` + 8 digits, landline `02` + 7–8 digits, also as `84`,
+`+84`, `0084` with an optional trunk `0`, separators of up to five spaces, dots, dashes, parentheses
+or brackets between any two digits) or a well-formed `local@domain.tld` address is replaced whole;
+a candidate that is not valid — wrong length, glued to a word or to another number without a
+clear boundary, a non-Vietnamese number, an `@` token that is not an address — is a **data
+error**: `sanitizeSummary` raises `InvalidSummaryData` (field names and reason codes, never the
+text), the router answers with its deterministic fallback under `errorCategory: invalid_data`, the
+decision log, metrics and `status` show that category, and nothing leaves the machine. Values run
+together are split into valid parts first; one invalid part is a data error. Coordinate pairs,
+labeled coordinates and home-directory names are minimized by shape. The work is done in layers over
+the whitespace-collapsed text that is sent — shapes, coordinate pairs, addresses, numbers — each on
+the text with the earlier spans masked, overlapping spans merged and replaced once, so no rule sees
+text another rule changed and no boundary is decided by a removed character. A differential test
+holds the earlier sequential implementation as a frozen oracle: nothing it removed is sent now.
+The provider's `session_id` is a digest of the task id, never the id. Not caught by pattern, and
+therefore part of what the privacy review in D-2 attests to: prose names, streets and places; DMS or
+whitespace-only coordinate pairs; a secret under an unlisted key. The full outbound contract, with
+the valid / data-error / not-seen table, is in `docs/ai-harness.md`. Identical context is answered
+from cache.
 
 **D-6 Loop controls.** Three repair attempts per failure class, then escalate; the same error
 signature twice in a row → change approach; eight attempts per task; ten JEV calls per task;

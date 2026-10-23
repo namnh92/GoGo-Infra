@@ -33,7 +33,10 @@ node harness/src/cli.ts billing --mode interactive # refuses if ANTHROPIC_API_KE
 ```
 
 Exit codes: `0` AUTO_EXECUTE · `10` RESEARCH_AND_CONTINUE · `20` HUMAN_APPROVAL · `2` usage or
-configuration error.
+configuration error. A summary that holds an invalid phone or email candidate (owner decision
+2026-10-23, see the outbound data contract) is not a crash: `decide` returns the deterministic
+fallback with `errorCategory: "invalid_data"`, `status` counts it under `errors`, and the exit code
+is that outcome's.
 
 ### Live mode — only after the owner authorizes paid inference and the privacy review
 
@@ -66,21 +69,31 @@ One request per JEV call, to OpenRouter, built by `sanitizeSummary` and the ques
 | `session_id` | 16-hex digest of `taskId` | the task id itself is never sent |
 | `model` | the pinned model id | — |
 
-Minimization is pattern matching (`harness/src/runtime/sanitize.ts`) applied to each field after
-its whitespace is collapsed to single spaces — the text that is sent, so a number broken across
-lines is still seen whole. It runs as one pass: every rule (credentials and personal data alike)
-marks the spans it finds on that same text, overlapping or touching spans merge, and each merged
-span is replaced once with the strictest member's label — so two dotted phone numbers separated by
-a comma can never be read as a coordinate pair that splits both. `JEV_PRIVACY_REVIEWED` attests to
-exactly this coverage:
+Minimization (`harness/src/runtime/sanitize.ts`) runs on each field after its whitespace is
+collapsed to single spaces — the text that is sent. **Phone numbers and email addresses are
+minimized only when valid** (owner decision 2026-10-23): a valid Vietnamese number or a well-formed
+address is replaced; text that looks like one but is not valid — a Vietnamese prefix with the wrong
+number of digits, an `@` token that is not an address, a number glued to a word, a non-Vietnamese
+number — is a **data error**: `sanitizeSummary` raises `InvalidSummaryData` (field names and reason
+codes, never the text), `decide` answers deterministically with `errorCategory: invalid_data`, and
+no request leaves the machine. Values run together (`a@b.vn0912345678`, `0912345678028.3822.1234`,
+`10.7769, 106.70090912.345.678`) are split into valid parts first; if any part is invalid, data error.
+Everything is found in layers over that same text — credentials and shapes, then coordinate pairs,
+then addresses, then numbers — each layer on the text with the earlier layers' spans masked out, so no
+rule reads text another rule changed and no boundary is decided by a character another span removes.
+Overlapping spans merge under the strictest label and each is replaced once. A differential test
+keeps the earlier sequential implementation as a frozen oracle and checks, over every form the tests
+generate, that nothing it removed is sent now (letters and digits; a data error satisfies it).
+`JEV_PRIVACY_REVIEWED` attests to exactly this coverage:
 
-| Data | Caught | Not caught (residual — keep it out of the summary) |
-| --- | --- | --- |
-| Email | `local@domain.tld` | an address written as `name at domain` |
-| Phone | Vietnamese numbers, replaced whole. A number is `0` followed by 9 or 10 digits, or a prefix `84`, `+84` or `0084`, an optional trunk `0`, then those 9 or 10 digits. Between any two consecutive digits — prefix and trunk included — up to five characters from space, dot, dash, `(`, `)`, `[`, `]`; between `+` and `84` up to three of space, dot, dash; an opening `(` or `[` with spaces before the number. So `0912 345 678`, `8 4 912 345 678`, `( +84 ) 912 345 678`, `[+84] (0) 2838221234`, `( 028 ) 3822 1234`, `+84 ( 28 ) 3822 1234`, `0 0 8 4 . 912 . 345 . 678` are all caught (`harness/test/review-sa-r1.test.ts`, A-F-04 r5, generates these forms) | Non-Vietnamese phone numbers: not supported — not minimized (e.g. `+1 ( 415 ) 555-0133`). A digit run longer than a Vietnamese number (more than 10 digits after the prefix and trunk) is not one; its first part may be replaced and the rest left. Separators of other characters (`/`, `·`, `=`, letters); digits written as words. Over-matching goes the safe way: a digit list such as `ids 0 (1) (2) … (9)` is replaced too |
-| Coordinates | decimal pairs `lat, lon` with ≥ 3 decimals; a labeled value `lat`/`latitude`/`lng`/`lon`/`longitude` `=` or `:` a decimal | DMS (`10°46'37"N`), a bare pair separated by whitespace only, plus codes, geohashes, a place name |
-| Home directory | `/Users/<name>`, `/home/<name>`, `C:\Users\<name>` | a user name elsewhere in a path or in prose |
-| Prose | — | a person's name, a street, a place, an account id written as text |
+| Data | Valid → replaced | Candidate but invalid → data error, not sent | Not seen (residual) |
+| --- | --- | --- | --- |
+| Credential | token shapes (`sk-or-v1-…`, `sk-ant-…`, `AKIA…`, `gh?_…`, `github_pat_…`, JWT, PEM), `Bearer …`, `key=value` / `"key": "value"` for password/secret/token/api-key names (quotes kept only when both are present), `scheme://user:pass@` | — | a secret under a name not in that list |
+| Email | `local@domain.tld`: local part of letters, digits, `. _ % + -`; domain labels of letters, digits, `-`; a TLD of two or more letters | an `@` with text on both sides that is not such an address (`foo@bar`, `an@example`, `deploy@host`), or one glued to digits that do not form a valid phone (`an@example.com2`) | an address written as `name at domain`; a bare handle (`@namnh92`) is not a candidate |
+| Phone | Vietnamese numbers of the current plan, replaced whole: mobile `0` + one of `3 5 7 8 9` + 8 digits; landline `0` + `2` + 7–8 digits (area code included); each also as `84`, `+84` or `0084` with an optional trunk `0` in place of the leading `0`. Between any two consecutive digits — prefix and trunk included — up to five of space, dot, dash, `(`, `)`, `[`, `]`; between `+` and `84` up to three of space, dot, dash; an opening `(` or `[` with spaces before the number. Several numbers run together (`0912345678028.3822.1234`, `0912 345 678 028 3822 1234`) split into their valid parts. `harness/test/review-sa-r1.test.ts` generates these forms | a numeric run that starts with a Vietnamese prefix and carries 8 or more digits, or any `+` run with 7 or more, that does not partition into valid numbers: wrong length (`091234567`, `0912 345 678 901`), glued to another number by spaces, dots or dashes alone (`0912345678 2 items`, `0912345678 10.7769`), glued to a word (`x0912345678`, `0912345678abc`, `x.ts0912345678`), a non-Vietnamese number (`+1 ( 415 ) 555-0133`, `+44 20 7946 0958`: not supported); a plain run that hides a valid number mid-way (`106.70090912345678`) | fewer than 8 digits in all (`0912345`, `0 errors`) is a plain number; digits written as words; separators of other characters (`/`, `·`). A date, version, PR number or count is a plain number and passes unchanged |
+| Coordinates | decimal pairs `lat, lon` with ≥ 3 decimals, not part of a dotted number on either side; a labeled value `lat`/`latitude`/`lng`/`lon`/`longitude` `=` or `:` a decimal. A pair glued to a phone (`10.7769, 106.70090912.345.678`) gives the phone its digits back | a pair followed by `.digit` that no split resolves | DMS (`10°46'37"N`), a bare pair separated by whitespace only, plus codes, geohashes, a place name |
+| Home directory | `/Users/<name>`, `/home/<name>`, `C:\Users\<name>` | — | a user name elsewhere in a path or in prose |
+| Prose | — | — | a person's name, a street, a place, an account id written as text |
 
 Do not put customer or user data into a task summary; summarize the issue instead. Nothing else —
 no file contents, no environment, no repository data — is sent.

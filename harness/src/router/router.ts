@@ -42,7 +42,7 @@ import type { ActionKind, PolicyGate, ProposedAction } from '../policy/policy.ts
 import type { BudgetLedger } from '../runtime/budget.ts';
 import type { FailureVerdict, LoopController } from '../runtime/loop.ts';
 import type { DecisionSink } from '../runtime/metrics.ts';
-import { sanitizeSummary } from '../runtime/sanitize.ts';
+import { InvalidSummaryData, sanitizeSummary } from '../runtime/sanitize.ts';
 import type { TaskSummary } from '../runtime/sanitize.ts';
 import { questionsFor } from './questions.ts';
 import type { Checkpoint } from './questions.ts';
@@ -154,8 +154,20 @@ export class DecisionRouter {
     const settled = rulesOutcome(input, verdict);
     if (settled) return this.#log(input, '', { ...base, loop: verdict, outcome: settled.outcome, source: 'rules', reasons: settled.reasons });
 
-    // 4. JEV, on a bounded summary, once per distinct context.
-    const state = sanitizeSummary(input.summary);
+    const fallback = (category: RouterDecision['errorCategory'], note: string): RouterDecision => {
+      const f = fallbackOutcome(input, verdict);
+      return { ...base, loop: verdict, outcome: f.outcome, source: 'fallback', fallback: true, errorCategory: category, reasons: [note, ...f.reasons] };
+    };
+
+    // 4. JEV, on a bounded summary, once per distinct context. A summary with an invalid phone or
+    // email candidate is data in error (owner decision 2026-10-23): deterministic answer, nothing sent.
+    let state: Json;
+    try {
+      state = sanitizeSummary(input.summary);
+    } catch (e) {
+      if (!(e instanceof InvalidSummaryData)) throw e;
+      return this.#log(input, '', fallback('invalid_data', `summary rejected, not sent: ${e.reasons.join(', ')}`));
+    }
     const stateHash = hash(input.checkpoint, state);
     // The cache belongs to the provider that answered (PR #242 r2 F-03): a mock
     // fixture's answer must never stand in for a live model, and disabled mode
@@ -163,11 +175,6 @@ export class DecisionRouter {
     const cacheKey = `${provider.mode}\u0000${provider.model ?? ''}\u0000${stateHash}`;
     const hit = provider.mode === 'disabled' ? undefined : this.#cache.get(cacheKey);
     if (hit && input.checkpoint !== 'repeated_failure') return this.#log(input, stateHash, { ...hit, advisory: ADVISORY, cached: true });
-
-    const fallback = (category: RouterDecision['errorCategory'], note: string): RouterDecision => {
-      const f = fallbackOutcome(input, verdict);
-      return { ...base, loop: verdict, outcome: f.outcome, source: 'fallback', fallback: true, errorCategory: category, reasons: [note, ...f.reasons] };
-    };
 
     if (provider.mode === 'disabled') return this.#log(input, stateHash, fallback('disabled', 'JEV disabled'));
     if (!ledger.canSpend('openrouter_jev')) return this.#log(input, stateHash, fallback('budget_exhausted', 'JEV budget exhausted'));

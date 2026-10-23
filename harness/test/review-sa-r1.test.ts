@@ -7,7 +7,7 @@
  */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,7 +21,7 @@ import { questionsFor } from '../src/router/questions.ts';
 import { DecisionRouter } from '../src/router/router.ts';
 import { BudgetLedger } from '../src/runtime/budget.ts';
 import { LoopController } from '../src/runtime/loop.ts';
-import { MemorySink } from '../src/runtime/metrics.ts';
+import { MemorySink, summarize } from '../src/runtime/metrics.ts';
 import { redact, sanitizeSummary } from '../src/runtime/sanitize.ts';
 import { loadTaskState, saveTaskState, taskStateFile } from '../src/runtime/task-state.ts';
 import { countingMock, harness, input, intakeAnswers, summary } from './helpers.ts';
@@ -623,33 +623,68 @@ describe('A-F-04 residual (Astra r4): every Vietnamese form the contract table c
 // The generator below IS the claim in the docs table: change one, change the other.
 // ---------------------------------------------------------------------------
 
-describe('A-F-04 residual (Astra r5): every generated Vietnamese form is replaced completely, through sanitizeSummary', () => {
-  /** National significant digits the table claims: 9 (mobile) or 10 (landline). */
-  const NSN = ['912345678', '2838221234'];
-  /** Prefix forms as digit strings (`+` handled apart); `t` = trunk 0 present. */
-  const PREFIXES: Array<{ label: string; plus: boolean; digits: string; trunk: boolean }> = [
+/** National significant digits the table claims: 9 (mobile) or 10 (landline). */
+const NSN = ['912345678', '2838221234'];
+/** Prefix forms as digit strings (`+` handled apart); `trunk` = a trunk 0 is present. */
+const PREFIXES: Array<{ label: string; plus: boolean; digits: string; trunk: boolean }> = [
     { label: '0', plus: false, digits: '0', trunk: false },
     { label: '84', plus: false, digits: '84', trunk: false },
     { label: '84 (0)', plus: false, digits: '84', trunk: true },
     { label: '+84', plus: true, digits: '84', trunk: false },
     { label: '+84 (0)', plus: true, digits: '84', trunk: true },
     { label: '0084', plus: false, digits: '0084', trunk: false },
-    { label: '0084 (0)', plus: false, digits: '0084', trunk: true },
-  ];
-  /** Separator runs the table claims between any two digits: 0–5 of space . - ( ) [ ]. */
-  const BETWEEN = ['', ' ', '.', '-', '  ', ' - ', ') ', ' (', ' ) ', '] [', '-.-', ' ) - '];
-  /** Between `+` and the first digit: 0–3 of space . -. */
-  const AFTER_PLUS = ['', ' ', '.', '-', ' - '];
-  /** Optional opening bracket (plus spaces) before the whole number. */
-  const OPEN = ['', '(', '[', '( ', '[ '];
+  { label: '0084 (0)', plus: false, digits: '0084', trunk: true },
+];
+/** Separator runs the table claims between any two digits: 0–5 of space . - ( ) [ ]. */
+const BETWEEN = ['', ' ', '.', '-', '  ', ' - ', ') ', ' (', ' ) ', '] [', '-.-', ' ) - '];
+/** Between `+` and the first digit: 0–3 of space . -. */
+const AFTER_PLUS = ['', ' ', '.', '-', ' - '];
+/** Optional opening bracket (plus spaces) before the whole number. */
+const OPEN = ['', '(', '[', '( ', '[ '];
 
-  function build(prefix: (typeof PREFIXES)[number], nsn: string, sepAt: (i: number) => string, afterPlus: string, open: string): string {
-    const digits = `${prefix.digits}${prefix.trunk ? '0' : ''}${nsn}`;
-    let out = '';
-    for (let i = 0; i < digits.length; i += 1) out += (i === 0 ? '' : sepAt(i)) + digits[i];
-    return `${open}${prefix.plus ? `+${afterPlus}` : ''}${out}`;
+function build(prefix: (typeof PREFIXES)[number], nsn: string, sepAt: (i: number) => string, afterPlus: string, open: string): string {
+  const digits = `${prefix.digits}${prefix.trunk ? '0' : ''}${nsn}`;
+  let out = '';
+  for (let i = 0; i < digits.length; i += 1) out += (i === 0 ? '' : sepAt(i)) + digits[i];
+  return `${open}${prefix.plus ? `+${afterPlus}` : ''}${out}`;
+}
+
+/** Every string the r5 generator produces (the claim of the docs table, spelled out). */
+function generatedForms(): string[] {
+  const out: string[] = [];
+  for (const prefix of PREFIXES) {
+    for (const nsn of NSN) {
+      const total = prefix.digits.length + (prefix.trunk ? 1 : 0) + nsn.length;
+      for (const sep of BETWEEN) for (let at = 1; at < total; at += 1) out.push(build(prefix, nsn, (i) => (i === at ? sep : ''), '', ''));
+      for (const sep of BETWEEN) out.push(build(prefix, nsn, () => sep, '', ''));
+      const groups = nsn.length === 9 ? [[3, 6], [2, 5], [1, 4, 7]] : [[2, 6], [3, 6], [2, 4, 7]];
+      for (const g of groups) for (const sep of [' ', '.', '-', '  ']) out.push(build(prefix, nsn, (i) => (g.map((n) => n + prefix.digits.length + (prefix.trunk ? 1 : 0)).includes(i) ? sep : ''), '', ''));
+      for (const open of OPEN) for (const afterPlus of AFTER_PLUS) out.push(build(prefix, nsn, (i) => (i === prefix.digits.length ? ' ' : ''), afterPlus, open));
+    }
   }
+  return out;
+}
 
+/** A representative spelling set per prefix × NSN (r6): plain, grouped by space/dot/dash, bracketed, every-separator. */
+function neighbourForms(): string[] {
+  const out: string[] = [];
+  for (const p of PREFIXES.filter((x) => !(x.digits === '84' && x.trunk && !x.plus) && !(x.digits === '0084' && x.trunk))) {
+    for (const nsn of NSN) {
+      const digits = `${p.digits}${p.trunk ? '0' : ''}${nsn}`;
+      const plus = p.plus ? '+' : '';
+      const groupAt = new Set(nsn.length === 9 ? [3, 6] : [2, 6]);
+      const grouped = (sep: string) => {
+        let s = `${plus}${p.digits}${p.trunk ? ' (0) ' : ''}`;
+        for (let i = 0; i < nsn.length; i += 1) s += (groupAt.has(i) ? sep : '') + nsn[i];
+        return s;
+      };
+      out.push(`${plus}${digits}`, grouped(' '), grouped('.'), grouped('-'), `(${plus}${p.digits}) ${nsn.slice(0, 3)} ${nsn.slice(3)}`, [...digits].join(' '));
+    }
+  }
+  return out;
+}
+
+describe('A-F-04 residual (Astra r5): every generated Vietnamese form is replaced completely, through sanitizeSummary', () => {
   function assertGone(text: string) {
     const state = sanitizeSummary(summary({ description: `customer ${text} reported it`, openQuestions: [`call ${text}?`] }));
     const task = state.task as Record<string, unknown>;
@@ -697,32 +732,7 @@ describe('A-F-04 residual (Astra r5): every generated Vietnamese form is replace
 // ---------------------------------------------------------------------------
 
 describe('A-F-04 residual (Astra r6): claimed phone forms survive no neighbour, through sanitizeSummary', () => {
-  const NSN = ['912345678', '2838221234'];
-  const PREFIXES: Array<{ plus: boolean; digits: string; trunk: boolean }> = [
-    { plus: false, digits: '0', trunk: false },
-    { plus: false, digits: '84', trunk: false },
-    { plus: true, digits: '84', trunk: false },
-    { plus: true, digits: '84', trunk: true },
-    { plus: false, digits: '0084', trunk: false },
-  ];
-  /** A representative spelling set per prefix × NSN: plain, grouped by space/dot/dash, bracketed, every-separator. */
-  function forms(): string[] {
-    const out: string[] = [];
-    for (const p of PREFIXES) {
-      for (const nsn of NSN) {
-        const digits = `${p.digits}${p.trunk ? '0' : ''}${nsn}`;
-        const plus = p.plus ? '+' : '';
-        const groupAt = new Set(nsn.length === 9 ? [3, 6] : [2, 6]);
-        const grouped = (sep: string) => {
-          let s = `${plus}${p.digits}${p.trunk ? ' (0) ' : ''}`;
-          for (let i = 0; i < nsn.length; i += 1) s += (groupAt.has(i) ? sep : '') + nsn[i];
-          return s;
-        };
-        out.push(`${plus}${digits}`, grouped(' '), grouped('.'), grouped('-'), `(${plus}${p.digits}) ${nsn.slice(0, 3)} ${nsn.slice(3)}`, [...digits].join(' '));
-      }
-    }
-    return out;
-  }
+  const forms = neighbourForms;
   const NEIGHBOURS: Array<{ name: string; text: string; expect: (sent: string) => void }> = [
     { name: 'another phone', text: '028.3822.1234', expect: () => {} },
     { name: 'a coordinate pair', text: '10.7769, 106.7009', expect: (s) => assert.ok(!s.includes('7769') && !s.includes('7009'), s) },
@@ -743,8 +753,18 @@ describe('A-F-04 residual (Astra r6): claimed phone forms survive no neighbour, 
     it(`phone × ${neighbour.name} × every joiner, both orders`, () => {
       for (const phone of forms()) {
         for (const joiner of JOINERS) {
-          for (const text of [`${phone}${joiner}${neighbour.text}`, `${neighbour.text}${joiner}${phone}`]) {
-            const sent = sentFor(text);
+          for (const [left, right] of [[phone, neighbour.text], [neighbour.text, phone]] as Array<[string, string]>) {
+            const text = `${left}${joiner}${right}`;
+            // Owner rule 2026-10-23: a phone glued by whitespace alone to a number that is not a phone is
+            // ambiguous data, and the summary is rejected instead of sent. Every other joiner must minimize.
+            const mayReject = /^\s*$/.test(joiner) && left === phone && /^\d/.test(right) && !/^0/.test(right);
+            let sent: string;
+            try {
+              sent = sentFor(text);
+            } catch (e) {
+              assert.ok(mayReject && (e as Error).name === 'InvalidSummaryData', `${JSON.stringify(text)} rejected: ${(e as Error).message}`);
+              continue;
+            }
             assert.ok(!/\d/.test(sent), `digits survived in ${JSON.stringify(text)}: ${sent}`);
             neighbour.expect(sent);
           }
@@ -775,5 +795,296 @@ describe('A-F-04 residual (Astra r6): claimed phone forms survive no neighbour, 
     for (const text of ['cells[0][1][2] = +1', 'f(0, 1, 2, 3, 4, 5, 6, 7, 8, 9)', 'exit(+1) then exit(0)', '@@ -1,3 +1,3 @@', 'v[0] = (1 + 2) * 3', 'node 22.18.0', 'port 8081, pid 84', 'pid 84 and 0 errors', 'HTTP 404 at 2026-10-22T10:30:00Z', '8 4 items, 0 errors', 'the token bucket refills every second']) {
       assert.equal(redact(text), text);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Astra SA round 7 @bb39544: A-F-04 (boundary decided by a consumed character) and A-F-10 (credential
+// span narrowing), plus a differential oracle: the 9d18c83 `redact`, frozen, test-only.
+// ---------------------------------------------------------------------------
+
+/**
+ * ORACLE — `redact` exactly as committed at 9d18c83 (sequential replace passes). Test-only: nothing
+ * under src/ imports it. It defines the floor: whatever it removed, the current `redact` must remove too.
+ */
+const ORACLE_TOKEN_PATTERNS: RegExp[] = [
+  /sk-or-v1-[A-Za-z0-9]{16,}/g,
+  /sk-ant-[A-Za-z0-9_-]{16,}/g,
+  /\bAKIA[0-9A-Z]{16}\b/g,
+  /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g,
+  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+];
+const ORACLE_SEP = String.raw`[\s.()\[\]-]{0,5}`;
+const ORACLE_VN_PHONE = new RegExp(
+  String.raw`(?<![\w.])[(\[]?\s*(?:(?:\+[\s.-]{0,3})?(?:0${ORACLE_SEP}0${ORACLE_SEP})?8${ORACLE_SEP}4(?:${ORACLE_SEP}0)?|0)(?:${ORACLE_SEP}\d){9,10}(?!\d)`,
+  'g',
+);
+const ORACLE_SECRET_ASSIGNMENT =
+  /(["']?)\b((?:[a-z]+_)?(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|private[_-]?key))\1(\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}]+)/gi;
+function oracleRedact(text: string): string {
+  let out = text;
+  for (const pattern of ORACLE_TOKEN_PATTERNS) out = out.replace(pattern, '[REDACTED]');
+  return out
+    .replace(/\b(Bearer)\s+[A-Za-z0-9._~+/=-]{12,}/gi, '$1 [REDACTED]')
+    .replace(ORACLE_SECRET_ASSIGNMENT, (_m, q: string, key: string, sep: string, value: string) => {
+      const vq = value[0] === '"' || value[0] === "'" ? value[0] : '';
+      return `${q}${key}${q}${sep}${vq}[REDACTED]${vq}`;
+    })
+    .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s:/@]+:[^\s@]+@/gi, '$1[REDACTED]@')
+    .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[EMAIL]')
+    .replace(/-?\d{1,3}\.\d{3,}\s*,\s*-?\d{1,3}\.\d{3,}/g, '[COORDS]')
+    .replace(/\b(lat(?:itude)?|lng|lon(?:gitude)?)(\s*[:=]\s*)-?\d{1,3}\.\d+/gi, '$1$2[COORD]')
+    .replace(ORACLE_VN_PHONE, '[PHONE]')
+    .replace(/(?<![\w.])\+[\s.-]{0,3}\d{1,3}(?:[\s.()[\]-]{0,5}\d){7,13}(?![\d)\]]?\d)/g, '[PHONE]')
+    .replace(/(\/Users|\/home|[A-Za-z]:\\Users)[\/\\][^\/\\\s]+/g, '~');
+}
+
+const LABELS = ['[REDACTED]', '[INVALID_DATA]', '[EMAIL]', '[COORDS]', '[COORD]', '[PHONE]', '~'];
+
+/**
+ * Positions of `text` that `output` no longer carries: the output is kept segments and labels in order,
+ * so each kept segment is located in `text` from the running cursor; everything skipped was replaced.
+ * Returns null when a kept segment cannot be located (the alignment is then undecidable).
+ */
+function replacedPositions(text: string, output: string): Set<number> | null {
+  const labelRe = new RegExp(LABELS.map((l) => l.replace(/[[\]~]/g, '\\$&')).join('|'), 'g');
+  const kept = output.split(labelRe);
+  const replaced = new Set<number>();
+  let cursor = 0;
+  for (let k = 0; k < kept.length; k += 1) {
+    const seg = kept[k]!;
+    if (seg === '') continue;
+    const at = text.indexOf(seg, cursor);
+    if (at < 0) return null;
+    for (let i = cursor; i < at; i += 1) replaced.add(i);
+    cursor = at + seg.length;
+  }
+  for (let i = cursor; i < text.length; i += 1) replaced.add(i);
+  return replaced;
+}
+
+const R7_NEIGHBOURS = ['028.3822.1234', '10.7769, 106.7009', 'lat=10.7769', 'an.nguyen@example.com', 'a@b.vn', '/Users/devuser/work/x.ts', 'password=hunterxsecret', 'token="abc def"'];
+const R7_JOINERS = ['', ', ', ',', '; ', ' / ', ' and ', '\n'];
+const R7_CREDENTIALS = [
+  'password="hunter2', "password='hunter2", 'token="abc', "api_key='sk-or-v1-abcdefghijklmnopqrstuvwxyz", 'secret="x\'y"', "secret='x\"y'", 'password="hun\'ter2"',
+  '"api_key": "sk-or-v1-abcdefghijklmnop', 'password=hunter2"', "password=hunter2'", 'pwd="', "pwd='a", 'token=0912345678', 'secret=10.7769, 106.7009',
+];
+
+/** Every string any A-F-04 test or generator produces, plus the r7 matrix and the credential forms. */
+function r7Corpus(): string[] {
+  const corpus = new Set<string>();
+  for (const t of [
+    'reported by an.nguyen+qa@example.com; call 0912 345 678 or +84 912.345.678 or 0912345678 or (028) 3822 1234; pin at 10.7769, 106.7009; at /Users/devuser/work/x.ts and /home/runner/work/y.ts',
+    'call +84912345678, +84-912-345-678 or +84.28.3822.1234', 'latitude=10.7769 longitude=106.7009', 'lat: 10.7769, lng: 106.7009', 'lon=106.7009 lat=-10.7769',
+    'ring +84  912 345 678, 028\t3822 1234, 0912  345  678, +84 - 912 - 345 - 678, 0912 345\n678', 'customer +84 912\n   345 678 reported it; see 10.7769,\n106.7009',
+    'latitude  =  10.7769   longitude :\t106.7009', '+ 84 912 345 678 or +  84 28 3822 1234', '8 4 912 345 678', '+84 (0) 28 38 22 12 34', '+ 8 4 (0) 912 345 678', '( 0 0 8 4 ) 912 345 678', '[+84] (0) 2838221234',
+    '0912.345.678, 028.3822.1234', 'pin 10.7769, 106.7009, call 0912 345 678, mail an.nguyen@example.com, see /Users/devuser/x', 'token=0912345678, 028 3822 1234', 'secret=10.7769, 106.7009', 'api_key=10.7769,106.7009 then 0912345678',
+    '@@ -1,3 +1,3 @@', 'node 22.18.0, typescript 5.9.3', 'at 2026-10-22T10:30:00Z', 'exit code +1', 'p95 688 ms', 'cells[0][1][2] = +1', 'f(0, 1, 2, 3, 4, 5, 6, 7, 8, 9)', 'exit(+1) then exit(0)', 'v[0] = (1 + 2) * 3', 'port 8081, pid 84', 'pid 84 and 0 errors', '8 4 items, 0 errors', 'the token bucket refills every second',
+    ...R7_CREDENTIALS,
+  ]) corpus.add(t);
+  for (const f of generatedForms()) corpus.add(f);
+  for (const f of neighbourForms()) {
+    corpus.add(f);
+    for (const n of R7_NEIGHBOURS) for (const j of R7_JOINERS) corpus.add(`${f}${j}${n}`).add(`${n}${j}${f}`);
+  }
+  return [...corpus];
+}
+
+function r7Sent(text: string): string {
+  const task = sanitizeSummary(summary({ description: text, openQuestions: [] })).task as Record<string, unknown>;
+  return String(task.description);
+}
+
+/** `sanitizeSummary` on one description: the sent text, or the typed data error it raised. */
+function r7Try(text: string): { sent: string } | { error: Error } {
+  try {
+    return { sent: r7Sent(text) };
+  } catch (e) {
+    return { error: e as Error };
+  }
+}
+const isDataError = (r: ReturnType<typeof r7Try>) => 'error' in r && r.error.name === 'InvalidSummaryData';
+
+describe('A-F-04 (Astra r7, owner 2026-10-23): phones and emails are minimized only when valid; invalid candidates are a data error', () => {
+  it('Astra r7 example: an email glued to a phone splits into two valid parts, both orders', () => {
+    for (const text of ['a@b.vn0912345678', '0912345678a@b.vn', 'an.nguyen@example.com0912 345 678', '+84 912 345 678an.nguyen@example.com', 'a@b.vn+84912345678']) {
+      const r = r7Try(text);
+      assert.ok('sent' in r, `${JSON.stringify(text)} rejected: ${'error' in r ? r.error.message : ''}`);
+      assert.ok(!/\d/.test(r.sent) && !r.sent.includes('b.vn') && !r.sent.includes('example.com'), `${JSON.stringify(text)} → ${r.sent}`);
+    }
+  });
+
+  it('two numbers run together split into valid phones; a phone next to a recognized span is clean', () => {
+    for (const [text, expected] of [
+      ['0912345678028.3822.1234', '[PHONE]'],
+      ['028.3822.12340912345678', '[PHONE]'],
+      ['0912 345 678 028 3822 1234', '[PHONE] [PHONE]'],
+      ['0912345678 10.7769, 106.7009', '[PHONE] [COORDS]'],
+      ['10.7769, 106.7009 0912345678', '[COORDS] [PHONE]'],
+      ['lat=10.7769 0912345678', 'lat=[COORD] [PHONE]'],
+      ['token="abc def"0912345678', 'token="[REDACTED]"[PHONE]'],
+      ['password=hunterxsecret0912345678', 'password=[REDACTED]'],
+      ['0912345678/Users/devuser/x', '[PHONE]~/x'],
+      ['2026-10-22 0912345678', '2026-10-22 [PHONE]'],
+    ]) {
+      const r = r7Try(text!);
+      assert.ok('sent' in r, `${JSON.stringify(text)} rejected: ${'error' in r ? r.error.message : ''}`);
+      assert.equal(r.sent, expected);
+    }
+  });
+
+  it('a candidate that is not a valid phone or email is a data error, and the error never carries the text', () => {
+    const cases: Array<[string, RegExp]> = [
+      ['0912 345 678 901', /phone/],
+      ['091234567', /phone/],
+      ['0912345678 2 items', /phone/],
+      ['+1 ( 415 ) 555-0133', /phone|country/],
+      ['+44 20 7946 0958', /phone|country/],
+      ['x0912345678', /phone|boundary/],
+      ['0912345678abc', /phone|boundary/],
+      ['/Users/devuser/work/x.ts0912345678', /phone|boundary/],
+      ['091234567810.7769, 106.7009', /phone/],
+      ['0912345678lat=10.7769', /phone|boundary/],
+      ['foo@bar', /email/],
+      ['an.nguyen@example', /email/],
+      ['an@example.com2', /email|phone/],
+      ['a@b.vn0912345', /email|phone/],
+    ];
+    for (const [text, reason] of cases) {
+      const r = r7Try(text);
+      assert.ok(isDataError(r), `${JSON.stringify(text)} was sent: ${'sent' in r ? r.sent : ''}`);
+      const message = 'error' in r ? r.error.message : '';
+      assert.match(message, reason);
+      assert.ok(!/\d{3}/.test(message) && !message.includes('@'), `error leaks data: ${message}`);
+    }
+  });
+
+  it('plain numbers, dates, versions and code are neither minimized nor rejected', () => {
+    for (const text of ['@@ -1,3 +1,3 @@', 'node 22.18.0, typescript 5.9.3', 'at 2026-10-22T10:30:00Z', 'exit code +1', 'p95 688 ms', 'cells[0][1][2] = +1', 'f(0, 1, 2, 3, 4, 5, 6, 7, 8, 9)', 'exit(+1) then exit(0)', 'v[0] = (1 + 2) * 3', 'port 8081, pid 84', 'pid 84 and 0 errors', '8 4 items, 0 errors', 'the token bucket refills every second', 'cc @namnh92 please', '0 errors, 1 warning, 0.5 s', '1,000,000 VND', 'issue #241 and PR #242']) {
+      const r = r7Try(text);
+      assert.ok('sent' in r, `${JSON.stringify(text)} rejected: ${'error' in r ? r.error.message : ''}`);
+      assert.equal(r.sent, text);
+      assert.equal(redact(text), text);
+    }
+  });
+
+  it('claimed phone × neighbour × empty joiner, both orders: minimized whole or rejected, never partly sent', () => {
+    let minimized = 0;
+    let rejected = 0;
+    for (const phone of neighbourForms()) {
+      for (const n of R7_NEIGHBOURS) {
+        for (const text of [`${phone}${n}`, `${n}${phone}`]) {
+          const r = r7Try(text);
+          if (isDataError(r)) {
+            rejected += 1;
+            continue;
+          }
+          assert.ok('sent' in r, `${JSON.stringify(text)}: ${'error' in r ? r.error.message : ''}`);
+          assert.ok(!/\d/.test(r.sent), `digits survived in ${JSON.stringify(text)}: ${r.sent}`);
+          minimized += 1;
+        }
+      }
+    }
+    assert.ok(minimized > 300 && rejected > 0, `minimized ${minimized}, rejected ${rejected}`);
+  });
+
+  it('redact (handoffs, provider error text) never throws: an invalid candidate is replaced, not kept', () => {
+    for (const text of ['x0912345678', '0912 345 678 901', 'foo@bar', '+1 415 555 0133']) {
+      const out = redact(text);
+      assert.ok(!/\d{3}/.test(out) && !out.includes('foo@bar'), `${JSON.stringify(text)} → ${out}`);
+    }
+  });
+});
+
+describe('A-F-04 (Astra r7, owner 2026-10-23): a data error is a deterministic fallback with its own category; nothing leaves', () => {
+  const bad = summary({ description: 'customer 0912 345 678 901 reported it', acceptanceCriteria: [], openQuestions: ['who?'] });
+
+  it('the router falls back with errorCategory invalid_data and does not call the provider', async () => {
+    const { provider, calls } = countingMock(() => ({ answers: intakeAnswers() }));
+    const { router, sink } = harness(provider);
+    const d = await router.decide(input({ summary: bad, checkpoint: 'ambiguity', actions: [{ kind: 'read' }] }));
+    assert.equal(calls.length, 0, 'provider was called');
+    assert.equal(d.source, 'fallback');
+    assert.equal(d.fallback, true);
+    assert.equal(String(d.errorCategory), 'invalid_data');
+    assert.ok(d.reasons.some((r) => /invalid|data/i.test(r)), d.reasons.join(' | '));
+    assert.ok(!d.reasons.join(' ').includes('0912'), 'reason carries the data');
+    const records = sink.records;
+    assert.equal(records.length, 1);
+    assert.equal(String(records[0]!.errorCategory), 'invalid_data');
+    assert.equal(records[0]!.costStatus, 'not_sent');
+    assert.equal(summarize(records)[0]!.errors.invalid_data, 1);
+  });
+
+  it('the CLI exits with the fallback outcome, not with a crash (exit 2)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'harness-invalid-'));
+    const task = join(dir, 'task.json');
+    writeFileSync(task, JSON.stringify({ ...input({ summary: bad, checkpoint: 'ambiguity', actions: [{ kind: 'read' }] }), taskId: 'T-invalid' }));
+    const cli = join(dirname(fileURLToPath(import.meta.url)), '../src/cli.ts');
+    const r = spawnSync(process.execPath, [cli, 'decide', '--input', task], { cwd: dirname(cli), env: { ...process.env, HARNESS_STATE_DIR: join(dir, 'state'), JEV_MODE: 'disabled' }, encoding: 'utf8' });
+    assert.ok(r.status === 10 || r.status === 20, `exit ${r.status}\n${r.stdout}\n${r.stderr}`);
+    assert.match(r.stdout, /"errorCategory": "invalid_data"/);
+    assert.ok(!r.stdout.includes('0912'), 'decision output carries the data');
+  });
+});
+
+describe('A-F-10 (Astra r7): a truncated or unterminated credential is removed whole', () => {
+  for (const text of R7_CREDENTIALS) {
+    it(JSON.stringify(text), () => {
+      const sent = r7Sent(`set ${text} now`);
+      const m = /^(.*?[:=]\s*)(.*)$/s.exec(text)!;
+      const [, head, value] = m as unknown as [string, string, string];
+      const q = value[0];
+      const balanced = value.length >= 2 && (q === '"' || q === "'") && value[value.length - 1] === q;
+      // Quotes stay only when both delimiters are present; otherwise the whole captured value goes.
+      const expected = balanced ? `set ${head}${q}[REDACTED]${q} now` : `set ${head}[REDACTED] now`;
+      assert.equal(sent, expected);
+    });
+  }
+});
+
+describe('A-F-04/A-F-10 differential (Astra r7): the current redact removes at least what the 9d18c83 oracle removed', () => {
+  it('the oracle is test-only: nothing under src/ names it', () => {
+    const src = join(dirname(fileURLToPath(import.meta.url)), '../src');
+    const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)]));
+    for (const file of walk(src)) assert.ok(!readFileSync(file, 'utf8').includes('oracleRedact'), file);
+  });
+
+  it('over the whole corpus, on the collapsed text, every position the oracle replaced is replaced now (redact never throws; an invalid candidate is replaced too)', () => {
+    const undecidable: string[] = [];
+    const regressions: string[] = [];
+    let compared = 0;
+    let rejected = 0;
+    for (const raw of r7Corpus()) {
+      const text = raw.replace(/\s+/g, ' ').trim();
+      const before = replacedPositions(text, oracleRedact(text));
+      const after = replacedPositions(text, redact(text));
+      if (!before || !after) {
+        undecidable.push(JSON.stringify(text));
+        continue;
+      }
+      compared += 1;
+      // A data error means the summary is never sent, which satisfies "nothing sensitive leaves" by itself
+      // (owner rule 2026-10-23); such inputs are counted, not compared.
+      if (redact(text).includes('[INVALID_DATA]')) {
+        rejected += 1;
+        continue;
+      }
+      // Letters and digits carry the information; a blank or a comma the oracle swallowed with a bogus
+      // coordinate pair (`822.1234, 028.3822`) or a leading space its phone rule took is not a leak.
+      const lost = [...before].filter((i) => !after.has(i) && /[A-Za-z0-9]/.test(text[i]!));
+      if (lost.length) regressions.push(`${JSON.stringify(text)}: oracle removed ${JSON.stringify(lost.map((i) => text[i]).join(''))} at ${lost.join(',')} — now kept (${redact(text)})`);
+    }
+    assert.ok(compared > 1000, `corpus too small: ${compared} compared, ${rejected} rejected as data errors`);
+    assert.deepEqual(regressions, [], `${regressions.length} regressions:\n${regressions.slice(0, 20).join('\n')}`);
+    // Where the property cannot be decided, and why: the oracle synthesises a closing quote for an
+    // unterminated quoted credential value (`password="hunter2` → `password="[REDACTED]"`), so its output
+    // carries a character the input never had and the kept segments cannot be aligned. Those inputs are
+    // the unbalanced-quote credentials, and A-F-10 asserts their exact output directly.
+    const unbalancedQuote = (t: string) => /[:=]\s*(["']).*$/s.test(t) && !/[:=]\s*(["'])[^"']*\1(\s|$)/.test(t);
+    const unexplained = undecidable.filter((j) => !unbalancedQuote(JSON.parse(j) as string));
+    assert.deepEqual(unexplained, [], `alignment undecidable outside the unbalanced-quote class: ${unexplained.join(' | ')}`);
   });
 });
