@@ -1,0 +1,18 @@
+{
+  "name": "gogo-ai-harness",
+  "private": true,
+  "type": "module",
+  "description": "GoGo AI Harness \u2014 deterministic policy engine, JEV decision router, loop and budget controls (GoGo-Infra#241).",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "decide": "node src/cli.ts decide"
+  },
+  "devDependencies": {
+    "@types/node": "22.18.0",
+    "typescript": "5.9.3"
+  }
+}

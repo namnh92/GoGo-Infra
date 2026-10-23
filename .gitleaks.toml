@@ -54,6 +54,13 @@ regexes = [
   # matching the moment the line moves and silently protects nothing.
   '''(?:rediss?|postgres(?:ql)?)://[^:@\s]*:\$\{?[A-Za-z_][A-Za-z0-9_]*\}?@''',
   '''EXAMPLE|PLACEHOLDER|CHANGEME|xxxxx''',
+  # Fake credentials the harness redaction tests feed through sanitize.ts (GoGo-Infra#241,
+  # PR #242 A-F-04/A-F-10). Anchored to the exact detected Secret values (PR #242 A-F-12):
+  # unanchored, `hunterxsecret` also silenced a postgres URL whose username was that word.
+  # A longer value, another rule's match, or any other harness/test value still trips;
+  # scripts/ci/gitleaks-rules.test.sh pins both directions.
+  '''^sk-or-v1-abcdefghijklmnop(?:qrstuvwxyz)?$''',
+  '''^hunterxsecret0912(?:345678)?$''',
 ]
 paths = [
   '''\.env\.example$''',

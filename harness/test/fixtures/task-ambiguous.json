@@ -1,0 +1,16 @@
+{
+  "taskId": "EXAMPLE-1",
+  "checkpoint": "intake",
+  "summary": {
+    "title": "Show the group budget on the plan screen",
+    "description": "Members want to see the budget. Unclear whether guests see it too.",
+    "acceptanceCriteria": [],
+    "openQuestions": ["Should guests see the budget?"],
+    "labels": ["feature"],
+    "paths": ["src/features/plans/"],
+    "searchedSources": [],
+    "rules": ["Money is integer minor units", "member/guest cannot finalize plans"]
+  },
+  "scope": ["src/features/plans/"],
+  "actions": [{ "kind": "read" }, { "kind": "edit_in_scope", "target": "src/features/plans/" }, { "kind": "test" }]
+}

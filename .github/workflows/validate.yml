@@ -150,6 +150,37 @@ jobs:
       - name: node --test
         run: node --test workers/share-link/test/worker.test.mjs
 
+  harness:
+    name: AI harness tests and typecheck
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: harness
+    steps:
+      - uses: actions/checkout@v4
+
+      # GoGo-Infra#241 / ADR-0013. Runtime is zero-dependency TypeScript run by
+      # Node's type stripping (22.18+); the only installs are the compiler and
+      # Node's types, for the typecheck. Every test runs the mock or disabled
+      # provider: no job here holds an OpenRouter or Anthropic key, and none
+      # may — paid inference is never a CI side effect.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: install (typecheck only)
+        run: pnpm install --frozen-lockfile --ignore-workspace
+
+      - name: typecheck
+        run: pnpm typecheck
+
+      - name: node --test
+        run: node --test test/*.test.ts
+
   scripts:
     name: shellcheck
     runs-on: ubuntu-latest

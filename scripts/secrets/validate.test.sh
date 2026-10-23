@@ -242,7 +242,9 @@ done
 # Omitting a profile must not be a way to pass. This is the same failure as an
 # unreadable namespace: nothing was checked, so nothing can be claimed.
 probe="$(mktemp -d)"
-sed 's/^    enabled: \[dev\]/    enabled: []/; s/^    planned: \[staging, prod\]/    planned: []/' \
+# `planned: [dev]` too: a capability planned for dev only (ai_harness_live_decisions,
+# GoGo-Infra#241) still names the environment, and the probe is "names nothing".
+sed 's/^    enabled: \[dev\]/    enabled: []/; s/^    planned: \[staging, prod\]/    planned: []/; s/^    planned: \[dev\]/    planned: []/' \
   "${ROOT}/config/secrets.manifest.yml" > "${probe}/secrets.manifest.yml"
 mkdir -p "${probe}/scripts/lib" "${probe}/config"
 mv "${probe}/secrets.manifest.yml" "${probe}/config/secrets.manifest.yml"
