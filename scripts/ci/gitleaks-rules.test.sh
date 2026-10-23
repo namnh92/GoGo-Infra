@@ -35,7 +35,11 @@ pass=0; fail=0
 # The generated password also makes the test stronger than a hard-coded one: it
 # proves the rule matches on shape, not on a string someone may have quietly
 # added to an allowlist.
-FAKE_PW="$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 22)"
+#
+# Letters are never adjacent: gitleaks drops a generic-api-key match whose secret
+# contains one of its stopwords (`host`, `mocha`…, any case), and a random run of
+# letters spelled one about once in 40 runs — two cases then reported 0 findings.
+FAKE_PW="$(python3 -c 'import secrets, string; print("".join(secrets.choice(string.ascii_letters) + secrets.choice(string.digits) for _ in range(11)))')"
 RD="redis""s://"
 PG="postgre""sql://"
 PGS="postgre""s://"
