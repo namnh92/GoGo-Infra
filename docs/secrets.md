@@ -528,6 +528,64 @@ ceiling to name `/gogo/ci/<env>/…`, but no role names `store/*` and none shoul
 workstation, not in CI. When a release job does arrive, give it a role whose ceiling names exactly
 the rows that lane needs, never the `ci` tree.
 
+## Agent GitHub App (GoGo-Infra#250)
+
+Pull requests opened by Claude sessions were authored by the owner's own account, so nobody
+could approve them and `require_code_owner_reviews` could not be switched on without locking
+every agent PR behind an admin bypass. The agent gets its own identity instead: a GitHub App,
+whose pull requests are authored by `<app>[bot]`. A `[bot]` account is not billed as a Sentry
+Seer active contributor; a second user account would be.
+
+### Creating the App (owner, web only)
+
+GitHub → Settings → Developer settings → GitHub Apps → New GitHub App:
+
+- Webhook **off** (no webhook secret, no OAuth client secret is needed).
+- Repository permissions: Contents, Pull requests, Issues **read/write**; Metadata, Checks,
+  Actions **read**. Nothing else — in particular no Workflows, Administration, Secrets,
+  Environments or Deployments, so the agent cannot edit a workflow, branch protection or a
+  secret whatever a session tries.
+- Installable on **this account only**; install it on the selected GoGo repositories.
+
+### Storing it
+
+Three rows under `ci` (`config/secrets.manifest.yml`):
+
+```bash
+./scripts/secrets/put.sh dev github/agent-app-private-key < ~/Downloads/<app>.<date>.private-key.pem
+./scripts/secrets/put.sh dev github/agent-app-id String               # App page → About → App ID
+./scripts/secrets/put.sh dev github/agent-app-installation-id String  # …/settings/installations/<id>
+rm ~/Downloads/<app>.*.private-key.pem
+```
+
+The key goes in by redirect: typed at the prompt, `put.sh` reads one line and a `.pem` has many.
+
+### Using it
+
+```bash
+GH_TOKEN="$(./scripts/secrets/exec-with.sh dev \
+    github/agent-app-private-key github/agent-app-id github/agent-app-installation-id -- \
+    ./scripts/secrets/github-app-token.sh --repo GoGo-Infra)" \
+  gh pr create --repo namnh92/GoGo-Infra …
+```
+
+`github-app-token.sh` signs a 10-minute RS256 JWT and exchanges it for a one-hour installation
+token, narrowed to the `--repo` names when given. The key and the JWT reach `openssl` and `curl`
+through pipes only; stdout is the token; it refuses to print to a terminal (pass `--print` to
+override) and refuses `set -x`. Tests: `scripts/secrets/github-app-token.test.sh`.
+
+### Revoking
+
+Delete the private key on the App page (or uninstall the App): every token minted from it stops
+working within the hour, and no new one can be minted. To rotate, generate a second key, store
+it, mint one token with it, then delete the old one.
+
+### Turning on the code-owner gate
+
+Only after agent sessions open pull requests with this token: branch protection on `develop` →
+*Require a pull request before merging* → *Require review from Code Owners*. Before that, every
+agent PR is still authored by the owner and could only be merged by admin bypass.
+
 ## Why Terraform does not manage values
 
 ```hcl
