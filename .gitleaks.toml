@@ -54,6 +54,12 @@ regexes = [
   # matching the moment the line moves and silently protects nothing.
   '''(?:rediss?|postgres(?:ql)?)://[^:@\s]*:\$\{?[A-Za-z_][A-Za-z0-9_]*\}?@''',
   '''EXAMPLE|PLACEHOLDER|CHANGEME|xxxxx''',
+  # Fake credentials the harness redaction tests feed through sanitize.ts (GoGo-Infra#241,
+  # PR #242 A-F-04/A-F-10). Pinned by value, not by path or fingerprint: the same literal
+  # anywhere else is still a fixture, and any other value in harness/test/ still trips.
+  # An alphabet run as an OpenRouter key and the word "hunterxsecret" are not real secrets.
+  '''sk-or-v1-abcdefghijklmnop''',
+  '''hunterxsecret''',
 ]
 paths = [
   '''\.env\.example$''',
