@@ -151,26 +151,25 @@ nothing may fit.
 **D-5 State.** A sanitized `TaskSummary` — title, description, acceptance criteria, open
 questions, labels, paths (not contents), sources already searched, quoted rules — redacted for
 credentials and minimized for personal data, capped at 8,000 characters. **Phone numbers and email
-addresses are minimized only when valid** (owner decision 2026-10-23, PR #242 A-F-04): a Vietnamese
-number of the current plan (mobile `0[35789]` + 8 digits, landline `02` + 7–8 digits, also as `84`,
-`+84`, `0084` with an optional trunk `0`, separators of up to five spaces, dots, dashes, parentheses
-or brackets between any two digits) or a well-formed `local@domain.tld` address is replaced whole;
-a candidate that is not valid — wrong length, glued to a word or to another number without a
-clear boundary, a non-Vietnamese number, an `@` token that is not an address — is a **data
-error**: `sanitizeSummary` raises `InvalidSummaryData` (field names and reason codes, never the
-text), the router answers with its deterministic fallback under `errorCategory: invalid_data`, the
-decision log, metrics and `status` show that category, and nothing leaves the machine. Values run
-together are split into valid parts first; one invalid part is a data error. Coordinate pairs,
-labeled coordinates and home-directory names are minimized by shape. The work is done in layers over
-the whitespace-collapsed text that is sent — shapes, coordinate pairs, addresses, numbers — each on
-the text with the earlier spans masked, overlapping spans merged and replaced once, so no rule sees
-text another rule changed and no boundary is decided by a removed character. A differential test
-holds the earlier sequential implementation as a frozen oracle: nothing it removed is sent now.
-The provider's `session_id` is a digest of the task id, never the id. Not caught by pattern, and
-therefore part of what the privacy review in D-2 attests to: prose names, streets and places; DMS or
-whitespace-only coordinate pairs; a secret under an unlisted key. The full outbound contract, with
-the valid / data-error / not-seen table, is in `docs/ai-harness.md`. Identical context is answered
-from cache.
+addresses are checked by regex** (owner decision 2026-10-23, PR #242 A-F-04/A-F-11): five steps over
+the whitespace-collapsed text — (1) credentials and home directories by shape; (2) tokens split on
+whitespace and `, ; ( ) [ ] < > " '`, a candidate being any token with an `@` or a digit token with 8
+or more digits, a space-written phone being the longest window of up to five tokens; (3) two anchored
+regexes, `VN_PHONE` (mobile `0[35789]` + 8, landline `02` + 9, also `84`/`+84`/`0084` with an optional
+trunk `0`, one `.`, `-` or space between digits) and `EMAIL` (one `@`, dot-atom local part, labelled
+domain, alphabetic TLD), nothing cleverer; (4) one split of a non-matching candidate into phone +
+address or address + phone, otherwise a **data error** — `sanitizeSummary` raises `InvalidSummaryData`
+(field names and reason codes, never the text), the router answers with its deterministic fallback
+under `errorCategory: invalid_data`, the decision log, metrics and `status` show that category, and
+nothing leaves the machine; (5) coordinates by shape, then a post-check on what would be sent: a
+surviving `@` or any run of 8 or more digits outside a placeholder (an ISO date or timestamp aside) is
+a data error, so the invariant holds whatever the earlier steps missed. Anything ambiguous is a data
+error — an accepted cost, never a leak. A differential test holds an earlier implementation as a
+frozen oracle: nothing it removed is sent now. The provider's `session_id` is a digest of the task id,
+never the id. Not caught by pattern, and therefore part of what the privacy review in D-2 attests to:
+prose names, streets and places; DMS or whitespace-only coordinate pairs; a secret under an unlisted
+key. The full outbound contract, with the valid / data-error / not-seen table, is in
+`docs/ai-harness.md`. Identical context is answered from cache.
 
 **D-6 Loop controls.** Three repair attempts per failure class, then escalate; the same error
 signature twice in a row → change approach; eight attempts per task; ten JEV calls per task;

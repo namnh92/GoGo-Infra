@@ -69,32 +69,40 @@ One request per JEV call, to OpenRouter, built by `sanitizeSummary` and the ques
 | `session_id` | 16-hex digest of `taskId` | the task id itself is never sent |
 | `model` | the pinned model id | — |
 
-Minimization (`harness/src/runtime/sanitize.ts`) runs on each field after its whitespace is
-collapsed to single spaces — the text that is sent. **Phone numbers and email addresses are
-minimized only when valid** (owner decision 2026-10-23): a valid Vietnamese number or a well-formed
-address is replaced; text that looks like one but is not valid — a Vietnamese prefix with the wrong
-number of digits, an `@` token that is not an address, a number glued to a word, a non-Vietnamese
-number — is a **data error**: `sanitizeSummary` raises `InvalidSummaryData` (field names and reason
-codes, never the text), `decide` answers deterministically with `errorCategory: invalid_data`, and
-no request leaves the machine. Values run together (`a@b.vn0912345678`, `0912345678028.3822.1234`,
-`10.7769, 106.70090912.345.678`) are split into valid parts first; if any part is invalid, data error.
-When two readings are both valid (`+84 912 345 678an@b.vn` is also one address with local part
-`678an`), the reading that minimizes more — phone, then address — wins. Text that is never sent
-(handoffs, a provider's error message) goes through `redact`, which does not raise: there an invalid
-candidate is replaced by `[INVALID_DATA]`, so no handoff carries it either.
-Everything is found in layers over that same text — credentials and shapes, then coordinate pairs,
-then addresses, then numbers — each layer on the text with the earlier layers' spans masked out, so no
-rule reads text another rule changed and no boundary is decided by a character another span removes.
-Overlapping spans merge under the strictest label and each is replaced once. A differential test
-keeps the earlier sequential implementation as a frozen oracle and checks, over every form the tests
-generate, that nothing it removed is sent now (letters and digits; a data error satisfies it).
-`JEV_PRIVACY_REVIEWED` attests to exactly this coverage:
+Minimization (`harness/src/runtime/sanitize.ts`) runs on each field in five steps over the
+whitespace-collapsed text — the text that is sent (owner decision 2026-10-23: phone numbers and
+email addresses are checked by regex; anything ambiguous is a data error, never a leak):
+
+1. **Credentials and home directories** are replaced by shape (`[REDACTED]`, `~`).
+2. **Tokens**: the text is split on whitespace and on `, ; ( ) [ ] < > " '`; trailing `. ? ! :` is
+   dropped; `. - + @` never split a token. A token is a *candidate* when it holds an `@`, or is made
+   of digits and phone separators with 8 or more digits (an ISO date or timestamp such as
+   `2026-10-22T10:30:00Z` is plain). A phone written with spaces is the longest window of up to five
+   tokens that matches `VN_PHONE`.
+3. **Two anchored regexes** decide validity, nothing else: `VN_PHONE` and `EMAIL` (table below,
+   unit-tested in `harness/test/pii-regex.test.ts`). A match → `[PHONE]` / `[EMAIL]`.
+4. **One split**: a candidate that matches neither is tried as exactly two parts, phone + address or
+   address + phone (`a@b.vn0912345678`); both valid → both replaced. Otherwise, and whenever digits
+   are glued to an address that opens with digits (`0912 345 6781a@b.vn`), or a token ending in a digit
+   stands right before a number (`x.ts+84 (0) 912 345 678`; an ISO date excepted), it is a **data error**:
+   `sanitizeSummary` raises `InvalidSummaryData` (field names and reason codes, never the text),
+   `decide` answers deterministically with `errorCategory: invalid_data`, and nothing leaves.
+5. **Coordinates** by shape, then a **post-check** on what would be sent: a surviving `@` (a lone
+   `@@` hunk marker aside), or a run of 8 or more digits — one `.`, `-` or space between digits —
+   outside a placeholder and not an ISO date, is a data error. This holds the invariant whatever the
+   steps above missed.
+
+Text that is never sent (handoffs, a provider's error message) goes through `redact`, which does not
+raise: there an invalid candidate is replaced by `[INVALID_DATA]`. A differential test keeps an
+earlier implementation as a frozen oracle and checks, over every form the tests generate, that nothing
+it removed is sent now (letters and digits; a data error satisfies it). `JEV_PRIVACY_REVIEWED`
+attests to exactly this coverage:
 
 | Data | Valid → replaced | Candidate but invalid → data error, not sent | Not seen (residual) |
 | --- | --- | --- | --- |
 | Credential | token shapes (`sk-or-v1-…`, `sk-ant-…`, `AKIA…`, `gh?_…`, `github_pat_…`, JWT, PEM), `Bearer …`, `key=value` / `"key": "value"` for password/secret/token/api-key names (quotes kept only when both are present), `scheme://user:pass@` | — | a secret under a name not in that list |
-| Email | `local@domain.tld`: local part of letters, digits, `. _ % + -`; domain labels of letters, digits, `-`; a TLD of two or more letters | an `@` with text on both sides that is not such an address (`foo@bar`, `an@example`, `deploy@host`), or one glued to digits that do not form a valid phone (`an@example.com2`) | an address written as `name at domain`; a bare handle (`@namnh92`) is not a candidate |
-| Phone | Vietnamese numbers of the current plan, replaced whole: mobile `0` + one of `3 5 7 8 9` + 8 digits; landline `0` + `2` + 7–8 digits (area code included); each also as `84`, `+84` or `0084` with an optional trunk `0` in place of the leading `0`. Between any two consecutive digits — prefix and trunk included — up to five of space, dot, dash, `(`, `)`, `[`, `]`; between `+` and `84` up to three of space, dot, dash; an opening `(` or `[` with spaces before the number. Several numbers run together (`0912345678028.3822.1234`, `0912 345 678 028 3822 1234`) split into their valid parts. `harness/test/review-sa-r1.test.ts` generates these forms | a numeric run that starts with a Vietnamese prefix and carries 8 or more digits, or any `+` run with 7 or more, that does not partition into valid numbers: wrong length (`091234567`, `0912 345 678 901`), glued to another number by spaces, dots or dashes alone (`0912345678 2 items`, `0912345678 10.7769` — write a comma, a semicolon or a word between them: `0912345678, 2 items`), glued to a word (`x0912345678`, `0912345678abc`, `x.ts0912345678`), a non-Vietnamese number (`+1 ( 415 ) 555-0133`, `+44 20 7946 0958`: not supported); a plain run that hides a valid number mid-way (`106.70090912345678`) | fewer than 8 digits in all (`0912345`, `0 errors`) is a plain number; digits written as words; separators of other characters (`/`, `·`). A date, version, PR number or count is a plain number and passes unchanged |
+| Email | `EMAIL`: one `@`; local part of dot-separated atoms of letters, digits, `_ % + -` (no leading, trailing or doubled dot); domain labels of letters, digits and inner hyphens; at least one dot; a TLD of two or more letters | any other token with an `@` (`foo@bar`, `a@b.vn@c.vn`, `a..b@c.vn`, `deploy@host`, a handle `@namnh92`), or one glued to digits that no single split resolves | an address written as `name at domain`; `'` is a delimiter, so `o'neil@example.com` is read as `o'` + `neil@example.com` |
+| Phone | `VN_PHONE`: mobile `0` + one of `3 5 7 8 9` + 8 digits; landline `0` + `2` + 9 digits; the leading `0` also as `84`, `+84` or `0084` with an optional trunk `0`; at most one `.`, `-` or space between any two digits; brackets around the prefix or a group are delimiters, so `(028) 3822 1234`, `(+84) 912 345 678`, `+84 (0) 912 345 678` are read. Up to five space-separated tokens form one number. The generator in `harness/test/review-sa-r1.test.ts` spells this claim out | a digit token with 8 or more digits that is not `VN_PHONE` (`091234567`, `0912345678028.3822.1234`, `8 4 912 345 678`, `+84 - 912 - 345 - 678`); a non-Vietnamese number (`+1 ( 415 ) 555-0133`, `+44 20 7946 0958`: not supported — its digits form an 8+ run); a number glued to a word or path such as `x0912345678`, `x.ts0912345678`), digits glued to an address that opens with digits, and any run of 8 or more digits the post-check still sees | fewer than 8 digits is a plain number (`0912345`, `pid 84`, `0.5`); a number followed by a separate short number stays as it is (`0912 345 678 901` → `[PHONE] 901`); `+ 84 912 345 678` is read as `84 912 345 678` with the `+` left over; digits written as words. Counts, versions, PR numbers and ISO dates pass unchanged; coordinates keep at most 7 decimals, more is an 8+ run |
 | Coordinates | decimal pairs `lat, lon` with ≥ 3 decimals, not part of a dotted number on either side; a labeled value `lat`/`latitude`/`lng`/`lon`/`longitude` `=` or `:` a decimal. A pair glued to a phone (`10.7769, 106.70090912.345.678`) gives the phone its digits back | a pair followed by `.digit` that no split resolves | DMS (`10°46'37"N`), a bare pair separated by whitespace only, plus codes, geohashes, a place name |
 | Home directory | `/Users/<name>`, `/home/<name>`, `C:\Users\<name>` | — | a user name elsewhere in a path or in prose |
 | Prose | — | — | a person's name, a street, a place, an account id written as text |

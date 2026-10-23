@@ -8,15 +8,15 @@
  * this file does not know is dropped rather than passed through.
  *
  * Personal data is handled the same way (ai-guardrails.md, PR #242 A-F-04;
- * owner decision 2026-10-23): a valid Vietnamese phone number or a well-formed
- * email address is minimized; text that looks like one but is not valid — a
- * run with a Vietnamese prefix and the wrong length, an `@` token without a
- * proper address, a number glued to a word — is a data error, and the summary
- * is not sent (`InvalidSummaryData`). Values run together are split into
- * valid parts first. Coordinates and home-directory names are minimized by
- * shape. Everything is found in layers over the whitespace-collapsed text that
- * is actually sent, spans merge, each is replaced once, and no layer reads text
- * another layer changed. This is still pattern matching: a name or a street
+ * owner decision 2026-10-23, "dùng regex để check format"): a token that is
+ * a valid Vietnamese phone number or a well-formed email address — two
+ * anchored regexes, nothing cleverer — is minimized; a token that looks like
+ * one but does not match, or is glued to something that no single split
+ * resolves, is a data error, and the summary is not sent
+ * (`InvalidSummaryData`). A post-check on what would be sent closes the
+ * class: no `@` and no 8+-digit run outside a placeholder, whatever the steps
+ * before missed. Credentials, coordinates and home-directory names are
+ * minimized by shape. This is still pattern matching: a name or a street
  * written as prose passes through, which is why live mode also needs
  * JEV_PRIVACY_REVIEWED=yes (config.ts) and docs/ai-harness.md lists exactly
  * what is caught, what is rejected and what is not seen.
@@ -50,35 +50,29 @@ export type TaskSummary = {
   scopeChange?: string;
 };
 
-/**
- * A rule finds spans that must not leave the machine without being read as
- * data. `span` narrows the match to the part that is replaced (a credential's
- * value, not its key; a labeled coordinate's number, not its label). `rank`
- * decides the label when spans overlap: the strictest wins.
- */
-type Rule = { pattern: RegExp; label: string; rank: number; span?: (m: RegExpExecArray) => [number, number] };
-type Span = { start: number; end: number; label: string; rank: number };
+/** A credential or home-directory rule: a span by shape, `span` narrowing the match to what is replaced. */
+type Rule = { pattern: RegExp; label: string; span?: (m: RegExpExecArray) => [number, number] };
+type Span = { start: number; end: number; label: string };
 
-const REDACTED = { label: '[REDACTED]', rank: 5 };
-const INVALID = { label: '[INVALID_DATA]', rank: 6 };
-const whole = (m: RegExpExecArray): [number, number] => [m.index, m.index + m[0].length];
+const REDACTED = '[REDACTED]';
+const INVALID = '[INVALID_DATA]';
 
-/** Credentials, coordinates and home directories: recognised by shape, replaced as found. */
+/** Step 1 — credentials and home directories, replaced by shape before anything else. Their labels hold no digit and no `@`. */
 const SHAPE_RULES: Rule[] = [
-  { pattern: /sk-or-v1-[A-Za-z0-9]{16,}/g, ...REDACTED }, // OpenRouter
-  { pattern: /sk-ant-[A-Za-z0-9_-]{16,}/g, ...REDACTED }, // Anthropic
-  { pattern: /\bAKIA[0-9A-Z]{16}\b/g, ...REDACTED }, // AWS access key id
-  { pattern: /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, ...REDACTED }, // GitHub tokens
-  { pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, ...REDACTED },
-  { pattern: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, ...REDACTED }, // JWT
-  { pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, ...REDACTED },
-  { pattern: /\b(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}/gi, ...REDACTED, span: (m) => [m.index + m[1]!.length, m.index + m[0].length] },
-  // key=value, key: value and their quoted (JSON / YAML / dict) forms — PR #242 r3 F-05. The value is
-  // the span. Quotes stay only when both delimiters are present (A-F-10): an unterminated `"hunter2` is
-  // the fallback alternative and goes whole, last character included.
+  { pattern: /sk-or-v1-[A-Za-z0-9]{16,}/g, label: REDACTED }, // OpenRouter
+  { pattern: /sk-ant-[A-Za-z0-9_-]{16,}/g, label: REDACTED }, // Anthropic
+  { pattern: /\bAKIA[0-9A-Z]{16}\b/g, label: REDACTED }, // AWS access key id
+  { pattern: /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, label: REDACTED }, // GitHub tokens
+  { pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, label: REDACTED },
+  { pattern: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, label: REDACTED }, // JWT
+  { pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, label: REDACTED },
+  { pattern: /\b(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}/gi, label: REDACTED, span: (m) => [m.index + m[1]!.length, m.index + m[0].length] },
+  // key=value, key: value and their quoted (JSON / YAML / dict) forms — PR #242 r3 F-05. The value is the
+  // span. Quotes stay only when both delimiters are present (A-F-10): an unterminated `"hunter2` is the
+  // fallback alternative and goes whole, last character included.
   {
     pattern: /(["']?)\b((?:[a-z]+_)?(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|private[_-]?key))\1(\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}]+)/gi,
-    ...REDACTED,
+    label: REDACTED,
     span: (m) => {
       const value = m[4]!;
       const q = value[0];
@@ -87,37 +81,40 @@ const SHAPE_RULES: Rule[] = [
       return [start + (balanced ? 1 : 0), start + value.length - (balanced ? 1 : 0)];
     },
   },
-  { pattern: /\b([a-z][a-z0-9+.-]*:\/\/)[^\s:/@]+:[^\s@]+@/gi, ...REDACTED, span: (m) => [m.index + m[1]!.length, m.index + m[0].length - 1] },
-  { pattern: /(\/Users|\/home|[A-Za-z]:\\Users)[/\\][^/\\\s]+/g, label: '~', rank: 1 },
+  { pattern: /\b([a-z][a-z0-9+.-]*:\/\/)[^\s:/@]+:[^\s@]+@/gi, label: REDACTED, span: (m) => [m.index + m[1]!.length, m.index + m[0].length - 1] },
+  { pattern: /(\/Users|\/home|[A-Za-z]:\\Users)[/\\][^/\\\s]+/g, label: '~' },
 ];
 
 /**
- * Stands in for a span already found while the next layer runs. Not a word
- * character, not a digit, not a phone separator, not an email character — so
- * it is a clean boundary and never joins two tokens — and no label contains it.
+ * Step 3 — the two formats (owner decision 2026-10-23: "dùng regex để check
+ * format"). Anchored; a token is valid only when it matches whole.
+ *
+ * A Vietnamese number of the current plan: mobile `0` + `3 5 7 8 9` + 8
+ * digits, landline `0` + `2` + 9 digits; the leading `0` may be written as
+ * `84`, `+84` or `0084` with an optional trunk `0`; at most one `.`, `-` or
+ * space between any two digits.
  */
-const MASK = '\u0000';
+export const VN_PHONE = /^(?:(?:\+84|0084|84)(?:[ .-]?0)?|0)[ .-]?(?:[35789](?:[ .-]?\d){8}|2(?:[ .-]?\d){9})$/;
+/**
+ * A well-formed address: one `@`; a local part of dot-separated atoms of
+ * letters, digits, `_ % + -` (no leading, trailing or doubled dot); domain
+ * labels of letters, digits and inner hyphens; at least one dot; a TLD of
+ * two or more letters.
+ */
+export const EMAIL = /^[A-Za-z0-9_%+-]+(?:\.[A-Za-z0-9_%+-]+)*@(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$/;
+/** The one 8+-digit shape that is a plain value, not a candidate: an ISO date or timestamp. */
+export const ISO_DATE_TIME = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
+/** A token ending in a decimal fraction of up to seven digits (`lat=10.7769`, `v1.2`, a price): plain, so one right before a number does not make it ambiguous. */
+const ENDS_WITH_DECIMAL = /\d\.\d{1,7}$/;
 
-/** Separator run the contract allows between two consecutive digits of a Vietnamese number. */
-const SEP = String.raw`[\s.()\[\]-]{0,5}`;
-/** A run of digits with claimed separators, optionally opened by a bracket and a `+`. Spaces only after those: a run never begins on the blank before its first digit. */
-const NUMERIC_RUN = new RegExp(String.raw`(?:[(\[]\s*)?(?:\+[\s.-]{0,3})?\d(?:${SEP}\d)*`, 'g');
-/** A coordinate pair, not part of a dotted number on its left (`0912.345.678, 028.3822.1234` has none); the second fraction is captured so a glued phone can be given back. */
-const COORD_PAIR = /(?<![\d.])-?\d{1,3}\.\d{3,}\s*,\s*-?\d{1,3}\.(\d{3,})/g;
-/** A labeled coordinate; the fraction is captured so a glued phone can be given back (`lat=10.77690912 345 678`). */
-const LABELED_COORD = /\b(?:lat(?:itude)?|lng|lon(?:gitude)?)\s*[:=]\s*-?\d{1,3}\.(\d+)/gi;
-/** The text around an `@` that could be an address, up to the last letter or digit. */
-const EMAIL_CANDIDATE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]*[A-Za-z0-9]/g;
-const VALID_EMAIL = /^[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}$/;
-/** Fewer digits than this is a plain number, whatever it starts with (owner rule 2026-10-23). */
-const PHONE_CANDIDATE_MIN_DIGITS = 8;
+/** A token made of digits (and phone separators, an opening `+`) with 8 or more digits. */
+const DIGIT_TOKEN = /^\+?\d(?:[ .-]?\d)*$/;
+const MIN_CANDIDATE_DIGITS = 8;
+/** Phones written with spaces span this many tokens at most. */
+const MAX_PHONE_TOKENS = 5;
 
 /** Why a field cannot be sent. Codes only — never the matched text. */
-export type DataProblem =
-  | 'phone_invalid_format'
-  | 'phone_unsupported_country'
-  | 'phone_ambiguous_boundary'
-  | 'email_malformed';
+export type DataProblem = 'phone_invalid_format' | 'phone_ambiguous_boundary' | 'email_malformed';
 
 /**
  * Raised by `sanitizeSummary` when a field holds something that looks like a
@@ -136,98 +133,92 @@ export class InvalidSummaryData extends Error {
 
 export type Minimized = { text: string; problems: DataProblem[] };
 
+type Token = { start: number; end: number; text: string };
+
 /**
- * Minimization in layers over the text exactly as it will be sent (PR #242
- * A-F-04, Astra r6/r7; owner decision 2026-10-23).
+ * Minimization in five steps over the whitespace-collapsed text (owner
+ * decision 2026-10-23; PR #242 A-F-04/A-F-11, Astra r8):
  *
- *  1. Shapes — credentials, home directories — are found on the original
- *     text, every overlapping candidate included, merged, and masked out
- *     (same length, positions unchanged) so no later layer sees them or is
- *     bounded by them. Then coordinates, pairs and labeled values; one glued
- *     to a phone gives the phone's digits back or is a data problem.
- *  2. Email candidates (text around an `@`) on the masked text: a valid
- *     address is minimized; a candidate that is not valid is split into a
- *     valid address followed by a valid phone, or it is a data problem.
- *  3. Phone candidates on the text with emails masked too: a numeric run that
- *     starts with a Vietnamese prefix (`0`, `84`, `+84`, `0084`) and carries
- *     at least 8 digits, or any `+`-run with at least 7. It must partition
- *     entirely into valid Vietnamese numbers of the current plan — mobile
- *     `0[35789]` + 8 digits, landline `02` + 7–8 digits, each with `84`/`+84`/
- *     `0084` and an optional trunk `0` in place of the leading `0` — one, or
- *     several run together — and must not touch a word character on either
- *     side; otherwise it is a data problem. Anything else numeric is a plain
- *     number and stays.
+ *  1. credentials and home directories, by shape;
+ *  2. tokens — split on whitespace and `, ; ( ) [ ] < > " '`, trailing
+ *     `. ? ! :` dropped; a token is a candidate when it holds an `@`, or is a
+ *     digit token with 8 or more digits (an ISO date or timestamp is plain);
+ *     a phone written with spaces is the longest window of up to 5 tokens
+ *     that matches {@link VN_PHONE};
+ *  3. a candidate is valid only when {@link VN_PHONE} or {@link EMAIL}
+ *     matches it whole → `[PHONE]` / `[EMAIL]`;
+ *  4. otherwise exactly one split into two parts that each match one of the
+ *     two → both replaced; otherwise a data problem;
+ *  5. a post-check on what would be sent — a surviving `@`, or a run of 8 or
+ *     more digits outside a placeholder (brackets and phone separators
+ *     between them), is a data problem, so the invariant holds whatever the
+ *     steps above missed — then coordinates by shape, which add nothing.
  *
- * Every span is replaced once, touching or overlapping spans merge under the
- * strictest label. A data problem is replaced too (`[INVALID_DATA]`, so a
- * handoff or an error message never carries it) and reported, so a summary
- * with one is not sent at all. Sequential `.replace` passes let one label
- * split the next rule's match and bound it by a character that was no longer
- * there; this never reads text another layer changed.
+ * A data problem is replaced by `[INVALID_DATA]` (so a handoff or an error
+ * message never carries it) and reported, so a summary with one is not sent.
+ * Anything ambiguous is a data error: an accepted cost, never a leak.
  */
-export function minimize(text: string): Minimized {
+export function minimize(input: string): Minimized {
   const problems: DataProblem[] = [];
-  // Clean pairs are also read on the original text, so one that overlaps a credential value
-  // (`secret=10.7769, 106.7009`) merges into it instead of leaving its second half behind. A pair
-  // with digits glued to it is left to the pass over the masked text, which can give them back.
-  const shapes = candidateSpans(text, SHAPE_RULES);
-  for (const m of text.matchAll(COORD_PAIR)) {
-    const end = m.index + m[0].length;
-    const digitsNear = /^[\s.()\[\]-]{0,5}\d/.test(text.slice(end, end + 6));
-    if (m[1]!.length <= 7 && !digitsNear) shapes.push({ start: m.index, end, label: '[COORDS]', rank: 2 });
-  }
-  let spans = mergeSpans(shapes);
-  let view = maskSpans(text, spans);
+  let text = replaceSpans(input.replace(/\s+/g, ' '), shapeSpans(input.replace(/\s+/g, ' ')));
 
-  for (const [pattern, label] of [[COORD_PAIR, '[COORDS]'], [LABELED_COORD, '[COORD]']] as Array<[RegExp, string]>) {
-    for (const m of view.matchAll(pattern)) {
-      const found = coordinateSpans(view, m, label);
-      if ('problem' in found) {
-        problems.push(found.problem);
-        spans.push({ start: m.index, end: m.index + m[0].length, ...INVALID });
-      } else spans.push(...found);
-    }
-  }
-  spans = mergeSpans(spans);
-  view = maskSpans(text, spans);
-
-  for (const m of view.matchAll(EMAIL_CANDIDATE)) {
-    const token = m[0];
-    const start = m.index;
-    if (VALID_EMAIL.test(token)) {
-      // `+84 912 345 678an@b.vn`: a valid address whose local part begins with the tail of a phone.
-      spans.push(...(splitPhoneAndEmail(view, start, token) ?? [{ start, end: start + token.length, label: '[EMAIL]', rank: 4 }]));
+  const tokens = tokenize(text);
+  const spans: Span[] = [];
+  let consumed = -1; // index of the last token inside a span
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i]!;
+    // The token before this one, when it was not replaced and only spaces or brackets stand between them.
+    const previous = i - 1 > consumed && /^[\s()[\]]*$/.test(text.slice(tokens[i - 1]!.end, token.start)) ? tokens[i - 1] : undefined;
+    const window = phoneWindow(tokens, i);
+    if (window > 0) {
+      // `x.ts+84 (0) 912 345 678`, `+ 8 4 (0) 912 345 678`: digits right before the number (a country
+      // code torn off, a count) make its start uncertain — ambiguous data. An ISO date before it is plain.
+      const torn = previous && /\d$/.test(previous.text) && !ISO_DATE_TIME.test(previous.text) && !ENDS_WITH_DECIMAL.test(previous.text);
+      spans.push({ start: torn ? previous.start : token.start, end: tokens[i + window - 1]!.end, label: torn ? INVALID : '[PHONE]' });
+      if (torn) problems.push('phone_ambiguous_boundary');
+      consumed = i + window - 1;
+      i = consumed;
       continue;
     }
-    const split = splitEmailAndPhone(view, start, token);
-    if (split) spans.push(...split);
-    else {
-      problems.push('email_malformed');
-      spans.push({ start, end: start + token.length, ...INVALID });
+    // `password=hunterxsecret0912 345 678`: digits right after an opaque secret — where it ends is unknown.
+    if (DIGIT_TOKEN.test(token.text) && /\[REDACTED\] $/.test(text.slice(0, token.start))) {
+      problems.push('phone_ambiguous_boundary');
+      spans.push({ start: token.start, end: token.end, label: INVALID });
+      consumed = i;
+      continue;
     }
+    if (!isCandidate(token.text)) continue;
+    consumed = i;
+    const span = { start: token.start, end: token.end };
+    if (EMAIL.test(token.text)) {
+      // `0912 345 6781a@b.vn`: digits glued to an address that opens with digits — the number's end is unknown.
+      if (/^\d/.test(token.text) && previous && DIGIT_TOKEN.test(previous.text)) {
+        problems.push('phone_ambiguous_boundary');
+        let from = i - 1;
+        while (from > 0 && DIGIT_TOKEN.test(tokens[from - 1]!.text) && tokens[from - 1]!.end === tokens[from]!.start - 1) from -= 1;
+        spans.push({ start: tokens[from]!.start, end: token.end, label: INVALID });
+      } else spans.push({ ...span, label: '[EMAIL]' });
+      continue;
+    }
+    const split = splitOnce(token.text);
+    if (split) {
+      spans.push({ start: token.start, end: token.start + split.at, label: split.left }, { start: token.start + split.at, end: token.end, label: split.right });
+      continue;
+    }
+    problems.push(token.text.includes('@') ? 'email_malformed' : 'phone_invalid_format');
+    spans.push({ ...span, label: INVALID });
   }
-  spans = mergeSpans(spans);
-  view = maskSpans(text, spans);
+  text = replaceSpans(text, spans);
 
-  for (const m of view.matchAll(NUMERIC_RUN)) {
-    const found = touchesSecretDigit(text, view, spans, m.index, m.index + m[0].length)
-      ? { problem: 'phone_ambiguous_boundary' as const, start: m.index, end: m.index + m[0].length }
-      : phoneSpans(view, m.index, m[0]);
-    if (!found) continue;
-    if ('problem' in found) {
-      problems.push(found.problem);
-      spans.push({ start: found.start, end: found.end, ...INVALID });
-    } else spans.push(...found);
-  }
-  spans = mergeSpans(spans);
-
-  let out = '';
-  let cursor = 0;
-  for (const span of spans) {
-    out += text.slice(cursor, span.start) + span.label;
-    cursor = span.end;
-  }
-  return { text: out + text.slice(cursor), problems };
+  // Step 5: the post-check first — a coordinate label must not hide the digits of a glued number
+  // (`lat=10.77690912 345 678`) — then coordinates by shape, which can introduce nothing.
+  const checked = postCheck(text, problems);
+  return {
+    ...checked,
+    text: checked.text
+      .replace(/(?<![\d.])-?\d{1,3}\.\d{3,7}\s*,\s*-?\d{1,3}\.\d{3,7}(?![\d.])/g, '[COORDS]')
+      .replace(/(\b(?:lat(?:itude)?|lng|lon(?:gitude)?)\s*[:=]\s*)-?\d{1,3}\.\d{1,7}(?![\d.])/gi, '$1[COORD]'),
+  };
 }
 
 /** The minimized text alone. Never throws: an invalid candidate is replaced. For handoffs and error text. */
@@ -235,231 +226,89 @@ export function redact(text: string): string {
   return minimize(text).text;
 }
 
-/** Every candidate span of every rule, overlapping ones included: resuming after a match would let a match that starts earlier hide the one that starts inside it. */
-function candidateSpans(text: string, rules: Rule[]): Span[] {
+function shapeSpans(text: string): Span[] {
   const spans: Span[] = [];
-  for (const rule of rules) {
-    const re = new RegExp(rule.pattern.source, rule.pattern.flags.includes('g') ? rule.pattern.flags : `${rule.pattern.flags}g`);
-    for (let m = re.exec(text); m; m = re.exec(text)) {
-      const [start, end] = (rule.span ?? whole)(m);
-      if (end > start) spans.push({ start, end, label: rule.label, rank: rule.rank });
-      re.lastIndex = m.index + 1;
+  for (const rule of SHAPE_RULES) {
+    for (const m of text.matchAll(rule.pattern)) {
+      const [start, end] = rule.span ? rule.span(m) : [m.index, m.index + m[0].length];
+      if (end > start) spans.push({ start, end, label: rule.label });
     }
   }
   return spans;
 }
 
-/** Overlapping spans merge under the strictest label; touching spans merge only when they carry the same label, so `[EMAIL][PHONE]` stays readable. */
-function mergeSpans(spans: Span[]): Span[] {
+/** Non-overlapping replacement; overlapping spans merge, the earliest label wins. */
+function replaceSpans(text: string, spans: Span[]): string {
   const sorted = [...spans].sort((a, b) => a.start - b.start || b.end - a.end);
-  const merged: Span[] = [];
-  for (const span of sorted) {
-    const last = merged[merged.length - 1];
-    if (last && (span.start < last.end || (span.start === last.end && span.label === last.label))) {
-      last.end = Math.max(last.end, span.end);
-      if (span.rank > last.rank) {
-        last.rank = span.rank;
-        last.label = span.label;
-      }
-    } else {
-      merged.push({ ...span });
-    }
-  }
-  return merged;
-}
-
-function maskSpans(text: string, spans: Span[]): string {
-  let masked = '';
+  let out = '';
   let cursor = 0;
-  for (const span of spans) {
-    masked += text.slice(cursor, span.start) + MASK.repeat(span.end - span.start);
+  for (const span of sorted) {
+    if (span.start < cursor) {
+      cursor = Math.max(cursor, span.end);
+      continue;
+    }
+    out += text.slice(cursor, span.start) + span.label;
     cursor = span.end;
   }
-  return masked + text.slice(cursor);
+  return out + text.slice(cursor);
 }
 
-/**
- * `password=hunterxsecret0912 345 678`: a numeric run separated only by phone
- * separators from a credential value that ends (or begins) with a digit. The
- * secret is opaque, so where it stops and a number starts cannot be known:
- * ambiguous data. A coordinate or an address next to a number is structured
- * and stays clean.
- */
-function touchesSecretDigit(text: string, view: string, spans: Span[], start: number, end: number): boolean {
-  const opaque = (i: number) => view[i] === MASK && spans.some((s) => s.start <= i && i < s.end && s.label === '[REDACTED]');
-  const opaqueDigitAt = (i: number) => opaque(i) && /\d/.test(text[i]!);
-  // Separators between the run and the secret may themselves be inside the masked value (`secret(0) 912…`).
-  const separatorAt = (i: number) => /[\s.()\[\]-]/.test(view[i] === MASK ? text[i]! : view[i]!);
-  let i = start - 1;
-  while (i >= 0 && start - i <= 5 && separatorAt(i)) i -= 1;
-  if (i >= 0 && opaqueDigitAt(i)) return true;
-  let j = end;
-  while (j < view.length && j - end < 5 && separatorAt(j)) j += 1;
-  return j < view.length && opaqueDigitAt(j);
-}
-
-/**
- * A coordinate (pair or labeled value) as a span — or, when digits are glued
- * to its last fraction (`10.7769, 106.70090912.345.678`, `lat=10.77690912 345
- * 678`), the shortest fraction that leaves a valid phone run behind it, as two
- * spans. A coordinate followed by `.digit` that no cut resolves is ambiguous
- * data. The labeled span excludes its label; the pair span is whole.
- */
-function coordinateSpans(view: string, m: RegExpExecArray, label: string): Span[] | { problem: DataProblem } {
-  const start = label === '[COORD]' ? m.index + m[0].search(/-?\d{1,3}\.\d+$/) : m.index;
-  const end = m.index + m[0].length;
-  const fraction = m[1]!;
-  const fractionStart = end - fraction.length;
-  const gluedRight = view[end] === '.' && /\d/.test(view[end + 1] ?? '');
-  const digitsFollow = /^[\s.()\[\]-]{0,5}\d/.test(view.slice(end, end + 6));
-  if (!gluedRight && !digitsFollow && fraction.length <= 7) return [{ start, end, label, rank: 2 }];
-  // `lat=10.7769, 028.3822.1234` is not a pair: its second number opens a valid phone. Leave it to the phone layer.
-  const secondStart = m.index + m[0].search(/-?\d{1,3}\.\d+$/);
-  const whole = new RegExp(NUMERIC_RUN.source, 'y');
-  whole.lastIndex = secondStart;
-  const w = whole.exec(view);
-  if (w) {
-    const asPhone = phoneSpans(view, secondStart, w[0], { leftGlued: true, wholeRun: true });
-    if (asPhone && !('problem' in asPhone)) return [];
+function tokenize(text: string): Token[] {
+  const tokens: Token[] = [];
+  for (const m of text.matchAll(/[^\s,;()[\]<>"']+/g)) {
+    // A sentence may end on the token: `mail a@b.vn.`, `call 0912345678?` — trailing punctuation is not part of it.
+    const t = m[0].replace(/[.?!:]+$/, '');
+    if (t) tokens.push({ start: m.index, end: m.index + t.length, text: t });
   }
-  // Give digits back: the shortest fraction after which the rest, in its entirety, is a valid phone run.
-  for (let keep = label === '[COORD]' ? 1 : 3; keep < fraction.length && keep <= 7; keep += 1) {
-    const cut = fractionStart + keep;
-    const run = new RegExp(NUMERIC_RUN.source, 'y');
-    run.lastIndex = cut;
-    const r = run.exec(view);
-    if (!r) continue;
-    const phone = phoneSpans(view, cut, r[0], { leftGlued: true, wholeRun: true });
-    if (phone && !('problem' in phone)) return [{ start, end: cut, label, rank: 2 }, ...phone];
-  }
-  return gluedRight ? { problem: 'phone_ambiguous_boundary' } : [{ start, end, label, rank: 2 }];
+  return tokens;
 }
 
-/** `a@b.vn0912345678`: the shortest valid address followed by a valid phone run, or null. */
-function splitEmailAndPhone(view: string, start: number, token: string): Span[] | null {
-  const at = token.indexOf('@');
-  for (let k = at + 2; k < token.length; k += 1) {
-    if (!VALID_EMAIL.test(token.slice(0, k))) continue;
-    const run = new RegExp(NUMERIC_RUN.source, 'y');
-    run.lastIndex = start + k;
-    const m = run.exec(view);
-    if (!m) continue;
-    const phone = phoneSpans(view, m.index, m[0], { leftGlued: true, wholeRun: true });
-    if (phone && !('problem' in phone)) return [{ start, end: start + k, label: '[EMAIL]', rank: 4 }, ...phone];
+const digitCount = (t: string) => t.replace(/\D/g, '').length;
+
+function isCandidate(t: string): boolean {
+  if (t.includes('@')) return !/^@+$/.test(t); // `@@`, a diff hunk marker, is plain
+  return DIGIT_TOKEN.test(t) && digitCount(t) >= MIN_CANDIDATE_DIGITS && !ISO_DATE_TIME.test(t);
+}
+
+/** The longest window of up to {@link MAX_PHONE_TOKENS} tokens from `i`, joined by single spaces, that is a phone; 0 if none. */
+function phoneWindow(tokens: Token[], i: number): number {
+  for (let w = Math.min(MAX_PHONE_TOKENS, tokens.length - i); w >= 1; w -= 1) {
+    if (VN_PHONE.test(tokens.slice(i, i + w).map((t) => t.text).join(' '))) return w;
+  }
+  return 0;
+}
+
+/** Exactly one split of a token into a phone and an address, in either order. */
+function splitOnce(t: string): { at: number; left: string; right: string } | null {
+  for (let at = 1; at < t.length; at += 1) {
+    const [l, r] = [t.slice(0, at), t.slice(at)];
+    if (EMAIL.test(l) && VN_PHONE.test(r)) return { at, left: '[EMAIL]', right: '[PHONE]' };
+    if (VN_PHONE.test(l) && EMAIL.test(r)) return { at, left: '[PHONE]', right: '[EMAIL]' };
   }
   return null;
 }
 
-/** `+84 912.345.678an@b.vn`: a valid phone run whose tail opens the local part of a valid address, or null. */
-function splitPhoneAndEmail(view: string, start: number, token: string): Span[] | null {
-  const at = token.indexOf('@');
-  if (!/^\d/.test(token)) return null;
-  const re = new RegExp(NUMERIC_RUN.source, 'g');
-  for (let r = re.exec(view); r && r.index < start + at; r = re.exec(view)) {
-    const end = r.index + r[0].length;
-    if (end <= start || end >= start + at) continue;
-    if (!VALID_EMAIL.test(token.slice(end - start))) continue;
-    const phone = phoneSpans(view, r.index, r[0], { rightGlued: true });
-    if (phone && !('problem' in phone)) return [...phone, { start: end, end: start + token.length, label: '[EMAIL]', rank: 4 }];
-  }
-  return null;
-}
-
-type PhoneFinding = Span[] | { problem: DataProblem; start: number; end: number } | null;
-
 /**
- * Whether a numeric run is a phone candidate and, if so, the valid Vietnamese
- * numbers it is made of. `null` = a plain number, left alone. A glued side is
- * one an address or a coordinate was split from, so that boundary is
- * accounted for; `wholeRun` accepts the run only when it is a phone from its
- * first digit, with no plain group in front.
+ * Step 5 — the invariant on what would be sent: outside placeholders, no `@`
+ * and no run of 8 or more digits — up to three of `. - ( ) [ ]` or spaces
+ * between two digits, so `+1 ( 415 ) 555-0133` is one run — that is not an
+ * ISO date or timestamp.
  */
-function phoneSpans(view: string, runStart: number, run: string, glue: { leftGlued?: boolean; rightGlued?: boolean; wholeRun?: boolean } = {}): PhoneFinding {
-  const plus = run.includes('+');
-  const digitAt: number[] = [];
-  for (let i = 0; i < run.length; i += 1) if (/\d/.test(run[i]!)) digitAt.push(runStart + i);
-  const digits = digitAt.map((i) => view[i]!).join('');
-
-  // Where the candidate starts: a `+`-run from its first digit; otherwise the first digit group that
-  // begins a Vietnamese prefix (`2026-10-22 0912…` is a date and a phone).
-  let first = -1;
-  if (plus) first = 0;
-  else {
-    for (let d = 0; d < digitAt.length; d += 1) {
-      const groupStart = d === 0 || digitAt[d]! - digitAt[d - 1]! > 1;
-      if (groupStart && (digits[d] === '0' || digits.startsWith('84', d))) {
-        first = d;
-        break;
-      }
-    }
+function postCheck(text: string, problems: DataProblem[]): Minimized {
+  const spans: Span[] = [];
+  const plain = text.replace(/\[[A-Z_]+\]/g, (l) => ' '.repeat(l.length));
+  for (const m of plain.matchAll(/[^\s,;()[\]<>"']*@[^\s,;()[\]<>"']*/g)) {
+    if (/^@+$/.test(m[0])) continue;
+    problems.push('email_malformed');
+    spans.push({ start: m.index, end: m.index + m[0].length, label: INVALID });
   }
-  if (glue.wholeRun && first !== 0) return null;
-  if (first < 0) {
-    // A plain run that hides a valid phone at a non-group position (`106.70090912345678`) is a number
-    // glued to a phone: ambiguous, not plain.
-    if (digitAt.length >= PHONE_CANDIDATE_MIN_DIGITS) {
-      for (let d = 1; d <= digitAt.length - 9; d += 1) {
-        if ((digits[d] === '0' || digits.startsWith('84', d)) && partitionPhones(digits.slice(d), false)) {
-          return { problem: 'phone_ambiguous_boundary', start: runStart, end: digitAt[digitAt.length - 1]! + 1 };
-        }
-      }
-    }
-    return null;
+  const dated = plain.replace(/\S+/g, (t) => (ISO_DATE_TIME.test(t) ? ' '.repeat(t.length) : t));
+  for (const m of dated.matchAll(/\d(?:[ .()[\]-]{0,3}\d)*/g)) {
+    if (digitCount(m[0]) < MIN_CANDIDATE_DIGITS) continue;
+    problems.push('phone_invalid_format');
+    spans.push({ start: m.index, end: m.index + m[0].length, label: INVALID });
   }
-  const count = digitAt.length - first;
-  if (count < (plus ? 7 : PHONE_CANDIDATE_MIN_DIGITS)) return null;
-
-  const start = first === 0 ? runStart : digitAt[first]!;
-  const end = digitAt[digitAt.length - 1]! + 1;
-  const before = start > 0 ? view[start - 1]! : '';
-  const after = end < view.length ? view[end]! : '';
-  if ((!glue.leftGlued && first === 0 && /\w/.test(before)) || (!glue.rightGlued && /\w/.test(after))) return { problem: 'phone_ambiguous_boundary', start, end };
-
-  const candidate = digits.slice(first);
-  if (plus && !candidate.startsWith('84')) return { problem: 'phone_unsupported_country', start, end };
-  const parts = partitionPhones(candidate, plus);
-  if (!parts) return { problem: 'phone_invalid_format', start, end };
-  return parts.map(([a, b], i) => ({ start: i === 0 ? start : digitAt[first + a]!, end: digitAt[first + b - 1]! + 1, label: '[PHONE]', rank: 3 }));
-}
-
-/**
- * The national significant number of the current Vietnamese plan: a mobile
- * number is `3|5|7|8|9` + 8 digits (9 in all), a landline is `2` + 8 digits
- * (area code included, 9–10 in all: `24 3826 1234`, `28 3822 1234`, `2xx …`).
- */
-function validNsn(n: string): boolean {
-  if (n[0] === '2') return n.length === 10 || n.length === 9;
-  return '35789'.includes(n[0] ?? '') && n.length === 9;
-}
-
-/** `rest` after a country prefix: an optional trunk `0`, then the national number. */
-function validAfterCountry(rest: string): boolean {
-  return rest[0] === '0' ? validNsn(rest.slice(1)) : validNsn(rest);
-}
-
-/** One valid Vietnamese number as a digit string: `0…`, `84…`, `0084…`; `+` only with `84`. */
-function validPhone(d: string, plus: boolean): boolean {
-  if (plus) return d.startsWith('84') && validAfterCountry(d.slice(2));
-  if (d.startsWith('0084')) return validAfterCountry(d.slice(4));
-  if (d.startsWith('84')) return validAfterCountry(d.slice(2));
-  if (d.startsWith('0')) return validNsn(d.slice(1));
-  return false;
-}
-
-/** Fewest valid numbers that together are exactly `digits`, as [from, to) digit ranges, or null. */
-function partitionPhones(digits: string, plus: boolean): Array<[number, number]> | null {
-  const best: Array<Array<[number, number]> | null | undefined> = new Array(digits.length + 1);
-  best[digits.length] = [];
-  for (let i = digits.length - 1; i >= 0; i -= 1) {
-    let found: Array<[number, number]> | null = null;
-    for (let j = i + 9; j <= Math.min(digits.length, i + 15); j += 1) {
-      const rest = best[j];
-      if (!rest || !validPhone(digits.slice(i, j), plus && i === 0)) continue;
-      if (!found || rest.length + 1 < found.length) found = [[i, j], ...rest];
-    }
-    best[i] = found;
-  }
-  return best[0] ?? null;
+  return { text: spans.length ? replaceSpans(text, spans) : text, problems };
 }
 
 /** Whitespace is collapsed before minimization, so the rules see the text that is sent. */
