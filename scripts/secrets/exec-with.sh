@@ -72,7 +72,7 @@ for ((i = 0; i < ${#PARAM_PATHS[@]}; i++)); do
   done
 done
 
-manifest="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace all --consumer all)"
+manifest="$(python3 -I "$MANIFEST_READER" "$ENVIRONMENT" --namespace all --consumer all)"
 
 # Resolve every row before fetching anything. A set that is half-exported is
 # worse than one that was never started: the lane would run with some of its

@@ -7,6 +7,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # Used by put.sh, pull.sh, validate.sh and setup-env.sh, which source this file.
 # shellcheck disable=SC2034
 MANIFEST_READER="${REPO_ROOT}/scripts/lib/manifest.py"
+# Every call runs it as `python3 -I`: no script directory or user site on
+# sys.path, PYTHON* ignored. This file, exec-with.sh and the reader ship in the
+# harness install, whose MANIFEST covers them and nothing beside them — a
+# re.py planted next to manifest.py would otherwise run as part of a send
+# (GoGo-Infra#245 D6). The reader imports the standard library only.
 
 die() {
   echo "error: $*" >&2
@@ -86,14 +91,14 @@ param_namespace() {
   # awk reads to the end rather than `exit` on the match: under pipefail an early
   # exit closes the pipe while python may still hold buffered output, and the
   # reader then dies of BrokenPipe (CI, once the manifest passed 8 KiB).
-  python3 "$MANIFEST_READER" "$env" --namespace all --consumer all \
+  python3 -I "$MANIFEST_READER" "$env" --namespace all --consumer all \
     | awk -F'\t' -v p="$path" '$1 == p && !seen { print $5; seen = 1 }'
 }
 
 # Every namespace the manifest declares, one per line.
 manifest_namespaces() {
   local env="${1:-dev}"
-  python3 "$MANIFEST_READER" "$env" --namespace all --consumer all | cut -f5 | sort -u
+  python3 -I "$MANIFEST_READER" "$env" --namespace all --consumer all | cut -f5 | sort -u
 }
 
 # Where a value comes from. Defined once: put.sh and setup-env.sh both prompt

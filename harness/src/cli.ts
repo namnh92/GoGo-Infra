@@ -21,11 +21,16 @@
  * checkout that directory belongs to — `cd harness` does not turn
  * `src/cli.ts` into an ordinary in-scope file (PR #242 A-F-03).
  *
+ * Hooks and automation run the approved install instead
+ * (`~/.gogo-harness/install/bin/harness`, see install/launcher.ts); this
+ * file run from a checkout is the development and CI entry point (#245).
+ *
  * Exit codes: 0 AUTO_EXECUTE, 10 RESEARCH_AND_CONTINUE, 20 HUMAN_APPROVAL,
  * 2 usage or configuration error — so a hook or a script can branch on it.
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { createProvider, loadConfig } from './config.ts';
 import type { MockFixture, MockOutcome } from './decisions/mock.ts';
@@ -125,10 +130,17 @@ function fixtureFrom(file: string): MockFixture {
 
 class Usage extends Error {}
 
-main(process.argv.slice(2)).then(
-  (code) => process.exit(code),
-  (e: unknown) => {
+/** One command → its exit code; an error is reported on stderr as exit 2. The installed launcher calls this (#245). */
+export async function run(argv: string[]): Promise<number> {
+  try {
+    return await main(argv);
+  } catch (e) {
     process.stderr.write(`harness: ${(e as Error).message}\n`);
-    process.exit(2);
-  },
-);
+    return 2;
+  }
+}
+
+// Run only as the entry point: the launcher imports this module and calls run().
+if (process.argv[1] !== undefined && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
+  run(process.argv.slice(2)).then((code) => process.exit(code));
+}
