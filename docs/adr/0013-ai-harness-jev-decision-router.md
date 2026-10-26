@@ -114,16 +114,26 @@ router, the CLI and the tests define what a policy verdict means as much as `src
 to the working directory, so `cd harness` and `src/cli.ts` is still `harness/src/cli.ts`. That
 stops the harness from authorizing its own edit. Hooks and automation run an approved install
 outside every checkout (GoGo-Infra#245, shape review 2026-10-23), so an edit in a worktree does
-not change the verdicts either: `versions/<full-sha>` holds `git archive` of a commit on
-`develop` (checked against a fresh fetch) with a per-file SHA-256 `MANIFEST`; `ACTIVE` names the
-running SHA and `MANIFEST` digest and is the only switch; a standard-library bootstrap verifies
-both before it imports anything from the version, then hands over to that version's own launcher
-and CLI, exits 2 on any mismatch and has no checkout fallback or dev bypass. An install whose
-real path is inside a git checkout is refused at prepare, activation and run (PR #253 review).
-Preparing a candidate changes nothing; activation and rollback are an owner act on a terminal,
-bound to old → new SHA and digest, with an approval reference in `history.jsonl`. The same OS
-user can still rewrite an install and its metadata together — that remains the sandbox's
-boundary (D-1). `harness/src/cli.ts` in a checkout is the development and CI entry point.
+not change the verdicts either: `versions/<full-sha>` holds a commit's `harness/` and the JEV
+send closure (`exec-with.sh`, `common.sh`, `manifest.py`, `secrets.manifest.yml`) with a
+per-file SHA-256 and exec-bit `MANIFEST`; `ACTIVE` names the running SHA and `MANIFEST` digest
+and is the only switch; a standard-library bootstrap verifies both before it imports the
+version's CLI, owns activation and verification itself whatever `ACTIVE` says, exits 2 on any
+mismatch and has no checkout fallback or dev bypass. An install whose real path is inside a git
+checkout, or that holds a link or a `.git` entry on the way to a file, is refused (PR #253
+review). Preparing a candidate changes nothing and proves nothing; activation proves provenance:
+the commit must be an ancestor of `develop` fetched over HTTPS from the pinned GitHub repository
+into a private repository with a sanitized git, and every installed file must be that commit's
+blob (PR #253 shape rev 3, owner decision D1). Without network, only a rollback to a version the
+journal records as activated with the same `MANIFEST` digest is allowed (D2). Hooks start the
+harness through the installed `bin/harness`, which clears Node's preload variables and runs the
+Node path fixed at the first activation (D3); a preload that reaches Node any other way has run
+before any check. The first install is the trust anchor: a documented owner procedure takes the
+bootstrap from a sanitized HTTPS clone of `develop` (trust on first use). Activation and rollback
+are an owner act on a terminal, bound to old → new SHA and digest, with an approval reference in
+the journal. The same OS user can still rewrite an install, its metadata and journal together —
+that remains the sandbox's boundary (D-1). `harness/src/cli.ts` in a checkout is the development
+and CI entry point.
 
 **D-3a Shell commands are classified fail-closed** — *superseded by D-3b the same day; kept as the record of what was tried.* (owner decision 2026-10-22, after Sol rounds 1–3 on
 PR #242 found six P1 bypasses in the regex classifier — every one a shell form nobody anticipated, every one
@@ -238,7 +248,7 @@ it the same day: the harness key is now `gogo_ai_harness_dev`; the backend POC g
 2. Create the Anthropic workspace for automation with a spend limit and auto top-up off before
    `put.sh dev ai-harness/anthropic-api-key`.
 3. Decide whether to install the harness as a Claude Code hook (e.g. a `UserPromptSubmit` or
-   `Stop` hook calling the installed launcher's `decide`). That edits `.claude/settings.json` — a
+   `Stop` hook calling the installed `bin/harness decide`). That edits `.claude/settings.json` — a
    permission-policy change this ADR deliberately does not make. `docs/ai-harness.md` has the
    proposed snippet. Before it, the owner prepares and activates a merged version on the machine
    that runs the hook (`docs/ai-harness.md`, "Installed copy").

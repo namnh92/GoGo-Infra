@@ -20,7 +20,7 @@
  * `src/cli.ts` into an ordinary in-scope file (PR #242 A-F-03).
  *
  * Hooks and automation run the approved install instead
- * (`~/.gogo-harness/install/bin/harness.mts`, see install/launcher.ts); this
+ * (`~/.gogo-harness/install/bin/harness`, see install/launcher.ts); this
  * file run from a checkout is the development and CI entry point (#245).
  *
  * Exit codes: 0 AUTO_EXECUTE, 10 RESEARCH_AND_CONTINUE, 20 HUMAN_APPROVAL,

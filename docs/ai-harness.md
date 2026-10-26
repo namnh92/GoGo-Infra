@@ -193,56 +193,129 @@ Hooks and automation run an approved install outside every checkout instead, so 
 worktree never changes the verdicts the session receives (ADR-0013 D-3, GoGo-Infra#245):
 
 ```
-~/.gogo-harness/install/          ($HARNESS_INSTALL_DIR for prepare.ts; separate from ledger/logs)
-  versions/<full-sha>/MANIFEST    sha256 of every file of the version, package.json included
-  versions/<full-sha>/harness/    `git archive <sha> harness`, read-only
+~/.gogo-harness/install/          (--install-dir / $HARNESS_INSTALL_DIR for prepare.ts; separate from ledger/logs)
+  versions/<full-sha>/MANIFEST    schema 2: sha256 and exec bit of every file of the version
+  versions/<full-sha>/harness/    the commit's harness/, read-only
+  versions/<full-sha>/scripts/    the JEV send closure (D6): scripts/secrets/exec-with.sh,
+  versions/<full-sha>/config/       scripts/secrets/common.sh, scripts/lib/manifest.py, config/secrets.manifest.yml
   ACTIVE                          { sha, manifestDigest } of the running version
-  history.jsonl                   actor, time, old → new SHA + digest, approval reference
-  bin/harness.mts                 bootstrap, written once at the first activation
+  history.jsonl                   journal: an `intent` and an `activated` record per activation
+  bin/harness.mts                 bootstrap: launcher.ts of the first installed commit, placed once by the owner
+  bin/harness                     launch boundary (POSIX sh), written by the first activation, never rewritten
+  quarantine/                     a broken ACTIVE or a damaged journal, kept as found
 ```
+
+**First install** (owner, once per machine, on a terminal). Fill the four slots — `<sha>` the full
+SHA of a `develop` commit, `<node>` the absolute path of the Node to run the harness with (22.18
+or later; it is written into `bin/harness` and stays, D3), `<root>` e.g.
+`$HOME/.gogo-harness/install`, `<approval>` the link to the owner approval — and paste the block.
+Every step runs with an empty environment: git without system or global config, only `https`, no
+redirects, no credential helper; Node without `NODE_OPTIONS`. It clones `develop` from GitHub,
+checks the commit is on it, places that commit's `harness/src/install/launcher.ts` as
+`bin/harness.mts` (refusing if one is there), then runs its `activate`. Prepare the commit first
+(below) with `--install-dir <root>`. `harness/test/install.test.ts` runs this exact block.
+
+```sh
+/usr/bin/env -i PATH=/usr/bin:/bin HOME="$HOME" /bin/sh -euc '
+sha="<sha>"
+node="<node>"
+root="<root>"
+approval="<approval>"
+g() {
+  env -i PATH=/usr/bin:/bin HOME="$tmp" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 \
+    git -c protocol.allow=never -c protocol.https.allow=always -c http.followRedirects=false -c credential.helper= "$@"
+}
+tmp=$(mktemp -d)
+g clone --quiet --bare --branch develop --single-branch https://github.com/namnh92/GoGo-Infra.git "$tmp/src.git"
+g --git-dir="$tmp/src.git" merge-base --is-ancestor "$sha" develop
+mkdir -p "$root/bin"
+test ! -e "$root/bin/harness.mts"
+new=$(mktemp "$root/bin/.harness.mts.XXXXXX")
+g --git-dir="$tmp/src.git" cat-file blob "$sha:harness/src/install/launcher.ts" >"$new"
+chmod 555 "$new"
+mv "$new" "$root/bin/harness.mts"
+rm -rf "$tmp"
+env -i PATH=/usr/bin:/bin HOME="$HOME" "$node" "$root/bin/harness.mts" activate "$sha" --approval "$approval"
+'
+```
+
+This first download is the trust anchor (trust on first use over HTTPS to GitHub): nothing the
+block fetches can vouch for itself. To check it out of band, compare
+`git hash-object <root>/bin/harness.mts` with the blob id GitHub shows for
+`harness/src/install/launcher.ts` at `<sha>` (`git rev-parse <sha>:harness/src/install/launcher.ts`
+in any clone).
 
 ```bash
-# 1. Prepare (anyone; changes nothing that runs). Fetches develop first and refuses if the fetch
-#    fails or the commit is not on it; installs from Git objects; runs the commit's own tests
-#    against the staged bytes; publishes read-only. Prints the activation command.
-node harness/src/install/prepare.ts <commit> [--install-dir DIR]
+# 1. Prepare (anyone; changes nothing that runs, proves nothing). Reads the commit's Git objects
+#    in --repo (default: the working directory) — no fetch, no working tree —, writes harness/ and
+#    the four closure files to staging, runs the commit's own tests against those bytes, and
+#    publishes read-only. There is no --remote or --branch.
+node harness/src/install/prepare.ts <commit> [--repo DIR] [--install-dir DIR]
 
-# 2. Activate or roll back (owner, on a terminal). Shows old → new SHA and MANIFEST digest and
-#    the approval reference, and asks the owner to type "<old-sha12|none> <new-sha12> <digest12>".
-#    The first activation runs the prepared version's own launcher (the command prepare prints);
-#    later ones run the installed one:
-node ~/.gogo-harness/install/bin/harness.mts activate <full-sha> --approval <link to the approval>
+# 2. Activate or roll back (owner, on a terminal):
+~/.gogo-harness/install/bin/harness activate <full-sha> --approval <link to the approval>
 
 # 3. Use. Same commands and exit codes as cli.ts:
-node ~/.gogo-harness/install/bin/harness.mts decide --input task.json
-node ~/.gogo-harness/install/bin/harness.mts install-verify     # { sha, manifestDigest } or exit 2
+~/.gogo-harness/install/bin/harness decide --input task.json
+~/.gogo-harness/install/bin/harness install-verify     # { sha, manifestDigest } or exit 2
 ```
 
-The launcher uses Node's standard library only. Per process the bootstrap reads `ACTIVE` once,
-checks the `MANIFEST` digest against it and every file against the `MANIFEST` (missing, extra,
-changed or linked file), and only then hands over to **that version's own launcher**, which loads
-that version's CLI — launcher and runtime always come from the version `ACTIVE` names. Any
-mismatch exits `2` with `harness install: …` — no decision, no provider call, no fallback to a
-checkout; `HARNESS_DEV` or any other variable changes nothing. A launcher run from a checkout
-refuses to start, and so does an install whose real path (symlinks resolved) is inside a git
-checkout or worktree, or whose `versions/` (or a version under it) is a symbolic link: prepare,
-activation and every run check it.
+**Activation proves provenance.** Before the owner is asked, `activate` fetches `develop` from
+`https://github.com/namnh92/GoGo-Infra.git` (constant; no option changes it) into a private
+temporary repository with the same sanitized git, requires the commit to be an ancestor of it,
+and requires every installed file to be that commit's blob with the same exec bit — same path
+set, and the `MANIFEST` exactly what those files give. A commit on another branch, a version
+edited after prepare, or a git configuration (`insteadOf`, `GIT_DIR`, a git shim moving
+`FETCH_HEAD`) pointing elsewhere is refused. Then the owner sees old → new SHA, `MANIFEST` digest,
+provenance and approval, and types `<old-sha12|none|broken> <new-sha12> <digest12>`.
 
-`ACTIVE` is the only switch. Activation takes `activate.lock`, writes the bootstrap only if there
-is none, appends the history line and, last, replaces `ACTIVE` by rename: an activation that fails
-or is interrupted at any step leaves the previous version — launcher and runtime — running. If the
-lock is left behind, compare `ACTIVE` with the last line of `history.jsonl` (a line whose `to` is
-not `ACTIVE` did not finish), then remove the lock and activate again. If `ACTIVE` itself is
-broken, run the wanted version's own launcher (`versions/<sha>/harness/src/install/launcher.ts
-activate <sha> …`, the command prepare prints) to recover. A rollback is an activation of an
-earlier SHA and is recorded as `rollback`.
+**Offline rollback (D2).** Without network, `activate` accepts only a version this journal
+records as `activated` with the same `MANIFEST` digest; the plan shows `provenance: recorded
+<time>`. A version never activated here, a different digest, a damaged journal, or an activation
+that has an `intent` but no `activated` record (interrupted after the switch) needs the network.
 
-**Limits.** This stops checkout edits from taking effect and the harness from approving its own
-change. It does not stop the same OS user from rewriting payload, `MANIFEST` and `ACTIVE`
-together, or swapping a file between verification and import; the manifest and history are not
-tamper evidence against that user. That boundary is Claude Code's sandbox and permissions on
-writes outside the workspace. A declared write to the install is a hard gate anyway: it is
-outside the checkout, so the policy engine classifies it `unknown`.
+**ACTIVE is the only switch.** Activation takes `activate.lock` (a link there is refused), and
+after confirmation: quarantines a damaged journal and starts a new one, writes `bin/harness` if
+absent, quarantines a broken `ACTIVE`, appends `intent`, replaces `ACTIVE` by rename, appends
+`activated`, and releases the lock (a lock replaced meanwhile is left, with a warning). An
+interruption leaves the previous `ACTIVE`; running the same `activate` again completes it, and
+`node <root>/bin/harness.mts activate …` under `env -i` (the block's last line) works even
+without `bin/harness`. A left-over lock: compare `ACTIVE` with the last journal records, then
+remove it.
+
+`activate` and `install-verify` are the bootstrap's own code whatever `ACTIVE` says: no version's
+code takes part in replacing a version. Every other command reads `ACTIVE` once, checks the
+`MANIFEST` digest against it and every file against the `MANIFEST` (missing, extra, changed,
+wrong exec bit, linked, hard-linked, a `.git` anywhere), and only then imports that version's
+`cli.ts`. Any mismatch exits `2` with `harness install: …` — no decision, no provider call, no
+fallback to a checkout, no `HARNESS_DEV` bypass. The bootstrap anywhere but `<root>/bin/` refuses
+to run; so does an install whose real path is inside a git checkout or worktree, or that has a
+symbolic link or a `.git` entry anywhere on the way to a file it reads.
+
+**Broken `ACTIVE`.** A file that is not a valid record, or a symbolic link, is shown with its
+evidence (sha256, or where the link points — never followed), the confirmation starts with
+`broken`, and after confirmation it is moved to `quarantine/` unchanged. Recover with
+`bin/harness activate <sha> …` of a known version. A directory, fifo, socket or device at
+`ACTIVE` is not something an activation leaves behind: `activate` refuses (`remove it by hand`);
+remove it, then activate.
+
+**Launch boundary.** Hooks call `bin/harness`, never `node …/harness.mts`: it clears
+`NODE_OPTIONS`, `NODE_PATH`, `NODE_COMPILE_CACHE` and `NODE_REPL_EXTERNAL_MODULE` before Node
+starts (a `--import` or `--require` there runs before any check), runs the Node path written at
+the first activation, finds `harness.mts` beside itself, and keeps the caller's working
+directory. The bootstrap also exits 2 when it sees a preload flag, but that is a diagnostic: the
+preloaded code has already run by then.
+
+**Limits.** This stops checkout edits from taking effect, the harness from approving its own
+change, and an unmerged commit from being activated. It does not stop the same OS user from
+rewriting payload, `MANIFEST`, `ACTIVE`, journal and bootstrap together, or from swapping a
+directory or file between verification and import; the journal is not tamper evidence against
+that user. `git`, `bash`, `python3` and `aws` as found on `PATH` (the closure scripts run
+`python3 -I`), and the Node in `bin/harness`, are trusted like the rest of the machine. Provenance
+fetches need direct HTTPS to GitHub: the environment is wiped, so a proxy or a private CA is not
+supported. Changing Node, or a bootstrap fix, is a new first install. That boundary is Claude
+Code's sandbox and permissions on writes outside the workspace. A declared write to the install
+is a hard gate anyway: it is outside the checkout, so the policy engine classifies it `unknown`.
 
 ## Proposed Claude Code hook (owner action — not installed)
 
@@ -253,7 +326,7 @@ the owner to adopt or not. It runs the installed copy above, never the checkout:
 {
   "hooks": {
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "node \"$HOME\"/.gogo-harness/install/bin/harness.mts status >/dev/null" }] }
+      { "hooks": [{ "type": "command", "command": "\"$HOME\"/.gogo-harness/install/bin/harness status >/dev/null" }] }
     ]
   }
 }
