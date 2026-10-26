@@ -136,18 +136,21 @@ no file contents, no environment, no repository data — is sent.
 
 ## Configuration
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `JEV_MODE` | `disabled` | `disabled` · `mock` · `live` |
-| `JEV_LIVE_AUTHORIZED` | — | must be `yes` for `live` |
-| `JEV_MODEL` | `typesafe/jev-1.14` | pinned id; aliases refused |
-| `JEV_TIMEOUT_MS` | `5000` | 100…15000 |
-| `HARNESS_STATE_DIR` | `~/.gogo-harness` | ledger, decision log and per-task state `tasks/<task>-<hash>.json` (loop counters + decision cache, so limits hold across separate `decide` calls) — per machine, not committed |
-| `HARNESS_JEV_MONTHLY_USD` | `2` | local JEV target |
-| `HARNESS_ANTHROPIC_MONTHLY_USD` / `_RESERVE_USD` | `100` / `10` | local Anthropic API target |
-| `HARNESS_CONCURRENCY` | `1` | checkpoint serialization only; only `1` is accepted — `decide` holds `HARNESS_STATE_DIR/harness.lock` across load, limits, inference and save, so overlapping `decide` calls queue instead of losing counters or charges. The lock ends when `decide` returns: it does not limit how many Claude sessions or automation jobs run (not enforced here) |
-| `JEV_PRIVACY_REVIEWED` | — | must be `yes` for `live`: the privacy review + DPA for the outbound data contract are recorded |
-| `OPENROUTER_API_KEY` | — | from `exec-with.sh dev ai-harness/openrouter-api-key` |
+The last column is what the prompt hook (below) hands its live child: the child's environment is
+an allowlist, and of this table only `passed` rows reach it from the owner's shell.
+
+| Variable | Default | Meaning | Prompt-hook child |
+| --- | --- | --- | --- |
+| `JEV_MODE` | `disabled` | `disabled` · `mock` · `live` | set by the hook (`live`, after opt-in) |
+| `JEV_LIVE_AUTHORIZED` | — | must be `yes` for `live` | set by the hook (the opt-in) |
+| `JEV_MODEL` | `typesafe/jev-1.14` | pinned id; aliases refused | not passed (pinned, D-2) |
+| `JEV_TIMEOUT_MS` | `5000` | 100…15000 | passed |
+| `HARNESS_STATE_DIR` | `~/.gogo-harness` | ledger, decision log and per-task state `tasks/<task>-<hash>.json` (loop counters + decision cache, so limits hold across separate `decide` calls) — per machine, not committed | set by the hook (same directory) |
+| `HARNESS_JEV_MONTHLY_USD` | `2` | local JEV target | passed |
+| `HARNESS_ANTHROPIC_MONTHLY_USD` / `_RESERVE_USD` | `100` / `10` | local Anthropic API target | not passed (unused by the child) |
+| `HARNESS_CONCURRENCY` | `1` | checkpoint serialization only; only `1` is accepted — `decide` holds `HARNESS_STATE_DIR/harness.lock` across load, limits, inference and save, so overlapping `decide` calls queue instead of losing counters or charges. The lock ends when `decide` returns: it does not limit how many Claude sessions or automation jobs run (not enforced here) | not passed (the child is one call) |
+| `JEV_PRIVACY_REVIEWED` | — | must be `yes` for `live`: the privacy review + DPA for the outbound data contract are recorded | set by the hook (the opt-in) |
+| `OPENROUTER_API_KEY` | — | from `exec-with.sh dev ai-harness/openrouter-api-key` | from the installed `exec-with.sh` only |
 
 ## Cost controls and monitoring
 
@@ -229,38 +232,78 @@ node ~/.gogo-harness/install/bin/harness.mts jev-prompt off         # stop sendi
 node ~/.gogo-harness/install/bin/harness.mts jev-prompt status
 ```
 
-`setup` and `on` show what is sent where and ask the owner to type a confirmation; they record the
-secrets wrapper the key comes through (`scripts/secrets/exec-with.sh` found above the working
-directory, or `--wrapper <path>`) in `~/.gogo-harness/jev-prompt.json`, and every change is a line
-in `jev-prompt-history.jsonl`. In a prompt, a control line `#jev` asks for JEV on that prompt
-(after `setup`) and `#nojev` refuses it even while `on`. A control line is the whole first or last
-non-empty line, outside fenced code and `<pasted_content>`; a marker in a quote, in pasted or
-fenced material or inside a sentence is text, not a choice, and sends nothing. Control lines are
-removed before anything is summarized. Each session's call count is taken under its own lock and
-replaced atomically; a counter file that cannot be read refuses every call (`session_unreadable`)
-until the owner removes `~/.gogo-harness/prompt-hook/sessions.json`.
+`setup` and `on` show what is sent where and ask the owner to type a confirmation; they take no
+other option and record the consent (schema 2) in `~/.gogo-harness/jev-prompt.json`, and every
+change is a line in `jev-prompt-history.jsonl`. No wrapper path is recorded or accepted: a
+schema-1 file from before PR #254 rev 3, which named one, is not consent — run `setup` again.
+
+In a prompt, `#jev` asks for JEV on that prompt (after `setup`) and `#nojev` refuses it even while
+`on` (owner decision D5, 2026-10-26):
+`#jev` counts only when it is the first non-blank line of the prompt; `#nojev` on any line, inside code or pasted content too, stops sending.
+Both is `#nojev`. No fence or `<pasted_content>` parsing decides either, so a later `#jev`, or one
+in a quote or inside a sentence, is text and sends nothing, and a `#nojev` cannot be hidden in a
+block. Control lines are removed before anything is summarized. What the extraction heuristics
+can still change, for a prompt that *is* authorized, is what gets summarized and whether the
+sanitizer refuses it (`invalid_data`) — sanitizer-first, accepted; privacy and data selection stay
+with #244.
+
+Each session's call count is taken under its own lock and replaced atomically, after the wrapper
+check below, so a send that cannot happen takes no call. A counter file that cannot be read, or
+with any entry that is not `{ calls: non-negative integer, last: date }`, refuses every call
+(`session_unreadable`) with the file untouched until the owner removes
+`~/.gogo-harness/prompt-hook/sessions.json`.
 `JEV_MODE`, the approval flags or a key in the environment never turn sending on by themselves.
 The owner's opt-in stands in for `JEV_LIVE_AUTHORIZED` and `JEV_PRIVACY_REVIEWED` for these calls;
 privacy review + DPA for real prompts (#244) is not done, and the confirmation says so.
 
 - **Never blocks.** stdout is empty, or one JSON object whose `additionalContext` is the advisory
-  (at most 900 characters): what JEV suggests (research first, ask the owner, or no open question),
-  up to three harness-written reasons and the model build, stated as advice, never a permission —
-  policy, hard gates and Claude Code's permissions apply as before. stderr is empty; exit 0 for any
+  (at most 900 characters), every byte of it the hook's own: fixed text for what JEV suggests
+  (research first, ask the owner, or no open question — an outcome outside those three is
+  `jev_bad_output`), the fixed line "JEV read prompt text only; assessed no scope, no
+  authorization, no action; check actual scope and owner authorization before acting", and the
+  model build only when it is a plain model id. The router's reasons are not shown and the child
+  does not return them. Advice, never a permission — policy, hard gates and Claude Code's
+  permissions apply as before. stderr is empty; exit 0 for any
   input or failure (bad JSON, a wrong event, stdin over 512 KiB or not finished within 2 s, an
   unwritable log, a failing wrapper, a timeout). A `#jev` that could not be sent gets a one-line
-  note with the reason code; a failure while `on` stays in the log. The command runs the approved
+  note with a reason code from a closed list (`NOTE_CODES` in `prompt-observation.ts`; a child
+  error is `jev_child_<code>`, a fallback `jev_fallback_<category>`, anything unrecognised
+  `jev_bad_output` or `jev_fallback`); a failure while `on` stays in the log. The command runs the approved
   install (#245), never a checkout; a missing launcher or a failed integrity check still exits 0
   with empty stdout, and the launcher's message is kept in `~/.gogo-harness/prompt-hook.last-error`
   (overwritten by every run).
 - **One JEV call, the key in one child.** The hook process loads no config and builds no provider.
-  When sending, it starts `prompt-hook --live-child` through the recorded wrapper
-  (`<wrapper> dev ai-harness/openrouter-api-key -- node <launcher> …`) with the payload on the
-  child's stdin, never in a file, and a 12 s limit. The child asks the `intake` questions as a
+  When sending, it starts `prompt-hook --live-child` through `scripts/secrets/exec-with.sh` of the
+  installed version it runs from (`<version>/scripts/secrets/exec-with.sh dev
+  ai-harness/openrouter-api-key -- node <launcher> …`) with the payload on the child's stdin, never
+  in a file, and a 12 s limit. The child asks the `intake` questions as a
   prompt observation: the "criteria stated, no question → AUTO" shortcut does not apply, the only
   action is `read`, no scope or authorization comes from the text. Cost goes to the shared
   `openrouter_jev` budget ($2/month) and `decisions.jsonl` like any checkpoint; each session is
   capped at 20 calls.
+- **What runs, checked before every send.** The wrapper closure is four files of the installed
+  version: `scripts/secrets/exec-with.sh`, `scripts/secrets/common.sh`, `scripts/lib/manifest.py`,
+  `config/secrets.manifest.yml`. Before the session call is taken, each must be listed in that
+  version's `MANIFEST`, be a regular file (no symlink) with the listed sha256, and the wrapper must
+  be executable: absent or unlisted is `jev_wrapper_missing`, anything else `jev_wrapper_unverified`.
+  Nothing chooses another wrapper — not the consent file, the environment or a flag — and a
+  checkout has no `MANIFEST`, so it refuses. **Until #253 ships these four files in the install
+  and its `MANIFEST` (owner decision D6), every send refuses with `jev_wrapper_missing`.**
+- **The child's environment is an allowlist.** The wrapper and the child start with `PATH`,
+  `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `TZ`, `TERM`, `LANG`, `LC_*`, `AWS_*`,
+  `*_PROXY`/`*_proxy`, `SSL_CERT_FILE`/`SSL_CERT_DIR`, the configuration in the table above marked
+  `passed` (`HARNESS_JEV_MONTHLY_USD`, `JEV_TIMEOUT_MS`, verbatim: a malformed value is
+  `jev_child_child_failed`, `0` an exhausted budget), and what the hook sets
+  (`HARNESS_STATE_DIR`, `JEV_MODE`, `JEV_LIVE_AUTHORIZED`, `JEV_PRIVACY_REVIEWED`). Nothing else:
+  `BASH_ENV`, `ENV`, `PYTHON*`, `NODE_OPTIONS`, `NODE_PATH`, `LD_*`, `DYLD_*`, `AWKPATH`, `JEV_MODEL`
+  and the rest never arrive.
+- **Trusted runtime.** Beyond the four checked files, the send relies on `bash`, `python3`, `aws`,
+  `awk`, `cut`, `sed` and `node` as found on the owner's `PATH` (interpreter, standard library and
+  system site-packages) and on the owner's `~/.aws` configuration, `credential_process` included —
+  the same trust as `node` itself today. `exec-with.sh` and `common.sh` call `python3 -I` (no
+  script directory on `sys.path`, no user site, no `PYTHON*`) once #253 ships those bytes; a
+  same-user swap between the check and the exec, and an `aws` process left running when the 12 s
+  limit kills the wrapper, are the ADR-0013 D-3 / #245 residuals.
 - **An observation, not a task.** The prompt becomes a `TaskSummary` draft (`src/adapters/prompt.ts`,
   heuristics listed there) with no actions, scope, authorizations, labels or rules; text such as
   "the owner approved this" grants nothing. The outbound sanitizer runs first, so a malformed email

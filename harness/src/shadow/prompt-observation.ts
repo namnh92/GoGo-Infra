@@ -8,18 +8,33 @@
  * time), a `#jev` / `#nojev` control line is taken out, the prompt adapter runs and the
  * outbound sanitizer validates the draft — before anything that could decide.
  *
- * Nothing is sent unless the owner opted in (jev-optin.ts): `#jev` on this
- * prompt once `jev-prompt setup` was done, or every prompt while
- * `jev-prompt on` has not expired; `#nojev` always wins. JEV_MODE and keys in
- * the environment never turn sending on: this file loads no config and
- * builds no provider. When sending, it starts `prompt-live.ts` as a child
- * through the recorded secrets wrapper (the key reaches that child only),
- * with the raw payload on the child's stdin, a time limit and a per-session
- * call cap; the shared `openrouter_jev` budget applies inside the child.
+ * Nothing is sent unless the owner opted in (jev-optin.ts): `#jev` as the
+ * first non-blank line once `jev-prompt setup` was done, or every prompt
+ * while `jev-prompt on` has not expired; `#nojev` on any line always wins
+ * (adapters/prompt.ts, MARKER_RULE). JEV_MODE and keys in the environment
+ * never turn sending on: this file loads no config and builds no provider.
+ *
+ * Order (PR #254 shape rev 3, I9): read → parse → marker → sanitizer →
+ * opt-in → configured → wrapper closure verified → session call taken →
+ * spawn. A refusal before the session call leaves `sessions.json` as it was.
+ *
+ * What runs (I6): `scripts/secrets/exec-with.sh` of the installed version
+ * this file runs from (#245/#253 layout), never a recorded path, a flag or
+ * the environment, and only after the four closure files (WRAPPER_CLOSURE)
+ * match the version's MANIFEST — regular files, sha256 equal, the wrapper
+ * executable. A checkout has no MANIFEST and refuses (`jev_wrapper_missing`);
+ * until #253 ships the closure in the install, every send refuses the same
+ * way (owner decision D6). The child is `prompt-live.ts`, with the raw
+ * payload on stdin, a time limit, an allowlisted environment (childEnv) and
+ * the shared `openrouter_jev` budget inside it. A same-user swap between the
+ * check and the exec stays the ADR-0013 D-3 / #245 residual.
  *
  * Output contract with Claude Code: stdout is empty, or one JSON object that
  * adds a short advisory to the context (ADR-0013 D-1 — never a permission,
- * never a block); stderr is empty; exit 0, whatever happens. A failing
+ * never a block); stderr is empty; exit 0, whatever happens. Every byte of
+ * that object is the hook's own (I8): a closed note code, or fixed text keyed
+ * by a validated outcome plus a model id that passes MODEL_ID — nothing the
+ * child returns is interpolated, and its reasons are never shown. A failing
  * launcher (#245) is absorbed by PROMPT_HOOK_COMMAND, with no checkout fallback.
  *
  * A record holds digests, counts, codes, the outcome and the model build —
@@ -29,12 +44,13 @@
  */
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFileSync, mkdirSync, realpathSync, renameSync, statSync } from 'node:fs';
+import { accessSync, appendFileSync, constants, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { ADAPTER_VERSION, ShadowInputError, parseHookInput, parsePrompt, promptMarker } from '../adapters/prompt.ts';
 import type { PromptExtraction } from '../adapters/prompt.ts';
+import type { DecisionErrorCategory } from '../decisions/types.ts';
 import { InvalidSummaryData, sanitizeSummary } from '../runtime/sanitize.ts';
 import { optInActive, readOptIn, stateDirOf, takeSessionCall } from './jev-optin.ts';
 
@@ -84,9 +100,120 @@ type Options = {
   /** The entry the live child is started with; the launcher (or cli.ts) this process runs from. */
   entry?: string;
   childTimeoutMs?: number;
+  /**
+   * Test seam: the version root whose closure is verified and run, instead of
+   * the one this file runs from. cli.ts never passes it.
+   */
+  treeRoot?: string;
 };
 
-type ChildResult = { outcome: string; source: string; fallback: boolean; errorCategory: string | null; reasons: string[]; model: string | null } | { error: string };
+/** The files the wrapper runs, relative to the version root; all four must be in its MANIFEST (#253, D6). */
+export const WRAPPER_CLOSURE = ['scripts/secrets/exec-with.sh', 'scripts/secrets/common.sh', 'scripts/lib/manifest.py', 'config/secrets.manifest.yml'] as const;
+
+/**
+ * Configuration the child reads, passed verbatim (I7b); its loadConfig()
+ * validates them — malformed is `child_failed`, `0` is an exhausted budget.
+ * Not passed, on purpose: JEV_MODEL (the model is pinned, ADR-0013 D-2),
+ * HARNESS_CONCURRENCY (the child is one call), HARNESS_ANTHROPIC_* (unused).
+ */
+export const CHILD_CONFIG_PASSTHROUGH = ['HARNESS_JEV_MONTHLY_USD', 'JEV_TIMEOUT_MS'] as const;
+
+const CHILD_ENV_NAMES = new Set(['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'TZ', 'TERM', 'LANG', 'SSL_CERT_FILE', 'SSL_CERT_DIR', ...CHILD_CONFIG_PASSTHROUGH]);
+const CHILD_ENV_PATTERNS = [/^LC_[A-Z_]+$/, /^AWS_[A-Z0-9_]+$/, /^[A-Za-z]+_(PROXY|proxy)$/];
+
+/**
+ * The environment the wrapper and the child start with, built from nothing
+ * but (a) an ambient allowlist — PATH, HOME, user, shell, locale and
+ * terminal, AWS_*, proxies and CA files — (b) CHILD_CONFIG_PASSTHROUGH and
+ * (c) what the hook sets. The allowlist is the rule; BASH_ENV, ENV,
+ * SHELLOPTS, PYTHON*, NODE_OPTIONS, NODE_PATH, LD_*, DYLD_*, AWKPATH and the
+ * rest never arrive.
+ */
+export function childEnv(env: Record<string, string | undefined>, stateDir: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(env)) if (v !== undefined && (CHILD_ENV_NAMES.has(k) || CHILD_ENV_PATTERNS.some((p) => p.test(k)))) out[k] = v;
+  // The owner's opt-in is the authorization and the privacy statement for this one call.
+  return { ...out, HARNESS_STATE_DIR: stateDir, JEV_MODE: 'live', JEV_LIVE_AUTHORIZED: 'yes', JEV_PRIVACY_REVIEWED: 'yes' };
+}
+
+type Readiness = 'ok' | 'jev_wrapper_missing' | 'jev_wrapper_unverified';
+
+/**
+ * Whether `<root>/MANIFEST` lists the four closure files and each matches:
+ * a regular file (no symlink), sha256 equal to its entry, the wrapper
+ * executable. MANIFEST entries are #253's `{ sha256, exec }` or a bare
+ * digest. Absent or unlisted is `missing`; anything else wrong is
+ * `unverified`. Four small files, hashed before the session call and before
+ * the child's clock starts.
+ */
+export function wrapperReady(root: string | null): Readiness {
+  if (root === null) return 'jev_wrapper_missing';
+  let files: Record<string, unknown>;
+  try {
+    const manifest = JSON.parse(readFileSync(join(root, 'MANIFEST'), 'utf8')) as { files?: unknown };
+    if (typeof manifest.files !== 'object' || manifest.files === null) return 'jev_wrapper_unverified';
+    files = manifest.files as Record<string, unknown>;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'jev_wrapper_missing' : 'jev_wrapper_unverified';
+  }
+  for (const path of WRAPPER_CLOSURE) {
+    const entry = files[path];
+    if (entry === undefined) return 'jev_wrapper_missing';
+    const expected = typeof entry === 'string' ? entry : typeof entry === 'object' && entry !== null ? (entry as { sha256?: unknown }).sha256 : undefined;
+    if (typeof expected !== 'string') return 'jev_wrapper_unverified';
+    const file = join(root, path);
+    let st;
+    try {
+      st = lstatSync(file);
+    } catch {
+      return 'jev_wrapper_missing';
+    }
+    if (!st.isFile()) return 'jev_wrapper_unverified';
+    if (createHash('sha256').update(readFileSync(file)).digest('hex') !== expected) return 'jev_wrapper_unverified';
+  }
+  try {
+    accessSync(join(root, WRAPPER_CLOSURE[0]), constants.X_OK);
+  } catch {
+    return 'jev_wrapper_unverified';
+  }
+  return 'ok';
+}
+
+const OUTCOMES = ['AUTO_EXECUTE', 'RESEARCH_AND_CONTINUE', 'HUMAN_APPROVAL'] as const;
+type Outcome = (typeof OUTCOMES)[number];
+const SOURCES = ['policy', 'loop', 'rules', 'jev', 'fallback'] as const;
+const FALLBACK_CATEGORIES = [
+  'disabled', 'not_authorized', 'budget_exhausted', 'timeout', 'network', 'auth', 'billing', 'refused', 'rate_limit', 'invalid_request', 'server', 'invalid_response', 'invalid_data', 'decision_calls',
+] as const satisfies ReadonlyArray<DecisionErrorCategory | 'decision_calls'>;
+/** The errors prompt-live.ts may return. */
+const CHILD_ERRORS = ['suppressed', 'not_live', 'no_key', 'child_failed', 'invalid_observation', 'stdin_too_large', 'stdin_timeout', 'stdin_error'] as const;
+const MODEL_ID = /^[A-Za-z0-9._/:-]{1,80}$/;
+
+/** Every code a note or a record may carry (I8); nothing else reaches stdout. */
+export const NOTE_CODES: ReadonlySet<string> = new Set([
+  'invalid_data', 'sanitize_failed', 'jev_not_configured', 'session_cap', 'session_unreadable', 'session_busy',
+  'jev_wrapper_missing', 'jev_wrapper_unverified', 'jev_timeout', 'jev_wrapper_failed', 'jev_spawn_failed', 'jev_bad_output', 'jev_fallback',
+  ...FALLBACK_CATEGORIES.map((c) => `jev_fallback_${c}`),
+  ...CHILD_ERRORS.map((e) => `jev_child_${e}`),
+]);
+
+type ChildAnswer = { outcome: Outcome; source: (typeof SOURCES)[number]; fallback: boolean; errorCategory: string | null; model: string | null };
+type ChildResult = ChildAnswer | { error: string };
+
+function isChildResult(v: unknown): v is ChildResult {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
+  const r = v as Record<string, unknown>;
+  if ('error' in r) return typeof r.error === 'string';
+  return (
+    (OUTCOMES as readonly unknown[]).includes(r.outcome) &&
+    (SOURCES as readonly unknown[]).includes(r.source) &&
+    typeof r.fallback === 'boolean' &&
+    (r.errorCategory === null || typeof r.errorCategory === 'string') &&
+    (r.model === null || typeof r.model === 'string')
+  );
+}
+
+export const ADVISORY_DISCLAIMER = 'JEV read prompt text only; assessed no scope, no authorization, no action; check actual scope and owner authorization before acting';
 
 /** Observe one hook payload; returns what to print on stdout (often nothing). Never throws. */
 export async function observePrompt(o: Options): Promise<string> {
@@ -131,7 +258,8 @@ async function observe(o: Options): Promise<{ record: PromptRecord; stdout: stri
   const counts = { ...extraction.counts, slashCommand: extraction.slashCommand };
   const common = { ...ids, optIn, extraction: counts };
   // Only an explicit #jev gets told why nothing was sent; a toggle-on failure stays in the log.
-  const note = (code: string) => (marker === 'jev' ? hookOutput(`GoGo harness · #jev: prompt này không được gửi cho JEV (${code}).${code === 'jev_not_configured' ? ' Owner chạy `jev-prompt setup` trên terminal để cho phép.' : ''}`) : '');
+  const note = (code: string) => (marker === 'jev' ? hookOutput({ kind: 'note', code }) : '');
+  const refused = (code: string, over: Partial<PromptRecord> = {}) => ({ record: base(o, { ...common, status: 'ok', code, ...over }), stdout: note(code) });
 
   try {
     // The outbound sanitizer, run first: a summary it rejects is never sent.
@@ -141,65 +269,75 @@ async function observe(o: Options): Promise<{ record: PromptRecord; stdout: stri
     return { record: base(o, { ...common, status: 'error', code: 'sanitize_failed' }), stdout: note('sanitize_failed') };
   }
   if (optIn === 'off' || optIn === 'suppressed') return none(base(o, { ...common, status: 'ok' }));
-  if (!optInRecord) return { record: base(o, { ...common, status: 'ok', code: 'jev_not_configured' }), stdout: note('jev_not_configured') };
+  if (!optInRecord) return refused('jev_not_configured');
+  // Readiness before admission (I9): a tree that cannot send takes no call from the session.
+  const root = o.treeRoot ?? versionRoot();
+  const ready = wrapperReady(root);
+  if (ready !== 'ok') return refused(ready);
   const admission = await takeSessionCall(stateDir, ids.sessionDigest, now);
-  if (admission !== 'ok') return { record: base(o, { ...common, status: 'ok', code: `session_${admission}` }), stdout: note(`session_${admission}`) };
+  if (admission !== 'ok') return refused(`session_${admission}`);
 
-  const child = runChild(o, optInRecord.wrapper, ids.observationId, read.data, stateDir);
-  if ('error' in child) return { record: base(o, { ...common, mode: 'jev', status: 'ok', code: child.error }), stdout: note(child.error) };
-  const jev = { fallback: child.fallback, errorCategory: child.errorCategory, model: child.model };
-  const record = base(o, { ...common, mode: 'jev', status: 'ok', outcome: child.outcome, source: child.source, jev });
-  if (child.source !== 'jev' || child.fallback) return { record, stdout: note(child.errorCategory ?? 'jev_fallback') };
-  record.contextInjected = true;
-  return { record, stdout: hookOutput(advisory(child)) };
+  const child = runChild(o, join(root!, WRAPPER_CLOSURE[0]), ids.observationId, read.data, stateDir);
+  if ('error' in child) return refused(child.error, { mode: 'jev' });
+  // Recorded only when it is a category the router has; anything else is not text to keep.
+  const category = (FALLBACK_CATEGORIES as readonly (string | null)[]).includes(child.errorCategory) ? child.errorCategory : null;
+  const jev = { fallback: child.fallback, errorCategory: category, model: child.model };
+  if (child.source !== 'jev' || child.fallback) return refused(category ? `jev_fallback_${category}` : 'jev_fallback', { mode: 'jev', outcome: child.outcome, source: child.source, jev });
+  const record = base(o, { ...common, mode: 'jev', status: 'ok', outcome: child.outcome, source: child.source, jev, contextInjected: true });
+  return { record, stdout: hookOutput({ kind: 'advisory', outcome: child.outcome, model: child.model }) };
 }
 
-function runChild(o: Options, wrapper: string, observationId: string, payload: string, stateDir: string): ChildResult {
+/** `<wrapper> dev ai-harness/openrouter-api-key -- node <entry> prompt-hook --live-child …`; the answer, validated, or a closed code. */
+function runChild(o: Options, wrapper: string, observationId: string, payload: string, stateDir: string): ChildAnswer | { error: string } {
   const entry = o.entry ?? realpathSync(process.argv[1] ?? '');
   const r = spawnSync(wrapper, ['dev', 'ai-harness/openrouter-api-key', '--', process.execPath, entry, 'prompt-hook', '--live-child', '--observation', observationId], {
     input: payload,
     encoding: 'utf8',
     timeout: o.childTimeoutMs ?? SHADOW_LIMITS.childTimeoutMs,
     maxBuffer: 64 * 1024,
-    // The owner's opt-in is the authorization and the privacy statement for this one call.
-    env: { ...process.env, ...o.env, HARNESS_STATE_DIR: stateDir, JEV_MODE: 'live', JEV_LIVE_AUTHORIZED: 'yes', JEV_PRIVACY_REVIEWED: 'yes' },
+    env: childEnv(o.env, stateDir),
   });
   const code = (r.error as NodeJS.ErrnoException | undefined)?.code;
   if (code === 'ETIMEDOUT') return { error: 'jev_timeout' };
   // A wrapper that exits before reading stdin (no AWS session, missing row) also breaks the pipe.
   if ((r.status !== null && r.status !== 0) || code === 'EPIPE') return { error: 'jev_wrapper_failed' };
   if (r.error || r.status === null) return { error: 'jev_spawn_failed' };
-  const line = r.stdout.trim().split('\n').pop() ?? '';
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(line) as ChildResult;
-    if (typeof parsed !== 'object' || parsed === null) return { error: 'jev_bad_output' };
-    if ('error' in parsed) return { error: `jev_${String(parsed.error).replace(/[^a-z_]/g, '').slice(0, 40)}` };
-    return parsed;
+    parsed = JSON.parse(r.stdout.trim().split('\n').pop() ?? '');
   } catch {
     return { error: 'jev_bad_output' };
   }
+  if (!isChildResult(parsed)) return { error: 'jev_bad_output' };
+  if ('error' in parsed) return { error: (CHILD_ERRORS as readonly string[]).includes(parsed.error) ? `jev_child_${parsed.error}` : 'jev_bad_output' };
+  // Kept only when it is a model id; never text to interpolate.
+  return { ...parsed, model: parsed.model !== null && MODEL_ID.test(parsed.model) ? parsed.model : null };
 }
 
-const GUIDANCE: Record<string, string> = {
+const GUIDANCE: Record<Outcome, string> = {
   AUTO_EXECUTE: 'JEV không thấy câu hỏi mở cần owner trả lời.',
   RESEARCH_AND_CONTINUE: 'JEV: nên tìm trong code/docs/issues trước; nếu tự chọn phương án thì ghi giả định vào handoff.',
   HUMAN_APPROVAL: 'JEV: nên hỏi owner trước khi làm.',
 };
 
-function advisory(r: { outcome: string; reasons: string[]; model: string | null }): string {
-  const text = [
-    'GoGo harness · gợi ý JEV cho yêu cầu này — chỉ tư vấn, không phải quyền; policy, hard gate và quyền của Claude Code vẫn áp dụng như cũ.',
-    GUIDANCE[r.outcome] ?? `JEV: ${r.outcome}.`,
-    ...r.reasons.map((reason) => `- ${reason}`),
-    r.model ? `(${r.model})` : '',
-  ]
-    .filter(Boolean)
-    .join('\n');
-  return text.slice(0, SHADOW_LIMITS.contextChars);
-}
-
-function hookOutput(additionalContext: string): string {
-  return `${JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext } })}\n`;
+/** The only stdout writer: a closed note code, or the fixed advisory for a validated outcome. */
+function hookOutput(m: { kind: 'note'; code: string } | { kind: 'advisory'; outcome: Outcome; model: string | null }): string {
+  let text: string;
+  if (m.kind === 'note') {
+    if (!NOTE_CODES.has(m.code)) return '';
+    text = `GoGo harness · #jev: prompt này không được gửi cho JEV (${m.code}).${m.code === 'jev_not_configured' ? ' Owner chạy `jev-prompt setup` trên terminal để cho phép.' : ''}`;
+  } else {
+    text = [
+      'GoGo harness · gợi ý JEV cho yêu cầu này — chỉ tư vấn, không phải quyền; policy, hard gate và quyền của Claude Code vẫn áp dụng như cũ.',
+      GUIDANCE[m.outcome],
+      `${ADVISORY_DISCLAIMER}.`,
+      m.model !== null && MODEL_ID.test(m.model) ? `(${m.model})` : '',
+    ]
+      .filter(Boolean)
+      .join('\n')
+      .slice(0, SHADOW_LIMITS.contextChars);
+  }
+  return `${JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: text } })}\n`;
 }
 
 function base(o: Options, over: Partial<PromptRecord> & Pick<PromptRecord, 'status'>): PromptRecord {
@@ -260,10 +398,16 @@ function append(stateDir: string, record: PromptRecord): void {
   appendFileSync(file, `${JSON.stringify(record)}\n`);
 }
 
+const INSTALLED = /^(.*\/versions\/([0-9a-f]{40}))\/harness\/src\/shadow\/prompt-observation\.ts$/;
+
 /** The installed version this file runs from (#245 layout), or `checkout`. */
 function pinnedSha(): string {
-  const m = /\/versions\/([0-9a-f]{40})\/harness\/src\/shadow\/prompt-observation\.ts$/.exec(fileURLToPath(import.meta.url));
-  return m ? m[1]! : 'checkout';
+  return INSTALLED.exec(fileURLToPath(import.meta.url))?.[2] ?? 'checkout';
+}
+
+/** The root of that installed version (`…/versions/<sha>`), whose closure is the one run; null in a checkout. */
+function versionRoot(): string | null {
+  return INSTALLED.exec(fileURLToPath(import.meta.url))?.[1] ?? null;
 }
 
 function digest(namespace: string, value: string): string {

@@ -2,25 +2,29 @@
  * Owner opt-in for sending prompts to JEV (GoGo-Infra#247, owner decision
  * 2026-10-23, issuecomment-6362221699). Off by default.
  *
- *   node <launcher> jev-prompt setup [--wrapper <exec-with.sh>]   # allow `#jev` on single prompts
- *   node <launcher> jev-prompt on [--for 8h] [--wrapper …]       # every prompt, for at most 24 h
- *   node <launcher> jev-prompt off                                # stop sending (no terminal needed)
+ *   node <launcher> jev-prompt setup            # allow `#jev` on single prompts
+ *   node <launcher> jev-prompt on [--for 8h]    # every prompt, for at most 24 h
+ *   node <launcher> jev-prompt off              # stop sending (no terminal needed)
  *   node <launcher> jev-prompt status
  *
  * `setup` and `on` are the owner's consent and run on a terminal only: the
  * owner reads what will be sent where and types a confirmation. They record
- * the secrets wrapper the key comes through (scripts/secrets/exec-with.sh,
- * so the key reaches one child process and nothing else) and, for `on`, an
- * expiry after which sending stops by itself. Every change is a history line.
+ * the consent and, for `on`, an expiry after which sending stops by itself.
+ * Every change is a history line. No wrapper is recorded (PR #254 shape rev
+ * 3, I6): the key always comes through `scripts/secrets/exec-with.sh` of the
+ * install the hook runs from, checked against its MANIFEST before each send
+ * (prompt-observation.ts) — consent, the environment or a flag never choose
+ * what runs. A schema-1 file, which named a wrapper, is not consent any more:
+ * the owner runs `setup` again.
  *
  * Same limit as the install (#245): a session running as the same OS user
  * can write these files too. That boundary is Claude Code's permissions on
  * writes outside the workspace; this file records consent, it cannot prove it.
  */
-import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { LockTimeoutError, withStateLock } from '../runtime/lock.ts';
 import { hostname, homedir, userInfo } from 'node:os';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 
 export const OPTIN_FILE = 'jev-prompt.json';
@@ -28,8 +32,8 @@ export const OPTIN_HISTORY = 'jev-prompt-history.jsonl';
 export const SESSIONS_FILE = 'prompt-hook/sessions.json';
 export const OPTIN_LIMITS = { defaultHours: 8, maxHours: 24, sessionCalls: 20, sessionKeepDays: 7 } as const;
 
-export type OptIn = { schema: 1; wrapper: string; enabledUntil: string | null; updatedAt: string; actor: string };
-export type OptInPlan = { action: 'setup' | 'on'; wrapper: string; enabledUntil: string | null; actor: string };
+export type OptIn = { schema: 2; enabledUntil: string | null; updatedAt: string; actor: string };
+export type OptInPlan = { action: 'setup' | 'on'; enabledUntil: string | null; actor: string };
 
 export function stateDirOf(env: Record<string, string | undefined>): string {
   return env.HARNESS_STATE_DIR ?? join(homedir(), '.gogo-harness');
@@ -38,7 +42,7 @@ export function stateDirOf(env: Record<string, string | undefined>): string {
 export function readOptIn(stateDir: string): OptIn | null {
   try {
     const o = JSON.parse(readFileSync(join(stateDir, OPTIN_FILE), 'utf8')) as Partial<OptIn>;
-    if (o.schema !== 1 || typeof o.wrapper !== 'string' || (o.enabledUntil !== null && typeof o.enabledUntil !== 'string')) return null;
+    if (o.schema !== 2 || (o.enabledUntil !== null && typeof o.enabledUntil !== 'string')) return null;
     return o as OptIn;
   } catch {
     return null;
@@ -52,15 +56,9 @@ export function optInActive(o: OptIn | null, now: Date): boolean {
 
 /** `setup` or `on`, after the owner confirms the plan. */
 export async function grantOptIn(
-  o: { stateDir: string; action: 'setup' | 'on'; wrapper: string; hours?: number; actor?: string; now?: () => Date },
+  o: { stateDir: string; action: 'setup' | 'on'; hours?: number; actor?: string; now?: () => Date },
   confirm: (plan: OptInPlan) => Promise<boolean>,
 ): Promise<OptIn> {
-  if (!isAbsolute(o.wrapper)) throw new Error('--wrapper must be an absolute path');
-  try {
-    accessSync(o.wrapper, constants.X_OK);
-  } catch {
-    throw new Error(`${o.wrapper} is not an executable file`);
-  }
   const now = o.now?.() ?? new Date();
   let enabledUntil: string | null = null;
   if (o.action === 'on') {
@@ -68,13 +66,13 @@ export async function grantOptIn(
     if (!Number.isFinite(hours) || hours <= 0 || hours > OPTIN_LIMITS.maxHours) throw new Error(`--for must be between 1 and ${OPTIN_LIMITS.maxHours} hours`);
     enabledUntil = new Date(now.getTime() + hours * 3_600_000).toISOString();
   } else {
-    // setup keeps an `on` that is still running; it only (re)records the wrapper.
+    // setup keeps an `on` that is still running.
     const current = readOptIn(o.stateDir);
     enabledUntil = optInActive(current, now) ? current!.enabledUntil : null;
   }
-  const plan: OptInPlan = { action: o.action, wrapper: o.wrapper, enabledUntil, actor: o.actor ?? actorName() };
+  const plan: OptInPlan = { action: o.action, enabledUntil, actor: o.actor ?? actorName() };
   if (!(await confirm(plan))) throw new Error('not confirmed; nothing changed');
-  const next: OptIn = { schema: 1, wrapper: plan.wrapper, enabledUntil: plan.enabledUntil, updatedAt: now.toISOString(), actor: plan.actor };
+  const next: OptIn = { schema: 2, enabledUntil: plan.enabledUntil, updatedAt: now.toISOString(), actor: plan.actor };
   write(o.stateDir, next, plan.action, now);
   return next;
 }
@@ -90,13 +88,24 @@ export function revokeOptIn(stateDir: string, now = new Date(), actor = actorNam
 
 function write(stateDir: string, next: OptIn, action: string, now: Date): void {
   mkdirSync(stateDir, { recursive: true });
-  appendFileSync(join(stateDir, OPTIN_HISTORY), `${JSON.stringify({ at: now.toISOString(), action, actor: next.actor, wrapper: next.wrapper, enabledUntil: next.enabledUntil })}\n`);
+  appendFileSync(join(stateDir, OPTIN_HISTORY), `${JSON.stringify({ at: now.toISOString(), action, actor: next.actor, enabledUntil: next.enabledUntil })}\n`);
   const tmp = join(stateDir, `.${OPTIN_FILE}.${process.pid}`);
   writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`);
   renameSync(tmp, join(stateDir, OPTIN_FILE));
 }
 
 export type SessionAdmission = 'ok' | 'cap' | 'unreadable' | 'busy';
+
+type SessionTable = Record<string, { calls: number; last: string }>;
+
+function isSessionTable(v: unknown): v is SessionTable {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
+  return Object.values(v).every((e: unknown) => {
+    if (typeof e !== 'object' || e === null || Array.isArray(e)) return false;
+    const { calls, last } = e as Record<string, unknown>;
+    return Number.isSafeInteger(calls) && (calls as number) >= 0 && typeof last === 'string' && !Number.isNaN(Date.parse(last));
+  });
+}
 
 /**
  * One more JEV call for this session, if its cap allows (#247 review: a cap
@@ -106,9 +115,10 @@ export type SessionAdmission = 'ok' | 'cap' | 'unreadable' | 'busy';
  * One transaction across processes (PR #254 review P2): read, check and
  * increment run under their own lock (`prompt-hook/harness.lock`, not the
  * decide lock, which the live child takes next), held for that step only,
- * and the table is replaced by rename. A table that cannot be read is
- * `unreadable` — nothing is reset and nothing is admitted until the owner
- * removes the file; a lock not obtained in 2 s is `busy`.
+ * and the table is replaced by rename. A table that cannot be read, or any
+ * entry of it that is not `{ calls: safe non-negative integer, last: a
+ * date }`, is `unreadable` — nothing is pruned, reset or admitted until the
+ * owner removes the file; a lock not obtained in 2 s is `busy`.
  */
 export async function takeSessionCall(stateDir: string, sessionDigest: string, now: Date): Promise<SessionAdmission> {
   const file = join(stateDir, SESSIONS_FILE);
@@ -117,7 +127,7 @@ export async function takeSessionCall(stateDir: string, sessionDigest: string, n
     return await withStateLock(
       dirname(file),
       async (): Promise<SessionAdmission> => {
-        let table: Record<string, { calls: number; last: string }> = {};
+        let table: SessionTable = {};
         let raw: string | null = null;
         try {
           raw = readFileSync(file, 'utf8');
@@ -127,8 +137,9 @@ export async function takeSessionCall(stateDir: string, sessionDigest: string, n
         if (raw !== null) {
           try {
             const parsed: unknown = JSON.parse(raw);
-            if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return 'unreadable';
-            table = parsed as typeof table;
+            // The whole table, before anything is read, pruned or written (PR #254 S-02).
+            if (!isSessionTable(parsed)) return 'unreadable';
+            table = parsed;
           } catch {
             return 'unreadable';
           }
@@ -152,16 +163,12 @@ export async function takeSessionCall(stateDir: string, sessionDigest: string, n
 }
 
 /** `jev-prompt <setup|on|off|status>` — returns the exit code; prints to stdout/stderr like the rest of the CLI. */
-export async function jevPromptCommand(args: string[], env: Record<string, string | undefined>, cwd = process.cwd()): Promise<number> {
+export async function jevPromptCommand(args: string[], env: Record<string, string | undefined>): Promise<number> {
   const stateDir = stateDirOf(env);
   const [sub, ...rest] = args;
-  const flag = (name: string) => {
-    const i = rest.indexOf(name);
-    return i >= 0 ? rest[i + 1] : undefined;
-  };
   if (sub === 'status') {
     const o = readOptIn(stateDir);
-    process.stdout.write(`${JSON.stringify({ setUp: o !== null, active: optInActive(o, new Date()), enabledUntil: o?.enabledUntil ?? null, wrapper: o?.wrapper ?? null }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ setUp: o !== null, active: optInActive(o, new Date()), enabledUntil: o?.enabledUntil ?? null }, null, 2)}\n`);
     return 0;
   }
   if (sub === 'off') {
@@ -170,22 +177,26 @@ export async function jevPromptCommand(args: string[], env: Record<string, strin
     return 0;
   }
   if (sub !== 'setup' && sub !== 'on') {
-    process.stderr.write('harness: jev-prompt setup|on [--for 8h]|off|status [--wrapper <exec-with.sh>]\n');
+    process.stderr.write('harness: jev-prompt setup|on [--for 8h]|off|status\n');
     return 2;
+  }
+  // Options before the terminal check: a flag that is not this command's (`--wrapper`, gone in
+  // PR #254 rev 3) is refused the same way with or without a terminal, and never recorded.
+  let forFlag: string | undefined;
+  for (let i = 0; i < rest.length; i++) {
+    if (sub === 'on' && rest[i] === '--for' && i + 1 < rest.length) forFlag = rest[++i];
+    else {
+      process.stderr.write(`harness: unknown option ${rest[i]}\n`);
+      return 2;
+    }
   }
   if (!process.stdin.isTTY) {
     process.stderr.write('harness: jev-prompt setup/on asks the owner on a terminal; stdin is not one\n');
     return 2;
   }
-  const wrapper = flag('--wrapper') ? resolve(flag('--wrapper')!) : findWrapper(cwd);
-  if (!wrapper) {
-    process.stderr.write('harness: no scripts/secrets/exec-with.sh above this directory; pass --wrapper <path>\n');
-    return 2;
-  }
-  const forFlag = flag('--for');
   const hours = forFlag === undefined ? undefined : Number(forFlag.replace(/h$/i, ''));
   try {
-    const o = await grantOptIn({ stateDir, action: sub, wrapper, hours }, askOnTerminal);
+    const o = await grantOptIn({ stateDir, action: sub, hours }, askOnTerminal);
     process.stdout.write(`${JSON.stringify(o, null, 2)}\n`);
     return 0;
   } catch (e) {
@@ -194,29 +205,25 @@ export async function jevPromptCommand(args: string[], env: Record<string, strin
   }
 }
 
-function findWrapper(start: string): string | null {
-  for (let dir = resolve(start); ; dir = dirname(dir)) {
-    const candidate = join(dir, 'scripts/secrets/exec-with.sh');
-    if (existsSync(join(dir, '.git')) && existsSync(candidate) && statSync(candidate).isFile()) return candidate;
-    if (dirname(dir) === dir) return null;
-  }
+/** What the owner reads before typing the confirmation (I10: D5 grammar and the closure, as in docs/ai-harness.md). */
+export function consentText(plan: OptInPlan): string {
+  const scope = plan.action === 'on' ? `MỌI prompt cho tới ${plan.enabledUntil}` : 'chỉ prompt có `#jev`';
+  return [
+    `jev-prompt ${plan.action}`,
+    `  gửi:      ${scope}`,
+    '  #jev:     chỉ tính khi là dòng không trống đầu tiên của prompt',
+    '  #nojev:   ở bất kỳ dòng nào, kể cả trong code hay pasted content, chặn gửi prompt đó',
+    '  tới:      OpenRouter, model typesafe/jev-1.14 — bản tóm tắt đã qua sanitizer (credential, email, số điện thoại bị thay; dữ liệu sai định dạng thì không gửi)',
+    '  key:      qua `scripts/secrets/exec-with.sh` của bản cài đang chạy, kiểm MANIFEST trước mỗi lần gửi; chỉ vào một tiến trình con mỗi lần gửi',
+    '  kết quả:  gợi ý ngắn chèn vào context — chỉ tư vấn, không chặn prompt, không cấp quyền',
+    '  lưu ý:    privacy review + DPA cho prompt thật CHƯA xong (GoGo-Infra#244); bạn xác nhận tự chịu trách nhiệm với prompt mình gửi',
+    `  ghi bởi:  ${plan.actor}`,
+    '',
+  ].join('\n');
 }
 
 async function askOnTerminal(plan: OptInPlan): Promise<boolean> {
-  const scope = plan.action === 'on' ? `MỌI prompt cho tới ${plan.enabledUntil} (trừ prompt có dòng #nojev)` : 'chỉ prompt có dòng #jev (một dòng riêng, đầu hoặc cuối prompt)';
-  process.stderr.write(
-    [
-      `jev-prompt ${plan.action}`,
-      `  gửi:      ${scope}`,
-      '  tới:      OpenRouter, model typesafe/jev-1.14 — bản tóm tắt đã qua sanitizer (credential, email, số điện thoại bị thay; dữ liệu sai định dạng thì không gửi)',
-      '  key:      qua wrapper, chỉ vào một tiến trình con mỗi lần gửi',
-      `  wrapper:  ${plan.wrapper}`,
-      '  kết quả:  gợi ý ngắn chèn vào context — chỉ tư vấn, không chặn prompt, không cấp quyền',
-      '  lưu ý:    privacy review + DPA cho prompt thật CHƯA xong (GoGo-Infra#244); bạn xác nhận tự chịu trách nhiệm với prompt mình gửi',
-      `  ghi bởi:  ${plan.actor}`,
-      '',
-    ].join('\n'),
-  );
+  process.stderr.write(consentText(plan));
   const expected = plan.action === 'on' ? 'on' : 'setup';
   const rl = createInterface({ input: process.stdin, output: process.stderr });
   try {

@@ -12,9 +12,10 @@
  * `openrouter_jev` ledger; the decision log gets one row like any checkpoint.
  * The loop controller is fresh and not persisted: a prompt is not a task.
  *
- * Prints exactly one JSON line — outcome, source, harness-written reasons,
+ * Prints exactly one JSON line — outcome, source, fallback and its category,
  * model build — or `{ "error": <code> }`. Never the prompt, never a message
- * from an exception.
+ * from an exception, and no reasons: the parent shows none (PR #254 shape
+ * rev 3, I8), so none are handed over.
  */
 import { join } from 'node:path';
 import type { Readable } from 'node:stream';
@@ -28,7 +29,7 @@ import { JsonlSink } from '../runtime/metrics.ts';
 import { readInput, SHADOW_LIMITS } from './prompt-observation.ts';
 
 export type LiveResult =
-  | { outcome: string; source: string; fallback: boolean; errorCategory: string | null; reasons: string[]; model: string | null }
+  | { outcome: string; source: string; fallback: boolean; errorCategory: string | null; model: string | null }
   | { error: string };
 
 export async function runLiveChild(o: { input: Readable; env: Record<string, string | undefined>; observationId: string }): Promise<LiveResult> {
@@ -59,7 +60,6 @@ export async function runLiveChild(o: { input: Readable; env: Record<string, str
       source: decision.source,
       fallback: decision.fallback,
       errorCategory: decision.errorCategory,
-      reasons: decision.reasons.slice(0, 3).map((r) => r.slice(0, 200)),
       model: decision.jev?.model ?? null,
     };
   } catch {

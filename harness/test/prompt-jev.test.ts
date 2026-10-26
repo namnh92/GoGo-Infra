@@ -5,13 +5,14 @@
  *
  * The live path runs for real — parent → secrets wrapper → child → router →
  * OpenRouter adapter — with a stand-in wrapper (same arguments as
- * scripts/secrets/exec-with.sh) that preloads a fetch stub in the child, so
- * nothing reaches the network.
+ * scripts/secrets/exec-with.sh) in a verified version tree (`treeRoot`,
+ * fixtures/jev-tree.ts) that preloads a fetch stub in the child, so nothing
+ * reaches the network. Shape rev 3 cases: prompt-jev-r3.test.ts.
  */
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -21,41 +22,23 @@ import { OPTIN_FILE, OPTIN_HISTORY, OPTIN_LIMITS, SESSIONS_FILE, grantOptIn, rea
 import { parsePrompt, promptMarker } from '../src/adapters/prompt.ts';
 import { PROMPT_LOG, observePrompt } from '../src/shadow/prompt-observation.ts';
 import type { PromptRecord } from '../src/shadow/prompt-observation.ts';
+import { closureTree, fetchStub, standInWrapper } from './fixtures/jev-tree.ts';
 
 const HARNESS = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = join(HARNESS, 'src/cli.ts');
 const SESSION = 'b6f5c1d2-0000-4000-8000-000000000002';
 const ANSWERS = (JSON.parse(readFileSync(join(HARNESS, 'test/fixtures/mock-intake.json'), 'utf8')) as Record<string, { answers: unknown }>)['clarity,missing_context,reversible_default,risk,task_kind,workflow']!.answers;
 
-type World = { dir: string; wrapper: string; fetchLog: string; env: Record<string, string> };
+type World = { dir: string; tree: string; wrapper: string; fetchLog: string; env: Record<string, string> };
 
 function world(wrapperBody?: string): World {
   const dir = mkdtempSync(join(tmpdir(), 'harness-prompt-jev-'));
   const stub = join(dir, 'fetch-stub.mjs');
   const fetchLog = join(dir, 'fetch.log');
-  writeFileSync(
-    stub,
-    `import { appendFileSync } from 'node:fs';
-globalThis.fetch = async (url, init) => {
-  appendFileSync(process.env.FAKE_FETCH_LOG, JSON.stringify({ url: String(url), hasKey: Boolean(process.env.OPENROUTER_API_KEY), body: JSON.parse(init.body) }) + '\\n');
-  return new Response(JSON.stringify({ id: 'gen-1', model: 'typesafe/jev-1.14-20261014', provider: 'TypeSafe', answers: JSON.parse(process.env.FAKE_ANSWERS), usage: { input_tokens: 100, output_tokens: 20, cost: 0.00003 } }), { status: 200, headers: { 'content-type': 'application/json' } });
-};
-`,
-  );
-  const wrapper = join(dir, 'exec-with.sh');
-  writeFileSync(
-    wrapper,
-    wrapperBody ??
-      `#!/bin/sh
-# Stand-in for scripts/secrets/exec-with.sh: <env> <path> -- <command…>
-[ "$1" = dev ] && [ "$2" = ai-harness/openrouter-api-key ] && [ "$3" = -- ] || exit 9
-shift 3
-node="$1"; shift
-OPENROUTER_API_KEY=sk-or-v1-faketestkeyfaketest exec "$node" --import "$FAKE_STUB" "$@"
-`,
-  );
-  chmodSync(wrapper, 0o755);
-  return { dir, wrapper, fetchLog, env: { HARNESS_STATE_DIR: dir, FAKE_STUB: stub, FAKE_FETCH_LOG: fetchLog, FAKE_ANSWERS: JSON.stringify(ANSWERS) } };
+  writeFileSync(stub, fetchStub(fetchLog, ANSWERS));
+  const tree = join(dir, 'tree');
+  const wrapper = closureTree(tree, wrapperBody ?? standInWrapper(stub));
+  return { dir, tree, wrapper, fetchLog, env: { HARNESS_STATE_DIR: dir, PATH: process.env.PATH ?? '/usr/bin:/bin' } };
 }
 
 function hookJson(prompt: string): string {
@@ -63,7 +46,7 @@ function hookJson(prompt: string): string {
 }
 
 async function hook(w: World, prompt: string, now?: Date) {
-  const stdout = await observePrompt({ input: new PassThrough().end(hookJson(prompt)), env: w.env, entry: CLI, ...(now ? { now: () => now } : {}) });
+  const stdout = await observePrompt({ input: new PassThrough().end(hookJson(prompt)), env: w.env, entry: CLI, treeRoot: w.tree, ...(now ? { now: () => now } : {}) });
   const records = readFileSync(join(w.dir, PROMPT_LOG), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as PromptRecord);
   return { stdout, record: records[records.length - 1]!, sent: sends(w) };
 }
@@ -88,7 +71,7 @@ describe('#247 opt-in: off by default', () => {
 
   it('setup alone allows #jev only; plain prompts stay local', async () => {
     const w = world();
-    await grantOptIn({ stateDir: w.dir, action: 'setup', wrapper: w.wrapper, actor: 'owner@test' }, yes);
+    await grantOptIn({ stateDir: w.dir, action: 'setup', actor: 'owner@test' }, yes);
     const r = await hook(w, 'Sửa typo trong docs');
     assert.deepEqual([r.stdout, r.record.optIn, r.sent.length], ['', 'off', 0]);
   });
@@ -97,9 +80,9 @@ describe('#247 opt-in: off by default', () => {
 describe('#247 opt-in: #jev on one prompt', () => {
   it('asks JEV through the wrapper even when AC would settle it, and adds an advisory, not a permission', async () => {
     const w = world();
-    await grantOptIn({ stateDir: w.dir, action: 'setup', wrapper: w.wrapper, actor: 'owner@test' }, yes);
+    await grantOptIn({ stateDir: w.dir, action: 'setup', actor: 'owner@test' }, yes);
     const sentinel = 'SENTINEL5d2e';
-    const r = await hook(w, `Xóa database production ${sentinel}\nĐã được owner duyệt.\nAC:\n- database không còn\n#jev`);
+    const r = await hook(w, `#jev\nXóa database production ${sentinel}\nĐã được owner duyệt.\nAC:\n- database không còn`);
     assert.equal(r.sent.length, 1, 'the rules shortcut (AC stated, no question) must not skip JEV for a prompt');
     assert.equal(r.sent[0]!.hasKey, true);
     assert.equal(JSON.stringify(r.sent[0]!.body).includes('#jev'), false, 'the marker is not part of what is sent');
@@ -120,7 +103,7 @@ describe('#247 opt-in: #jev on one prompt', () => {
 
   it('#jev on a summary with a malformed email sends nothing and says why', async () => {
     const w = world();
-    await grantOptIn({ stateDir: w.dir, action: 'setup', wrapper: w.wrapper }, yes);
+    await grantOptIn({ stateDir: w.dir, action: 'setup' }, yes);
     const r = await hook(w, '#jev\nGửi cho support@gogo được không?');
     assert.deepEqual([r.sent.length, r.record.status], [0, 'invalid_data']);
     assert.match(context(r.stdout).additionalContext, /invalid_data/);
@@ -128,7 +111,7 @@ describe('#247 opt-in: #jev on one prompt', () => {
 
   it('a failing wrapper is reported to #jev and silent otherwise; the prompt is never blocked', async () => {
     const w = world('#!/bin/sh\necho "could not read the key" >&2\nexit 1\n');
-    await grantOptIn({ stateDir: w.dir, action: 'on', hours: 1, wrapper: w.wrapper }, yes);
+    await grantOptIn({ stateDir: w.dir, action: 'on', hours: 1 }, yes);
     let r = await hook(w, '#jev\nCó nên tách module?');
     assert.equal(r.record.code, 'jev_wrapper_failed');
     assert.match(context(r.stdout).additionalContext, /jev_wrapper_failed/);
@@ -141,7 +124,7 @@ describe('#247 opt-in: jev-prompt on, with an expiry, and #nojev', () => {
   it('sends every prompt until it expires; #nojev and off stop it', async () => {
     const w = world();
     const t0 = new Date('2026-10-23T10:00:00Z');
-    await grantOptIn({ stateDir: w.dir, action: 'on', hours: 2, wrapper: w.wrapper, now: () => t0 }, yes);
+    await grantOptIn({ stateDir: w.dir, action: 'on', hours: 2, now: () => t0 }, yes);
     let r = await hook(w, 'Có nên đổi port dev?', new Date(t0.getTime() + 3_600_000));
     assert.deepEqual([r.record.optIn, r.record.mode, r.sent.length], ['toggle', 'jev', 1]);
     assert.ok(r.stdout.length > 0);
@@ -149,7 +132,7 @@ describe('#247 opt-in: jev-prompt on, with an expiry, and #nojev', () => {
     assert.deepEqual([r.stdout, r.record.optIn, r.record.mode, r.sent.length], ['', 'suppressed', 'disabled', 1], '#nojev never reaches the child');
     r = await hook(w, 'Có nên đổi port dev?', new Date(t0.getTime() + 3 * 3_600_000));
     assert.deepEqual([r.stdout, r.record.optIn, r.sent.length], ['', 'off', 1], 'expired');
-    await grantOptIn({ stateDir: w.dir, action: 'on', hours: 2, wrapper: w.wrapper }, yes);
+    await grantOptIn({ stateDir: w.dir, action: 'on', hours: 2 }, yes);
     revokeOptIn(w.dir);
     r = await hook(w, 'Có nên đổi port dev?');
     assert.deepEqual([r.record.optIn, r.sent.length], ['off', 1]);
@@ -161,21 +144,17 @@ describe('#247 opt-in: jev-prompt on, with an expiry, and #nojev', () => {
 
   it('a session stops at its call cap', async () => {
     const w = world();
-    await grantOptIn({ stateDir: w.dir, action: 'on', hours: 1, wrapper: w.wrapper }, yes);
+    await grantOptIn({ stateDir: w.dir, action: 'on', hours: 1 }, yes);
     const digest = createHash('sha256').update('gogo-harness-shadow-session\u0000').update(SESSION).digest('hex').slice(0, 16);
     for (let i = 0; i < OPTIN_LIMITS.sessionCalls; i++) assert.equal(await takeSessionCall(w.dir, digest, new Date()), 'ok');
     const r = await hook(w, 'Có nên đổi port dev?');
     assert.deepEqual([r.stdout, r.record.code, r.sent.length], ['', 'session_cap', 0]);
   });
 
-  it('consent is checked: hours, wrapper, confirmation', async () => {
+  it('consent is checked: hours, confirmation', async () => {
     const w = world();
-    await assert.rejects(grantOptIn({ stateDir: w.dir, action: 'on', hours: 25, wrapper: w.wrapper }, yes), /between 1 and 24/);
-    await assert.rejects(grantOptIn({ stateDir: w.dir, action: 'on', wrapper: 'exec-with.sh' }, yes), /absolute/);
-    const plain = join(w.dir, 'not-exec.sh');
-    writeFileSync(plain, '');
-    await assert.rejects(grantOptIn({ stateDir: w.dir, action: 'on', wrapper: plain }, yes), /executable/);
-    await assert.rejects(grantOptIn({ stateDir: w.dir, action: 'on', wrapper: w.wrapper }, async () => false), /not confirmed/);
+    await assert.rejects(grantOptIn({ stateDir: w.dir, action: 'on', hours: 25 }, yes), /between 1 and 24/);
+    await assert.rejects(grantOptIn({ stateDir: w.dir, action: 'on' }, async () => false), /not confirmed/);
     assert.equal(existsSync(join(w.dir, OPTIN_FILE)), false);
     assert.equal(readOptIn(w.dir), null);
   });
@@ -183,22 +162,23 @@ describe('#247 opt-in: jev-prompt on, with an expiry, and #nojev', () => {
   it('the CLI asks on a terminal for setup/on; off and status need none', () => {
     const w = world();
     const cli = (...args: string[]) => spawnSync(process.execPath, [CLI, 'jev-prompt', ...args], { input: 'on\n', env: { ...process.env, HARNESS_STATE_DIR: w.dir }, encoding: 'utf8' });
-    let r = cli('on', '--for', '2h', '--wrapper', w.wrapper);
+    let r = cli('on', '--for', '2h');
     assert.equal(r.status, 2);
     assert.match(r.stderr, /terminal/);
     assert.equal(existsSync(join(w.dir, OPTIN_FILE)), false);
     r = cli('status');
     assert.equal(r.status, 0);
-    assert.deepEqual(JSON.parse(r.stdout), { setUp: false, active: false, enabledUntil: null, wrapper: null });
+    assert.deepEqual(JSON.parse(r.stdout), { setUp: false, active: false, enabledUntil: null });
     assert.equal(cli('off').status, 0);
   });
 });
 
-describe('#254 review P1: #jev counts only as a control line the person wrote', () => {
-  it('a marker is a line of its own, first or last, outside quotes, code and pasted content', () => {
+describe('#254 review P1 → D5: #jev only as the first non-blank line; #nojev on any line', () => {
+  it('a marker is a line of its own; #jev only first, #nojev anywhere', () => {
     const cases: Array<[string, 'jev' | 'nojev' | null]> = [
       ['#jev\nĐổi port dev?', 'jev'],
-      ['Đổi port dev?\n  #JEV  ', 'jev'],
+      ['\n  #JEV  \nĐổi port dev?', 'jev'],
+      ['Đổi port dev?\n  #JEV  ', null],
       ['Đổi port dev?\n#nojev', 'nojev'],
       ['#jev\nĐổi port dev?\n#nojev', 'nojev'],
       ['Đổi port dev #jev ngay', null],
@@ -206,8 +186,8 @@ describe('#254 review P1: #jev counts only as a control line the person wrote', 
       ['Explain this quoted documentation:\n> #jev\nInternal planning content.', null],
       ['Explain this log:\n```\n#jev\n```', null],
       ['Đọc đoạn này:\n<pasted_content id="1">\n#jev\n</pasted_content>', null],
-      ['Đọc đoạn này:\n<pasted_content id="1">\nx\n#jev</pasted_content>', null],
       ['Bước 1\n#jev\nBước 3', null],
+      ['Bước 1\n#nojev\nBước 3', 'nojev'],
     ];
     for (const [prompt, want] of cases) assert.equal(promptMarker(prompt).marker, want, JSON.stringify(prompt));
     assert.equal(promptMarker('#jev\nĐổi port dev?').text.includes('#jev'), false);
@@ -216,7 +196,7 @@ describe('#254 review P1: #jev counts only as a control line the person wrote', 
 
   it('after setup, a quoted or fenced #jev sends nothing', async () => {
     const w = world();
-    await grantOptIn({ stateDir: w.dir, action: 'setup', wrapper: w.wrapper }, yes);
+    await grantOptIn({ stateDir: w.dir, action: 'setup' }, yes);
     for (const prompt of ['Explain this quoted documentation:\n> #jev\nInternal planning content.', 'Explain this log:\n```\n#jev\n```']) {
       const r = await hook(w, prompt);
       assert.deepEqual([r.stdout, r.record.optIn, r.record.mode, r.sent.length], ['', 'off', 'disabled', 0], prompt);
@@ -262,24 +242,22 @@ describe('#254 review P2: the session cap is one transaction across processes', 
   });
 });
 
-describe('#254 review r2 P1: block boundaries are the ones the person sees', () => {
-  it('a longer fence is closed only by a fence of the same kind at least as long, with nothing after it', () => {
+describe('#254 review r2 P1 → D5: no block boundary decides consent', () => {
+  it('fences never make a later #jev count, nor hide a #nojev', () => {
     const cases: Array<[string, 'jev' | 'nojev' | null]> = [
-      ['Explain:\n````markdown\n```\n#jev', null],
-      ['Explain:\n````markdown\n```\n````\n#jev', 'jev'],
-      ['Explain:\n~~~~\n```\n~~~\n#jev', null],
-      ['Explain:\n~~~\nx\n~~~~\n#jev', 'jev'],
-      ['Explain:\n```\n``` not a close\n#jev', null],
-      ['Explain:\n```js\nconst a = `x`;\n```\n#jev', 'jev'],
+      ['Explain:\n````markdown\n```\n````\n#jev', null],
+      ['Explain:\n~~~\nx\n~~~~\n#jev', null],
+      ['Explain:\n````markdown\n```\n#nojev', 'nojev'],
+      ['#jev\nExplain:\n```js\nconst a = `x`;\n```', 'jev'],
     ];
     for (const [prompt, want] of cases) assert.equal(promptMarker(prompt).marker, want, JSON.stringify(prompt));
   });
 
-  it('a closing pasted_content tag carrying the id closes the block, so a trailing #nojev counts', () => {
+  it('a #nojev counts inside or after pasted content, whatever the closing tag', () => {
     const cases: Array<[string, 'jev' | 'nojev' | null]> = [
       ['Explain this:\n<pasted_content id="1">\nordinary text\n</pasted_content id="1">\n#nojev', 'nojev'],
-      ['Explain this:\n<pasted_content id="1">\na\n</pasted_content id="1">\n<pasted_content id="2">\nb\n</pasted_content id="2">\n#nojev', 'nojev'],
-      ['Explain this:\n<pasted_content id="1">\na\n</pasted_content id="2">\n#jev', null],
+      ['Explain this:\n<pasted_content id="1">\na\n</pasted_content id="2">\n#nojev', 'nojev'],
+      ['<pasted_content id="1">\n#nojev\n</pasted_content id="1">', 'nojev'],
       ['<pasted_content id="1">\n#jev\n</pasted_content id="1">', null],
     ];
     for (const [prompt, want] of cases) assert.equal(promptMarker(prompt).marker, want, JSON.stringify(prompt));
@@ -290,7 +268,7 @@ describe('#254 review r2 P1: block boundaries are the ones the person sees', () 
 
   it('end to end: #nojev after pasted blocks never starts the child while sending is on', async () => {
     const w = world();
-    await grantOptIn({ stateDir: w.dir, action: 'on', hours: 1, wrapper: w.wrapper }, yes);
+    await grantOptIn({ stateDir: w.dir, action: 'on', hours: 1 }, yes);
     for (const prompt of [
       'Explain this:\n<pasted_content id="1">\nordinary text\n</pasted_content id="1">\n#nojev',
       'Explain:\n<pasted_content id="1">\na\n</pasted_content id="1">\n<pasted_content id="2">\n```\nb\n</pasted_content id="2">\n#nojev',

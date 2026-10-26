@@ -112,30 +112,6 @@ function pastedSpans(text: string): Array<[number, number]> {
   }
 }
 
-/** Per line of `text`: inside pasted content or fenced code, fence lines and unclosed blocks included. */
-function blockLines(text: string): boolean[] {
-  const spans = pastedSpans(text);
-  const out: boolean[] = [];
-  let offset = 0;
-  let fence: Fence | null = null;
-  for (const line of text.split('\n')) {
-    const start = offset;
-    const end = Math.max(offset + line.length, offset + 1);
-    offset += line.length + 1;
-    if (spans.some(([a, b]) => a < end && b > start)) {
-      out.push(true);
-      continue;
-    }
-    if (fence) {
-      out.push(true);
-      if (fenceCloses(line, fence)) fence = null;
-      continue;
-    }
-    fence = fenceOpen(line);
-    out.push(fence !== null);
-  }
-  return out;
-}
 // The keyword is the whole line, or is followed by `:` and an inline criterion — "Accept it" is not a heading.
 const AC_HEADING = /^\s*(?:#{1,6}\s*)?(?:\*\*)?(acceptance criteria|acceptance|definition of done|done when|tiêu chí nghiệm thu|tiêu chí chấp nhận|tiêu chí|điều kiện hoàn thành|ac)(?:\*\*)?\s*(?::(?:\*\*)?\s*(.*))?$/i;
 const BULLET = /^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.+?)\s*$/;
@@ -248,28 +224,35 @@ export function parsePrompt(prompt: string): PromptExtraction {
 }
 
 /**
- * The owner's per-prompt choice (#247, owner decision 2026-10-23): a control
- * line `#jev` asks for JEV on this prompt, `#nojev` refuses it even while
- * sending is on. A control line is the whole first or last non-empty line,
- * outside fenced code and `<pasted_content>` (PR #254 review P1): a marker
- * inside quoted, pasted or fenced material, or in the middle of a sentence,
- * is text the person was showing, not a choice they made. Both present is
- * `nojev`. Control lines are removed before parsing, so they are never part
- * of what is summarized or sent.
+ * The marker grammar (owner decision D5, 2026-10-26), word for word in
+ * docs/ai-harness.md and ADR-0013 D-4.
+ */
+export const MARKER_RULE = '`#jev` counts only when it is the first non-blank line of the prompt; `#nojev` on any line, inside code or pasted content too, stops sending.';
+
+const JEV_LINE = /^\s*#jev\s*$/i;
+const NOJEV_LINE = /^\s*#nojev\s*$/i;
+
+/**
+ * The owner's per-prompt choice (#247; D5). Positional and parser-free (PR
+ * #254 shape rev 3, I1/I2): `#jev` is consent only as the first non-blank
+ * line, before anything the person pasted or fenced can start; `#nojev` on
+ * any line suppresses, fail-closed, whatever block it seems to sit in. Both
+ * present is `nojev`. No fence or pasted-content parsing decides consent, so
+ * a change to the extraction heuristics above cannot create consent or
+ * defeat an opt-out (I3). Control lines are removed before parsing, so they
+ * are never part of what is summarized or sent (I4).
+ *
+ * I3's limit, stated: for a prompt that is authorized (`#jev`, or `jev-prompt
+ * on`), parsePrompt decides what is summarized and whether the sanitizer
+ * refuses it (`invalid_data`) — so an extraction change can change whether
+ * that authorized prompt is sent. Sanitizer-first is the accepted trade.
  */
 export function promptMarker(prompt: string): { marker: 'jev' | 'nojev' | null; text: string } {
-  const lines = prompt.split('\n');
-  const inBlock = blockLines(prompt);
-  const nonEmpty = lines.flatMap((l, i) => (l.trim() === '' ? [] : [i]));
-  const found = new Set<'jev' | 'nojev'>();
-  const drop = new Set<number>();
-  for (const i of new Set([nonEmpty[0], nonEmpty[nonEmpty.length - 1]])) {
-    if (i === undefined || inBlock[i]) continue;
-    const m = /^\s*#(no)?jev\s*$/i.exec(lines[i]!.replace(/\r$/, ''));
-    if (!m) continue;
-    found.add(m[1] ? 'nojev' : 'jev');
-    drop.add(i);
-  }
-  const marker = found.has('nojev') ? 'nojev' : found.has('jev') ? 'jev' : null;
+  const lines = prompt.replace(/\r\n?/g, '\n').split('\n');
+  const first = lines.findIndex((l) => l.trim() !== '');
+  const jev = first >= 0 && JEV_LINE.test(lines[first]!);
+  const nojev = lines.flatMap((l, i) => (NOJEV_LINE.test(l) ? [i] : []));
+  const drop = new Set([...(jev ? [first] : []), ...nojev]);
+  const marker = nojev.length ? 'nojev' : jev ? 'jev' : null;
   return { marker, text: drop.size ? lines.filter((_, i) => !drop.has(i)).join('\n') : prompt };
 }

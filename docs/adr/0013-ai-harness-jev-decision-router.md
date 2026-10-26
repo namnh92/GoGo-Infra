@@ -149,10 +149,13 @@ are in `harness/src/router/questions.ts`; each is one judgment, with a no-match 
 nothing may fit. A user prompt is not a checkpoint input: it is a prompt observation
 (GoGo-Infra#247, shape review 2026-10-23), turned into a `TaskSummary` draft with no actions,
 scope or authorizations and validated by the outbound sanitizer first. It is sent to JEV only
-when the owner opted in — a `#jev` control line (first or last line, outside quotes, code and
-pasted content) after `jev-prompt setup`, or every prompt while
+when the owner opted in — `#jev` after `jev-prompt setup`, or every prompt while
 `jev-prompt on` (at most 24 h) has not expired; `#nojev` refuses — never because of the
-environment (owner decision 2026-10-23). The answer is added to the context as advice; the hook
+environment (owner decision 2026-10-23). The grammar is positional and parses no blocks (owner
+decision D5, 2026-10-26): `#jev` counts only when it is the first non-blank line of the prompt;
+`#nojev` on any line, inside code or pasted content too, stops sending. The key comes only
+through `scripts/secrets/exec-with.sh` of the installed version the hook runs from, its closure
+checked against that version's `MANIFEST` before each send (PR #254; shipped by #253). The answer is added to the context as advice; the hook
 never blocks a prompt and never touches task state. Blocking or asking the owner from the hook
 is a separate decision.
 
