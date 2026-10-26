@@ -257,6 +257,48 @@ else
   ok "an undeclared path never reaches SSM"
 fi
 
+# 5. The manifest reader runs isolated (GoGo-Infra#245 D6, #254 A-S-01). These
+# scripts ship in the harness install, whose MANIFEST covers exactly the four
+# closure files: a `re.py` planted beside manifest.py, or a `usercustomize.py`
+# in the user site, is code that no MANIFEST covers. `python3 -I` puts neither
+# the script directory nor the user site on sys.path and ignores PYTHON*.
+# The cell runs a copy of the closure with both planted, HOME pointed at the
+# sandbox, and checks the output is the real reader's and neither sentinel ran.
+TREE="${SANDBOX}/tree"
+for f in scripts/secrets/exec-with.sh scripts/secrets/common.sh scripts/lib/manifest.py config/secrets.manifest.yml; do
+  mkdir -p "${TREE}/$(dirname "$f")"
+  cp "${DIR}/../../${f}" "${TREE}/${f}"
+done
+cat >"${TREE}/scripts/lib/re.py" <<PLANT
+open("${SANDBOX}/shadow-ran", "w").write("x")
+raise SystemExit(3)
+PLANT
+FAKE_HOME="${SANDBOX}/home"
+mkdir -p "$FAKE_HOME"
+user_site="$(HOME="$FAKE_HOME" python3 -c 'import site; print(site.getusersitepackages())')"
+mkdir -p "$user_site"
+printf 'open("%s/usersite-ran", "w").write("x")\n' "$SANDBOX" >"${user_site}/usercustomize.py"
+
+expected="$(python3 -I "${DIR}/../lib/manifest.py" dev --namespace all --consumer all | cut -f5 | sort -u)"
+got="$(HOME="$FAKE_HOME" PYTHONPATH="${TREE}/scripts/lib" bash -c 'source "$1"; manifest_namespaces dev' _ "${TREE}/scripts/secrets/common.sh" 2>&1)"
+if [[ -n "$expected" && "$got" == "$expected" && ! -e "${SANDBOX}/shadow-ran" && ! -e "${SANDBOX}/usersite-ran" ]]; then
+  ok "common.sh reads the manifest with neither a planted re.py nor a user-site module"
+else
+  bad "common.sh reads the manifest with neither a planted re.py nor a user-site module" \
+    "shadow ran: $([[ -e "${SANDBOX}/shadow-ran" ]] && echo yes || echo no), user site ran: $([[ -e "${SANDBOX}/usersite-ran" ]] && echo yes || echo no), output: ${got:0:200}"
+fi
+
+rm -f "${SANDBOX}/shadow-ran" "${SANDBOX}/usersite-ran"
+: >"$CALLS"
+HOME="$FAKE_HOME" PATH="${SANDBOX}:${PATH}" AWS_PROFILE=stub "${TREE}/scripts/secrets/exec-with.sh" dev sentry/mobile-auth-token -- child >"${SANDBOX}/out" 2>&1 </dev/null
+status=$?
+if [[ $status -eq 0 ]] && grep -qx "child: token present" "${SANDBOX}/out" && [[ ! -e "${SANDBOX}/shadow-ran" && ! -e "${SANDBOX}/usersite-ran" ]]; then
+  ok "exec-with.sh reads the manifest with neither a planted re.py nor a user-site module"
+else
+  bad "exec-with.sh reads the manifest with neither a planted re.py nor a user-site module" \
+    "status=${status}, shadow ran: $([[ -e "${SANDBOX}/shadow-ran" ]] && echo yes || echo no), user site ran: $([[ -e "${SANDBOX}/usersite-ran" ]] && echo yes || echo no): $(cat "${SANDBOX}/out")"
+fi
+
 if [[ $failures -gt 0 ]]; then
   printf '\n%d failure(s)\n' "$failures"
   exit 1
