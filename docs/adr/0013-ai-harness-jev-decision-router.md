@@ -112,9 +112,28 @@ unclassifiable (`unknown`). A human authorization written into a task lifts only
 router, the CLI and the tests define what a policy verdict means as much as `src/policy/` does
 (owner decision 2026-10-22, PR #242 A-F-03). The path is read relative to the checkout root, not
 to the working directory, so `cd harness` and `src/cli.ts` is still `harness/src/cli.ts`. That
-stops the harness from authorizing its own edit; it does not stop an edit made outside a
-checkpoint, because the harness runs from the editable checkout. Running an approved, pinned copy
-outside the worktree is GoGo-Infra#245.
+stops the harness from authorizing its own edit. Hooks and automation run an approved install
+outside every checkout (GoGo-Infra#245, shape review 2026-10-23), so an edit in a worktree does
+not change the verdicts either: `versions/<full-sha>` holds a commit's `harness/` and the JEV
+send closure (`exec-with.sh`, `common.sh`, `manifest.py`, `secrets.manifest.yml`) with a
+per-file SHA-256 and exec-bit `MANIFEST`; `ACTIVE` names the running SHA and `MANIFEST` digest
+and is the only switch; a standard-library bootstrap verifies both before it imports the
+version's CLI, owns activation and verification itself whatever `ACTIVE` says, exits 2 on any
+mismatch and has no checkout fallback or dev bypass. An install whose real path is inside a git
+checkout, or that holds a link or a `.git` entry on the way to a file, is refused (PR #253
+review). Preparing a candidate changes nothing and proves nothing; activation proves provenance:
+the commit must be an ancestor of `develop` fetched over HTTPS from the pinned GitHub repository
+into a private repository with a sanitized git, and every installed file must be that commit's
+blob (PR #253 shape rev 3, owner decision D1). Without network, only a rollback to a version the
+journal records as activated with the same `MANIFEST` digest is allowed (D2). Hooks start the
+harness through the installed `bin/harness`, which clears Node's preload variables and runs the
+Node path fixed at the first activation (D3); a preload that reaches Node any other way has run
+before any check. The first install is the trust anchor: a documented owner procedure takes the
+bootstrap from a sanitized HTTPS clone of `develop` (trust on first use). Activation and rollback
+are an owner act on a terminal, bound to old → new SHA and digest, with an approval reference in
+the journal. The same OS user can still rewrite an install, its metadata and journal together —
+that remains the sandbox's boundary (D-1). `harness/src/cli.ts` in a checkout is the development
+and CI entry point.
 
 **D-3a Shell commands are classified fail-closed** — *superseded by D-3b the same day; kept as the record of what was tried.* (owner decision 2026-10-22, after Sol rounds 1–3 on
 PR #242 found six P1 bypasses in the regex classifier — every one a shell form nobody anticipated, every one
@@ -146,7 +165,18 @@ run a shell command asks first; for the POC that is the intended trade.
 settle it), material scope change, unresolved ambiguity, repeated failure (from the second
 attempt), review planning. Never before a file read or a shell command. Questions per checkpoint
 are in `harness/src/router/questions.ts`; each is one judgment, with a no-match option where
-nothing may fit.
+nothing may fit. A user prompt is not a checkpoint input: it is a prompt observation
+(GoGo-Infra#247, shape review 2026-10-23), turned into a `TaskSummary` draft with no actions,
+scope or authorizations and validated by the outbound sanitizer first. It is sent to JEV only
+when the owner opted in — `#jev` after `jev-prompt setup`, or every prompt while
+`jev-prompt on` (at most 24 h) has not expired; `#nojev` refuses — never because of the
+environment (owner decision 2026-10-23). The grammar is positional and parses no blocks (owner
+decision D5, 2026-10-26): `#jev` counts only when it is the first non-blank line of the prompt;
+`#nojev` on any line, inside code or pasted content too, stops sending. The key comes only
+through `scripts/secrets/exec-with.sh` of the installed version the hook runs from, its closure
+checked against that version's `MANIFEST` before each send (PR #254; shipped by #253). The answer is added to the context as advice; the hook
+never blocks a prompt and never touches task state. Blocking or asking the owner from the hook
+is a separate decision.
 
 **D-5 State.** A sanitized `TaskSummary` — title, description, acceptance criteria, open
 questions, labels, paths (not contents), sources already searched, quoted rules — redacted for
@@ -229,8 +259,10 @@ it the same day: the harness key is now `gogo_ai_harness_dev`; the backend POC g
 2. Create the Anthropic workspace for automation with a spend limit and auto top-up off before
    `put.sh dev ai-harness/anthropic-api-key`.
 3. Decide whether to install the harness as a Claude Code hook (e.g. a `UserPromptSubmit` or
-   `Stop` hook calling `cli.ts decide`). That edits `.claude/settings.json` — a permission-policy
-   change this ADR deliberately does not make. `docs/ai-harness.md` has the proposed snippet.
+   `Stop` hook calling the installed `bin/harness decide`). That edits `.claude/settings.json` — a
+   permission-policy change this ADR deliberately does not make. `docs/ai-harness.md` has the
+   proposed snippet. Before it, the owner prepares and activates a merged version on the machine
+   that runs the hook (`docs/ai-harness.md`, "Installed copy").
 
 4. For the Cost Center to see actual OpenRouter spend: create an OpenRouter management key
    and `put.sh dev openrouter/management-key` (GoGo-BE#709 collector `openrouter_activity`).
