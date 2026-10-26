@@ -407,9 +407,10 @@ fi
 
 # --- I8: the checkout, before a token exists. ---
 # Hostnames compare without case (git matches them that way: https://GITHUB.COM/… is github.com).
-# Pushable remotes: those whose every URL is a GitHub repository the token covers.
+# Pushable remotes: those whose every URL is a GitHub repository the token covers. Kept as an
+# array and compared exactly: a configured name may hold spaces (PR #256 Sol r4, S4-01).
 github_urls=()
-push_remotes=""
+push_remotes=()
 for r in "${repos[@]}"; do github_urls+=("https://github.com/namnh92/${r}.git" "https://github.com/namnh92/${r}"); done
 if run_git rev-parse --git-dir >/dev/null 2>&1; then
   while IFS= read -r remote; do
@@ -424,7 +425,7 @@ if run_git rev-parse --git-dir >/dev/null 2>&1; then
       path="${lower#https://github.com/}"
       repo_covered "${path%.git}" || covered=""
     done < <(run_git remote get-url --all "$remote"; run_git remote get-url --all --push "$remote")
-    [[ -n "$covered" ]] && push_remotes="${push_remotes} ${remote}"
+    [[ -n "$covered" ]] && push_remotes+=("$remote")
   done < <(run_git remote)
 fi
 # Effective: what git would use for each GitHub URL this command can reach, after the process
@@ -457,7 +458,11 @@ while IFS= read -r line; do
 done < <(run_git config --get-regexp '^http\..*extraheader$' 2>/dev/null || true)
 
 if [[ "$cmd" == git ]]; then
-  has "$push_remote" $push_remotes || die "git push target '$(redact "$push_remote")' is not a remote of this checkout whose every URL is https://github.com/namnh92/<${repos[*]}>: a URL, a path or a remote on another host, owner or repository would not be authenticated by the agent token — refusing"
+  pushable=""
+  for r in ${push_remotes[@]+"${push_remotes[@]}"}; do
+    if [[ "$r" == "$push_remote" ]]; then pushable=1; fi
+  done
+  [[ -n "$pushable" ]] || die "git push target '$(redact "$push_remote")' is not a remote of this checkout whose every URL is https://github.com/namnh92/<${repos[*]}>: a URL, a path or a remote on another host, owner or repository would not be authenticated by the agent token — refusing"
   if [[ -n "$(run_git config --get "remote.${push_remote}.proxy" 2>/dev/null || true)" ]]; then
     die "remote.${push_remote}.proxy is set in this checkout's config; under as-agent.sh the proxy comes from the environment only (owner decision D7) — refusing"
   fi

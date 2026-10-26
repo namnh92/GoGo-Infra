@@ -1116,6 +1116,17 @@ out="$(real "$FAKE" -- git push enterprise HEAD:refs/heads/t16a)"; rc=$?
   && ok "T16a: git push enterprise is refused" || bad "T16a push enterprise" "rc=$rc out=$out"
 git -C "$FAKE" remote remove enterprise
 
+# S4-01 (Sol r4): remote names are compared exactly. A covered remote whose configured name holds a
+# space ("safe leak") must not make the uncovered "leak" pushable.
+git -C "$FAKE" config 'remote.safe leak.url' "$(git -C "$FAKE" remote get-url origin)"
+git -C "$FAKE" remote add leak https://receiver.example/repo.git
+: >"$CALLS"
+out="$(real "$FAKE" -- git push leak HEAD:refs/heads/s4-01)"; rc=$?
+[[ "$rc" != 0 ]] && grep -q 'not a remote of this checkout whose every URL' <<<"$out" && ! grep -q exec-with "$CALLS" \
+  && ok "S4-01: a covered remote named 'safe leak' does not make the uncovered 'leak' pushable" || bad "S4-01 whitespace remote" "rc=$rc out=$out"
+git -C "$FAKE" remote remove leak
+git -C "$FAKE" config --remove-section 'remote.safe leak'
+
 # 16b. origin fetch covered + pushurl elsewhere: not pushable, but the gh forms run.
 MIXED="${SANDBOX}/GoGo-Mixed"
 git init -q "$MIXED"
