@@ -505,7 +505,9 @@ describe('I11: the real closure, through runChild (installed-chain stand-in unti
     writeFileSync(join(bin, 'aws'), '#!/bin/sh\ncase "$1" in sts) echo "{}" ;; ssm) echo not-a-real-key ;; *) exit 1 ;; esac\n');
     chmodSync(join(bin, 'aws'), 0o755);
     const entry = join(w.dir, 'entry.mjs');
-    writeFileSync(entry, `import ${JSON.stringify(w.stub)};\nawait import(${JSON.stringify(CLI)});\n`);
+    // Like the installed launcher (#253): load cli.ts and call its run(); a cli.ts without run()
+    // (before #253) runs on import instead.
+    writeFileSync(entry, `import ${JSON.stringify(w.stub)};\nconst cli = await import(${JSON.stringify(CLI)});\nif (typeof cli.run === 'function') process.exit(await cli.run(process.argv.slice(2)));\n`);
     const sentinels = { shadow: join(w.dir, 're-shadow-ran'), usersite: join(w.dir, 'usercustomize-ran') };
     if (plant) {
       // Planted after MANIFEST: the shadow is outside the four files, so the digests still match.
