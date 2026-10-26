@@ -12,10 +12,15 @@ and the owner can approve it:
 ./scripts/secrets/as-agent.sh -- gh issue comment <n> --body-file <file>
 ```
 
-- The command after `--` is `git` or `gh` itself, by name, with a builtin git subcommand or a gh
-  command of gh's own: a shell, a script, `env`, a path to git, `git -C …`/`-c …`, a git alias
-  or a gh alias/extension is refused before any token is minted. Run it from the checkout it
-  concerns. (`docs/secrets.md` → *Using it* has the exact rules and the stated residual.)
+- The command after `--` is one of an allowlist of concrete forms: `git push <remote> …` (the
+  remote by name, of this checkout, on github.com), `gh pr create|comment|edit|view|list|checks`,
+  `gh issue create|comment|edit|close|reopen|view|list`, `gh run view|list`, `gh repo view`,
+  `gh api <relative path>`. Every option must be in that form's table; anything else — a shell,
+  a script, `env`, a path to git, `git -C …`/`-c …`, any other git subcommand or alias, a gh
+  alias/extension, `gh pr merge`/`review`, `-R HOST/OWNER/REPO`, `--hostname`, a URL where a
+  number belongs, `-w`/`-e` — is refused before any token is minted, and gh is pinned to
+  github.com. Run it from the checkout it concerns. (`docs/secrets.md` → *Using it* has the
+  tables and the stated residuals; a new form is one table line plus a test, never a wider rule.)
 - Read-only calls (`gh pr view`, `gh pr checks`, `gh issue list`, `gh api` GETs) may use the
   session's own login.
 - Minting the token needs AWS credentials for the `ci` rows (on the owner's workstation:
