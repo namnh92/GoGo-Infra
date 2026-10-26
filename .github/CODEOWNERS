@@ -11,4 +11,4 @@ bootstrap/            @namnh92
 scripts/secrets/      @namnh92
 scripts/deploy/       @namnh92
 harness/              @namnh92
-secrets.manifest.yaml @namnh92
+config/secrets.manifest.yml @namnh92
