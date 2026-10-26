@@ -853,8 +853,10 @@ for n in $envline; do
   [[ "$n" =~ ^(LC_[A-Za-z_]+|GIT_CONFIG_(KEY|VALUE)_[0-9]+)$ ]] && continue
   unexpected="${unexpected} ${n}"
 done
+# Exported, not merely set: bash sets TERM=dumb unexported when the environment has none (CI).
+exported_here=" $(compgen -e | tr '\n' ' ') "
 for n in $PASS_THROUGH LC_ALL $WRAPPER_SET; do
-  [[ "$n" == LC_ALL || " ${WRAPPER_SET} " == *" ${n} "* || -n "${!n+x}" ]] || continue
+  [[ "$n" == LC_ALL || " ${WRAPPER_SET} " == *" ${n} "* || "$exported_here" == *" ${n} "* ]] || continue
   case " ${envline} " in *" ${n} "*) ;; *) missing="${missing} ${n}" ;; esac
 done
 grep -qx with-fd3 "${SANDBOX}/bash_env.marker" 2>/dev/null && unexpected="${unexpected} (BASH_ENV sourced by --child)"
