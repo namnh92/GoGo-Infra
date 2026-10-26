@@ -571,11 +571,131 @@ Agent sessions wrap every write to GitHub — push, pull request, comment — in
 ../GoGo-Infra/scripts/secrets/as-agent.sh -- gh issue comment 42 --body-file note.md   # from a sibling repo
 ```
 
-It mints a token narrowed to the checkout's repository (`--repo` overrides), hands it to the
-command as `GH_TOKEN` and through a git credential helper that reads it from the environment —
-the owner's keychain helper is reset for that command, so git never falls back to the owner's
-login — and refuses to run the command at all if no token can be minted. Tests:
-`scripts/secrets/as-agent.test.sh`.
+It mints a token narrowed to the checkout's repository (`--repo` overrides) and refuses to run
+the command at all if no token can be minted. The token is then the **only** credential the
+command can use, because the command does not inherit your environment (shape rev 3, PR #256):
+
+- **Constructed environment.** The command gets a pass-through list, only the names that are set
+  — `PATH TMPDIR LANG LC_* TERM`, the proxy variables (`http_proxy https_proxy no_proxy` and their
+  upper case) and the CA variables (`GIT_SSL_CAINFO GIT_SSL_CAPATH SSL_CERT_FILE SSL_CERT_DIR`) —
+  plus what the wrapper sets and `GH_TOKEN`. Every other `GIT_*`, `GH_*`, `SSH_*`, `*ASKPASS`,
+  `BASH_ENV`, `LD_PRELOAD`/`DYLD_*`, `XDG_*`, `EDITOR`/`VISUAL`/`BROWSER`/`PAGER`, trace switch
+  and exported function is simply absent; so are `SSH_AUTH_SOCK` and git trace controls.
+- **Sealed home.** A fresh `$TMPDIR/as-agent.XXXXXX` (0700, empty `home/ gh/ hooks/`) is the
+  command's `HOME`, `GH_CONFIG_DIR` and `core.hooksPath`; `GIT_CONFIG_GLOBAL=/dev/null`,
+  `GIT_CONFIG_NOSYSTEM=1`. Owner decision D7: your global and system git config, `~/.netrc`,
+  `~/.ssh`, gh's `hosts.yml`/`config.yml`/aliases are **not loaded** — `insteadOf`, credential
+  helpers, `safe.directory`, file-based proxy and CA settings included. Proxy and CA come from
+  the environment only. Nothing secret is written there; the directory is left for the TMPDIR
+  policy to clear (the wrapper execs into the command), and removed when a check refuses.
+- **One credential.** Process-only git configuration (`GIT_CONFIG_*`, read after every file):
+  an empty `credential.helper` resets every helper collected from any file and any URL key, then
+  one helper for `https://github.com` answers with `GH_TOKEN`, only when asked for
+  `protocol=https`, `host=github.com`. `core.askPass` is empty, terminal prompts are off, and
+  inherited `http.extraHeader` values (generic and github.com) are reset. GitHub SSH URLs
+  (`git@github.com:…`, `ssh://…`, `pushurl` included) are rewritten to HTTPS.
+- **One transport.** `git push`: `GIT_ALLOW_PROTOCOL=https`, so ssh, git, file, ext and every
+  remote helper (`remote.<name>.vcs`) are refused by git itself. **gh forms: no git transport at
+  all.** `GIT_ALLOW_PROTOCOL` is present and empty, so any git gh starts — an implicit push from
+  `gh pr create`, a fetch, clone, ls-remote, submodule or partial-clone lazy fetch — dies at
+  transport setup ("transport '…' not allowed"). Push the branch first with the `git push` form,
+  then `gh pr create --head <branch>` or from the pushed branch. (A non-empty value such as
+  `none` would *allow* a remote helper of that name; PR #256 review A-S-09.)
+  `GH_PROMPT_DISABLED=1` only makes gh stop early with its own message.
+- **Nothing configured runs on a push** (owner decision D8: CI is the gate): pre-push hooks
+  (`core.hooksPath` is the empty sealed directory), push signing (`push.gpgSign=false`),
+  submodule recursion (`push.recurseSubmodules=no`), `core.fsmonitor`; pagers are `cat`.
+
+Before minting, the checkout is checked through that same environment (the wrapper's own git
+calls run as `env -i <the command's config environment> git …`, so a caller `GIT_DIR`,
+`GIT_CONFIG_GLOBAL` or `HOME` cannot make the checks read something other than what the command
+loads). The checkout's local config (and what its `include.path` names) is the only file
+configuration left, and it is refused rather than worked around when: a remote reaches GitHub
+over anything but HTTPS (a local `insteadOf` back to SSH); an extra header is configured for a
+more specific GitHub URL; for any GitHub URL the command can reach, git's effective
+`http.cookiefile`, `http.sslcert`, `http.sslkey`, `http.proxy`, `http.sslcainfo` or
+`http.sslcapath` is set, or `http.sslverify` is false; the push target has `remote.<name>.proxy`;
+or `GIT_CONFIG_COUNT` / `GIT_CONFIG_PARAMETERS` / `GIT_CONFIG` is present in the environment at
+all (empty included). A remote whose URLs are not all on GitHub may exist; it is simply not a
+push target. The token reaches the command through a pipe: the wrapper re-runs itself with an
+empty environment and the pairs on fd 3, written by bash's builtin `printf` — never an argument
+list, a file, git config or a remote URL. The mint itself runs in your environment (your AWS
+session) with `GITHUB_API_URL` pinned to `https://api.github.com`.
+
+The wrapper can vouch only for command forms it understands completely, so the command after
+`--` is one of an **allowlist of concrete forms** (owner decision 2026-10-26, PR #256 review r3;
+shape: `dev/handoffs/sa-shape-infra-256-as-agent-allowlist.fable.md`). `git` and `gh` are
+called by that name (the checks resolve them through `PATH` too); a path (`/usr/bin/git`), a
+shell (`sh -c 'cd … && git push'`), a script, `env`, `xargs` or anything else is refused before a
+token is minted. Every option of a form is in that form's table or the command is refused —
+unknown spelling included: an attached short value (`-Rx`), a bundled flag (`-dw`), `--switch=…`.
+`--long value`, `--long=value`, `-x value`, `--long`, `-x` and a terminating `--` are the grammar.
+A new form is one table line plus a test, never a wider rule.
+
+- `git push <remote> [<refspec>…]` — the only git form. Nothing before `push` (no `-C`, `-c`,
+  `-P`, …), no other subcommand, alias or external `git-<name>`. `<remote>` is required and must
+  be a remote of this checkout whose every URL (fetch and push, after the rewrite) is
+  `https://github.com/namnh92/<repo the token covers>`: a URL, a path, an unknown name or a remote
+  on another host, owner or repository is refused — the credential reset and the token are scoped
+  to github.com, and without a named remote git could push to a URL from `branch.*.pushRemote`.
+  Options: `-u --set-upstream -d --delete -n --dry-run -q --quiet -v --verbose --porcelain
+  --progress --no-progress --no-verify --verify --atomic -4 -6 --force-with-lease[=<ref>:<expect>]
+  --force-if-includes`. Refused by name: `--receive-pack --exec` (a program), `--repo
+  --recurse-submodules` (somewhere not inspected), `-f --force --mirror --all --branches --tags
+  --follow-tags --prune -o --push-option --signed --thin` (not agent work); a refspec starting
+  with `+` (force).
+- `gh` forms (positional rule · value options · switches):
+  - `gh pr create` — none · `-B --base -b --body -F --body-file -t --title -H --head -l --label
+    -a --assignee -r --reviewer -m --milestone -p --project -R --repo` · `-d --draft --fill
+    --fill-first --fill-verbose --dry-run --no-maintainer-edit`
+  - `gh pr comment` / `gh issue comment` — ≤1 (number or branch) · `-b --body -F --body-file -R`
+    · `--edit-last --create-if-none`
+  - `gh pr edit` — ≤1 · `--add-reviewer --remove-reviewer --add-label --remove-label
+    --add-assignee --remove-assignee --add-project --remove-project -B -b -F -t -m -R` ·
+    `--remove-milestone`; `gh issue edit` the same without the reviewer and base options
+  - `gh issue create` — none · `-t -b -F -l -a -m -p -R`
+  - `gh issue close` — exactly 1 · `-c --comment -r --reason -R`; `gh issue reopen` — exactly 1 ·
+    `-c -R`
+  - `gh pr view` / `gh issue view` — ≤1 / exactly 1 · `-q --jq --json -t --template -R` ·
+    `-c --comments`; `gh pr checks` — ≤1 · `-i --interval` + the same · `--watch --fail-fast
+    --required`
+  - `gh pr list` / `gh issue list` / `gh run list` — none · their filter options (`-B -H -A -a -l
+    -L -S -s --app`, `-m --mention`, `-b -c -e -s -u -w -L --created`) plus `--json --jq
+    --template -R`
+  - `gh run view` — ≤1, digits · `-j --job -a --attempt --json --jq --template -R` · `--log
+    --log-failed --exit-status -v`
+  - `gh repo view` — ≤1, `namnh92/<covered repo>` · `-b --branch --json --jq --template`
+  - `gh api <endpoint>` — exactly 1, a path relative to the API (`repos/…`, `graphql`), never a
+    URL · `-X --method` (`GET POST PATCH PUT DELETE`) `-f --raw-field -F --field --input -q --jq
+    -t --template -p --preview --cache` · `--paginate --slurp --silent -i --include`
+  - `gh --version` on its own.
+
+  `-R/--repo` (and `gh repo view`'s argument) must be exactly `namnh92/<repo the token covers>`:
+  `HOST/OWNER/REPO` is a host switch, another owner or repository is out of the token's reach.
+  A positional containing `://` is refused everywhere (a URL names a host). Refused with a named
+  reason: `-w --web`, `-e --editor` (launch a program), `gh api -H --header` (a header can carry
+  `Authorization:`), `gh api --hostname`, `gh api --verbose`; `gh pr merge` (merging stays with
+  the owner), `gh pr review` (the App does not approve), `gh auth`, `gh extension`, `gh alias`;
+  every other command, alias or extension is simply not a form.
+- Host pinned: `GH_HOST=github.com` is set and no other `GH_*` variable is passed on (`GH_REPO`,
+  `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GH_PATH`, `GH_DEBUG`, `GH_BROWSER` …). gh then
+  uses `GH_TOKEN`, ignores remotes on other hosts when inferring the repository (measured with
+  gh 2.92.0: an `upstream` on `ghe.example` beside `origin` still posts to `api.github.com`; a
+  checkout with only that remote stops with "none of the git remotes … correspond to the GH_HOST
+  environment variable"), and has no stored login or enterprise token to fall back on.
+
+Residual, by design — an identity wrapper, not a sandbox: programs on your `PATH`, and programs
+named only in this checkout's own local config (`diff.external`, `filter.*`, `textconv`,
+`include.path` targets), still run as your OS user with `GH_TOKEN` in their environment. Your
+credentials are not *loaded*; they are not *unreachable* — files under your home stay readable to
+anything running as you (a separate OS user is #258). `--body-file`, `--input` and `-F key=@file`
+send a file's contents to GitHub under the App token: that is content the agent chose to post,
+not another credential — the wrapper bounds *which credential authenticates*, not what the agent
+(already running in your shell) may read. Refusal messages never print the credential part of a
+URL, configuration keys included. Runs on macOS bash 3.2. Tests:
+`scripts/secrets/as-agent.test.sh` (they need `git`, `python3`, `openssl`; no network, no AWS:
+real pushes go to a fake GitHub on 127.0.0.1, reached as the proxy, which refuses every other
+host; the real-gh checks run when gh is installed and are required with `AS_AGENT_REQUIRE_GH=1`).
 
 The lower-level form, for anything else:
 
