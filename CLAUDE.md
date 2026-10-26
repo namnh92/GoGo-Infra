@@ -21,6 +21,10 @@ and the owner can approve it:
   number belongs, `-w`/`-e` — is refused before any token is minted, and gh is pinned to
   github.com. Run it from the checkout it concerns. (`docs/secrets.md` → *Using it* has the
   tables and the stated residuals; a new form is one table line plus a test, never a wider rule.)
+- The command runs in an environment the wrapper builds: your global/system git and gh config,
+  `~/.netrc`, hooks and push signing are not loaded (proxy/CA only via the environment), and the
+  gh forms have no git transport — push with the `git push` form first. Residual: programs on
+  your `PATH` or named in this checkout's own config still run as you, with the token.
 - Read-only calls (`gh pr view`, `gh pr checks`, `gh issue list`, `gh api` GETs) may use the
   session's own login.
 - Minting the token needs AWS credentials for the `ci` rows (on the owner's workstation:
