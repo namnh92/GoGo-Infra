@@ -318,6 +318,46 @@ else
   bad "openrouter/api-key vanished from the manifest" "exec-with.sh could no longer hand it to pnpm eval:intent"
 fi
 
+# GoGo-Infra#257 / ADR-0014: the GoGo AI assistant has its OWN inference key
+# (OpenRouter key gogo_ai_anthropic_<env>), its own credit limit and its own
+# spend line. It is the opposite of openrouter/api-key above: the API serves the
+# assistant, so the key must be a runtime row render-env.sh hands to the API —
+# and it must never be the decisions key or the harness key under another name.
+assistant_row="$(python3 "$READER" dev --namespace backend --consumer runtime | awk -F'\t' '$1 == "openrouter/assistant-api-key"')"
+if [[ "$(cut -f2,3 <<< "$assistant_row")" == $'OPENROUTER_ASSISTANT_API_KEY\tSecureString' ]]; then
+  ok "the assistant inference key is a backend runtime SecureString (OPENROUTER_ASSISTANT_API_KEY)"
+else
+  bad "openrouter/assistant-api-key is not a backend runtime SecureString" \
+      "got '${assistant_row}'; render-env.sh would not hand the API its assistant key"
+fi
+shared_env="$(python3 "$READER" dev --namespace all --consumer all | awk -F'\t' '$2 == "OPENROUTER_ASSISTANT_API_KEY" { print $1 }' | sort | tr '\n' ' ')"
+if [[ "$shared_env" == "openrouter/assistant-api-key " ]]; then
+  ok "OPENROUTER_ASSISTANT_API_KEY is declared by exactly one row"
+else
+  bad "OPENROUTER_ASSISTANT_API_KEY is declared by '${shared_env}'" \
+      "the assistant must not share a key (or its variable) with the decisions or harness key (ADR-0014 D-3)"
+fi
+# Absent must degrade the assistant, never stop a deploy (ADR-0014 D-6): no
+# assistant row is required in any environment until BE#713 reads it.
+for path in openrouter/assistant-api-key assistant/model assistant/fallback-model \
+            budget/assistant-monthly-max-usd budget/assistant-user-daily-max-messages flags/assistant; do
+  row="$(python3 "$READER" dev --namespace backend --consumer runtime | awk -F'\t' -v p="$path" '$1 == p')"
+  if [[ -z "$row" ]]; then
+    bad "${path} is not a backend runtime row" "ADR-0014 declares it for the API"
+  elif [[ -n "$(cut -f4 <<< "$row")" ]]; then
+    bad "${path} is required in $(cut -f4 <<< "$row")" "a deploy would fail before BE#713 reads it"
+  else
+    ok "${path} is a backend runtime row, required nowhere"
+  fi
+done
+assistant_cap="$(python3 "$READER" dev --capability-requires --include-planned | awk -F'\t' '$1 == "ai_assistant" { print $2 ":" $3 }' | sort | tr '\n' ' ')"
+if [[ "$assistant_cap" == "backend:assistant/model backend:budget/assistant-monthly-max-usd backend:budget/assistant-user-daily-max-messages backend:openrouter/assistant-api-key " ]]; then
+  ok "capability ai_assistant names the key, the model and both limits"
+else
+  bad "capability ai_assistant requires '${assistant_cap}'" \
+      "readiness must report the assistant missing its key, model or a limit (ADR-0014 D-4/D-5)"
+fi
+
 count_runtime=$(python3 "$READER" dev --namespace all | wc -l | tr -d ' ')
 count_seed=$(python3 "$READER" dev --namespace all --consumer seed | wc -l | tr -d ' ')
 count_obs=$(python3 "$READER" dev --namespace all --consumer observability | wc -l | tr -d ' ')

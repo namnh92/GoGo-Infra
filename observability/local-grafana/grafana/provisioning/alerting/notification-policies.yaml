@@ -1,4 +1,5 @@
-# ADR-0009 §F6. One child route; the root keeps whatever it had.
+# ADR-0009 §F6. One child route per alerting surface; the root keeps whatever it had.
+# ADR-0014 D-8 (GoGo-Infra#257) adds the second, for the AI assistant's spend.
 #
 # HAZARD, stated because it is not obvious and it is not reversible by editing
 # this file alone: provisioning `policies:` replaces the org's ENTIRE root
@@ -40,3 +41,16 @@ policies:
         group_wait: 30s
         group_interval: 5m
         repeat_interval: 12h
+      # ADR-0014 D-8. Same contact point, same shape: `service=ai-assistant` is set
+      # on the rules in ai-assistant-rules.yaml and nowhere else. No `continue`.
+      # repeat_interval 24h: a budget at 80% stays there until the month resets or
+      # someone decides, and one reminder a day is enough to make that decision.
+      - receiver: gogo-administrative-telegram
+        object_matchers:
+          - ['service', '=', 'ai-assistant']
+        group_by:
+          - grafana_folder
+          - alertname
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 24h

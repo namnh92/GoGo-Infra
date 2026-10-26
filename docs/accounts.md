@@ -90,6 +90,26 @@ blank means the row is declared and the collector is inert — the truthful stat
 | AWS IAM user, dedicated | `aws/cost-explorer-access-key-id`, `aws/cost-explorer-secret-access-key` | IAM policy: exactly `ce:GetCostAndUsage` on `*`. Cost Explorer must be enabled on account `477020169756` first (up to 24 h before the API answers) | worker (`aws_cost_explorer`) | **1/day**, cap enforced from `cost_source_freshness` | **PER_REQUEST $0.01 → ~$0.30/month** — the only paid collector; inside the $1/month DEV budget | | Only static key GoGo holds by design — `check-workflow-auth.sh` forbids it in CI, and it is never a fallback to the ambient identity |
 | GitHub fine-grained PAT | `github/billing-token`, `github/billing-account` | Account permission **Plan: read**, no repository access | worker (`github_actions`) | 4/day, 1 GET (2 across a month boundary) | FREE | | `GET /users/<login>/settings/billing/usage` (enhanced billing platform). A probe with the `gh` CLI token answered 404 on 2026-09-05 — that token lacks Plan: read; confirm the account is on the enhanced platform with the real token before trusting a 404 as "wrong login" |
 
+### OpenRouter keys and the GoGo AI assistant (ADR-0014, GoGo-Infra#257)
+
+One OpenRouter account serves every environment. Keys are filed in the Cost Center by **name**
+(`-` or `_` between words, GoGo-BE `openRouterServiceFor()`), so the name is part of the budget
+and not a label:
+
+| Key name | Purpose | SSM row | Credit limit (proposed, owner sets) | Cost Center service |
+| --- | --- | --- | --- | --- |
+| `gogo_ai_anthropic_dev` (exists) · `gogo_ai_anthropic_staging` / `_prod` (to create) | GoGo AI assistant, Claude via Anthropic BYOK | `/gogo/<env>/backend/openrouter/assistant-api-key` | dev $20 · staging $20 · prod $150 per month, **monthly reset** | `openrouter.assistant` + `anthropic.assistant`, **once GoGo-BE files the family**. Until then `openrouter.other_keys`. |
+| `gogo_be_<env>` | BE intent POC (JEV decisions) | `openrouter/api-key` (`seed`) | set at creation | `openrouter.decisions` |
+| `gogo_ai_harness_dev` | AI harness (JEV) | `ci:ai-harness/openrouter-api-key` | $2 | `openrouter.dev_tooling` |
+| management key | Cost collector, read-only use | `openrouter/management-key` (dev only) | none, since it does not run inference | none |
+
+Three stops on the assistant's spend (ADR-0014 D-4): the key's credit limit (if the key page
+offers counting BYOK usage in the limit, turn it on), GoGo-BE's `ASSISTANT_MONTHLY_MAX_USD`, and
+the spend limit of the Anthropic workspace whose key OpenRouter uses for BYOK (auto top-up off).
+That last one is shared by every BYOK Claude call on the account. Rotation and kill switch:
+`docs/secrets.md` (row `openrouter/assistant-api-key`). Before prod, confirm on the OpenRouter
+account that prompt logging and training use are off (ADR-0014 D-10).
+
 ## 3. Personal identity is a bus factor — accepted, with a revisit trigger
 
 The accounts hang off one personal GitHub identity. If that account is lost, disabled, or the
@@ -148,6 +168,7 @@ Fill in as accounts are created. "Owner" is a person; "backup" must not be the s
 | Sentry · `gogo-mobile` | `react-native`, id `4512252504178688` — GoGo-MobileApp, every flavour; `environment` dev/staging/prod from the build flavour. Settings 2026-10-14 (ADR-0011 D-6, O-1 done): dataScrubber + defaults on, `scrubIPAddresses` true, `storeCrashReports` 0, `sensitiveFields` = inviteCode invite slug token refreshToken accessToken guestToken authorization cookie lat lng latitude longitude originLat originLng email, `allowedDomains` `*` (native), default alert rules. 2026-10-14 (GoGo-Infra#215, #208 comment 6168623279): `code` removed from `sensitiveFields` (it scrubbed `status_code` to null and `country_code` to `[Filtered]`); Advanced Data Scrubbing `[Remove] [Anything] from [$user.geo.**]` (Sentry derives geo from the connection IP even with `scrubIPAddresses` on) | GitHub OAuth | `namnh92` | **none** | | 2026-10-14 |
 | Sentry · `gogo-cms` | `javascript-react`, id `4512252504178689` — GoGo-CMS browser bundle (not the Worker); `environment` from `VITE_APP_ENV`, `release` = deployed SHA. Settings 2026-10-14 (ADR-0011 D-6, O-1 done): as `gogo-mobile` (incl. the 2026-10-14 `$user.geo.**` rule and `code` removal), except `allowedDomains` = `cms-dev.gogo.id.vn` (add each CMS host when it exists); `scrapeJavaScript` on (stored frames carry bundle source context; off at ADR-0011 phase 2) | GitHub OAuth | `namnh92` | **none** | | 2026-10-14 |
 | AWS | account `477020169756` | IAM / SSO | | **none** | | |
+| OpenRouter | one account for every environment. Keys: see § OpenRouter keys above. BYOK Anthropic configured (owner, 2026-10-26) | not recorded | | **none** | | |
 
 The account identifiers are filled from `config/global.tfvars` and `config/dev.tfvars`. The
 owner columns are deliberately not filled in from the git author: who holds an account is a fact
