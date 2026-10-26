@@ -248,11 +248,15 @@ const NOJEV_LINE = /^\s*#nojev\s*$/i;
  * that authorized prompt is sent. Sanitizer-first is the accepted trade.
  */
 export function promptMarker(prompt: string): { marker: 'jev' | 'nojev' | null; text: string } {
-  const lines = prompt.replace(/\r\n?/g, '\n').split('\n');
+  // Consent reads lines split on LF after CRLF→LF only: a bare CR inside the
+  // first line keeps it from being exactly `#jev` (PR #254 Sol r4, S4-01).
+  // The opt-out splits on every line break, so it stays fail-closed.
+  const lines = prompt.replace(/\r\n/g, '\n').split('\n');
   const first = lines.findIndex((l) => l.trim() !== '');
   const jev = first >= 0 && JEV_LINE.test(lines[first]!);
   const nojev = lines.flatMap((l, i) => (NOJEV_LINE.test(l) ? [i] : []));
+  const nojevAnywhere = nojev.length > 0 || prompt.split(/\r\n|\r|\n/).some((l) => NOJEV_LINE.test(l));
   const drop = new Set([...(jev ? [first] : []), ...nojev]);
-  const marker = nojev.length ? 'nojev' : jev ? 'jev' : null;
+  const marker = nojevAnywhere ? 'nojev' : jev ? 'jev' : null;
   return { marker, text: drop.size ? lines.filter((_, i) => !drop.has(i)).join('\n') : prompt };
 }

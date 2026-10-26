@@ -139,6 +139,13 @@ describe('D5 grammar: #jev is the first non-blank line, #nojev any line (S-01, F
     assert.deepEqual([r.stdout, r.record.optIn, r.record.mode, r.sent.length], ['', 'suppressed', 'disabled', 0]);
   });
 
+  it('S4-01: a bare carriage return does not make a #jev line; it still splits for #nojev', () => {
+    assert.equal(promptMarker('#jev\rPrivate request').marker, null);
+    assert.equal(promptMarker('\r\n#jev\rx').marker, null);
+    assert.equal(promptMarker('#jev\r\nCó nên?').marker, 'jev');
+    assert.equal(promptMarker('#jev\nCó nên?\r#nojev').marker, 'nojev');
+  });
+
   it('[new-guard] both markers is nojev, in either order', () => {
     assert.equal(promptMarker('#jev\nx\n#nojev').marker, 'nojev');
     assert.equal(promptMarker('#nojev\n#jev').marker, 'nojev');
