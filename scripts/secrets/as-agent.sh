@@ -56,6 +56,11 @@
 # GITHUB_ENTERPRISE_TOKEN, GH_PATH, GH_DEBUG are dropped, so gh uses GH_TOKEN (which outranks
 # stored credentials for github.com), ignores remotes on other hosts, has no enterprise token to
 # fall back on and no way to be pointed at another host from the command line (above).
+# GITHUB_API_URL is pinned for the same reason: the mint sends the App JWT there.
+#
+# Diagnostics cleared: every inherited GIT_TRACE* variable, GIT_CURL_VERBOSE and gh's DEBUG are
+# dropped and GIT_TRACE_REDACT=1 is forced, since a curl trace with redaction off prints the
+# Authorization header that carries the App token.
 #
 # Residual, by design: git and gh still run programs the caller configured — hooks (pre-push),
 # core.pager / core.editor / gpg.program, gh's editor, pager and browser — with this process's
@@ -344,6 +349,15 @@ fi
 # could point gh's own credential helper at another executable; GH_DEBUG=api logs traffic.
 unset GH_HOST GH_REPO GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN GH_PATH GH_DEBUG
 export GH_HOST=github.com
+# github-app-token.sh posts the signed App JWT to GITHUB_API_URL (PR #256 review r4, S-04).
+export GITHUB_API_URL=https://api.github.com
+
+# With GIT_TRACE_REDACT=0, GIT_TRACE_CURL / GIT_CURL_VERBOSE print the Authorization header,
+# i.e. the App token, to stderr or to a file the variable names (PR #256 review r4, S-03). gh runs
+# git itself, so this covers both; DEBUG is gh's older spelling of GH_DEBUG.
+while IFS= read -r name; do unset "$name"; done < <(compgen -e | grep -E '^GIT_TRACE' || true)
+unset GIT_CURL_VERBOSE DEBUG
+export GIT_TRACE_REDACT=1
 
 token="$("${DIR}/exec-with.sh" dev \
     github/agent-app-private-key github/agent-app-id github/agent-app-installation-id -- \
