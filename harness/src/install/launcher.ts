@@ -731,6 +731,10 @@ export async function activate(
     const journal = readJournal(install);
     const wrapper = install.stat('bin/harness');
     if (wrapper && !wrapper.isFile()) throw new UsageError(`bin/harness in ${install.root} is a ${kindOf(wrapper)}; remove it by hand, then activate`);
+    // A kept wrapper is a bin/* leaf like any other (I-2): owned, one link. A hard link
+    // to a checkout file would let the checkout edit startup code (PR #253 Sol r4, S4-01).
+    if (wrapper && wrapper.uid !== uid()) throw new UsageError(`bin/harness in ${install.root} is not owned by this user; remove it by hand, then activate`);
+    if (wrapper && wrapper.nlink !== 1) throw new UsageError(`bin/harness in ${install.root} has ${wrapper.nlink} hard links; remove it by hand, then activate`);
     const { digest } = verifyVersion(install, sha);
     const from = active.kind === 'ok' ? active.version : null;
     const prov = provenance(install, sha, digest, journal, o.source ?? TRUSTED_SOURCE);

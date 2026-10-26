@@ -894,6 +894,17 @@ describe('#253 rev 3 I-6: bin/harness is the launch boundary', () => {
     assert.equal(existsSync(join(w.install, 'bin/harness')), false);
   });
 
+  it('S4-01: a hard-linked bin/harness (e.g. to a checkout file) is refused, not kept', async () => {
+    const w = world();
+    const a = prep(w);
+    seed(w, a.sha);
+    const outside = join(w.root, 'checkout-wrapper');
+    writeFileSync(outside, '#!/bin/sh\n# edited in a checkout\n', { mode: 0o555 });
+    linkSync(outside, join(w.install, 'bin/harness'));
+    await assert.rejects(activateAs(w, a.sha), /bin\/harness in .* has 2 hard links; remove it by hand/);
+    assert.equal(existsSync(join(w.install, 'ACTIVE')), false);
+  });
+
   it('interrupted after the wrapper, after the intent, after the ACTIVE rename: activating again completes', async () => {
     // After the wrapper: bin/ holds both files, nothing else happened.
     const w = world();
