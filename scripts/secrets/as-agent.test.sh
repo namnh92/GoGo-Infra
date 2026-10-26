@@ -221,6 +221,35 @@ git -C "$SSH_REPO" remote set-url origin git@github.com:namnh92/GoGo-Ssh.git
 out="$(cd "$REPO" && GIT_CONFIG_PARAMETERS="'http.extraheader'='AUTHORIZATION: basic X'" "$AS" -- "${SANDBOX}/child" 2>&1)"; rc=$?
 [[ "$rc" != 0 ]] && ! grep -q 'child:' <<<"$out" && ok "inherited GIT_CONFIG_PARAMETERS (git -c from a parent) is refused" || bad "GIT_CONFIG_PARAMETERS" "rc=$rc out=$out"
 
+# PR #256 review r3.
+: >"$CALLS"
+out="$(cd "$REPO" && GIT_CONFIG=/dev/null "$AS" -- "${SANDBOX}/child" 2>&1)"; rc=$?
+[[ "$rc" != 0 ]] && ! grep -q 'child:' <<<"$out" && ! grep -q exec-with "$CALLS" && grep -q 'GIT_CONFIG is set' <<<"$out" \
+  && ok "an inherited GIT_CONFIG (seen by git config only) is refused before minting" || bad "GIT_CONFIG" "rc=$rc out=$out"
+for opt in "-C ${SSH_REPO}" "-c http.extraheader=X" "--git-dir=${SSH_REPO}/.git" "--work-tree ${SSH_REPO}" "--config-env=http.extraheader=X"; do
+  : >"$CALLS"
+  # shellcheck disable=SC2086 # split the option and its value on purpose
+  out="$(cd "$REPO" && "$AS" -- git ${opt} ls-remote origin 2>&1)"; rc=$?
+  [[ "$rc" != 0 ]] && ! grep -q exec-with "$CALLS" && grep -q 'changes the repository or configuration' <<<"$out" \
+    && ok "git ${opt%% *} … is refused before minting" || bad "git ${opt}" "rc=$rc out=$out"
+done
+: >"$CALLS"
+out="$(cd "$REPO" && "$AS" -- git log -C -1 2>&1)"; rc=$?
+grep -q exec-with "$CALLS" && ! grep -q 'changes the repository' <<<"$out" \
+  && ok "an option after the git subcommand is the subcommand's own (git log -C is allowed)" || bad "subcommand option" "rc=$rc out=$out"
+CRED_REPO="${SANDBOX}/GoGo-Cred"
+git init -q "$CRED_REPO"
+git -C "$CRED_REPO" remote add origin https://github.com/namnh92/GoGo-Cred.git
+git -C "$CRED_REPO" remote add mirror 'ssh://owner:OWNER_SECRET@github.com/namnh92/GoGo-Cred.git'
+out="$(cd "$CRED_REPO" && "$AS" -- "${SANDBOX}/child" 2>&1)"; rc=$?
+[[ "$rc" != 0 ]] && grep -q "remote 'mirror'" <<<"$out" && ! grep -q OWNER_SECRET <<<"$out" \
+  && ok "a refused remote is reported without the credential in its URL" || bad "redact remote" "rc=$rc out=$out"
+git -C "$CRED_REPO" remote remove mirror
+git -C "$CRED_REPO" remote set-url origin 'https://owner:OWNER_SECRET@gitlab.example/x/y.git'
+out="$(cd "$CRED_REPO" && "$AS" -- "${SANDBOX}/child" 2>&1)"; rc=$?
+[[ "$rc" != 0 ]] && grep -q 'pass --repo' <<<"$out" && ! grep -q OWNER_SECRET <<<"$out" \
+  && ok "an unrecognised origin is reported without its credential" || bad "redact origin" "rc=$rc out=$out"
+
 echo
 if [[ "$failures" -gt 0 ]]; then
   echo "${failures} failure(s)"

@@ -580,8 +580,12 @@ way the command can authenticate to GitHub: SSH remotes (`git@github.com:…`, `
 the SSH agent is not passed on, and inherited `http.extraHeader` values for github.com are
 reset. Before minting it checks the checkout: a remote that still reaches GitHub over anything
 but HTTPS (your own `insteadOf` wins over the rewrite), an extra header configured for a more
-specific GitHub URL, or inherited `GIT_CONFIG_COUNT` / `GIT_CONFIG_PARAMETERS` is refused rather
-than worked around. Tests: `scripts/secrets/as-agent.test.sh`.
+specific GitHub URL, or inherited `GIT_CONFIG_COUNT` / `GIT_CONFIG_PARAMETERS` / `GIT_CONFIG` is
+refused rather than worked around. The checks cover the checkout of the working directory, so a
+`git` command with `-C`, `-c`, `--git-dir`, `--work-tree` or `--config-env` is refused too: `cd`
+into that checkout instead. A command that changes directory some other way (a script, `cd`
+inside `sh -c`) is outside what the wrapper can inspect. Refusal messages never print the
+credential part of a remote URL. Runs on macOS bash 3.2. Tests: `scripts/secrets/as-agent.test.sh`.
 
 The lower-level form, for anything else:
 

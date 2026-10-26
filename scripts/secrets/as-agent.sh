@@ -27,7 +27,10 @@
 # a remote that still reaches GitHub over anything but HTTPS (an `insteadOf`
 # of your own wins over ours) or an extra header for a more specific GitHub
 # URL (which a reset cannot reach) is refused, never sent alongside the token.
-# Inherited GIT_CONFIG_COUNT / GIT_CONFIG_PARAMETERS are refused, not merged.
+# Inherited GIT_CONFIG_COUNT / GIT_CONFIG_PARAMETERS / GIT_CONFIG are refused, not merged.
+# The checks cover the working directory's checkout: a git command with -C, -c, --git-dir,
+# --work-tree or --config-env is refused; a command that changes directory by other means
+# (a shell script, `cd` inside `sh -c`) is outside what this script can inspect.
 
 set -euo pipefail
 
@@ -38,6 +41,8 @@ esac
 die() { echo "error: $*" >&2; exit 2; }
 # macOS ships bash 3.2, which has no case-conversion expansion; the owner's workstation runs this script.
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+# A URL may carry a credential (https://user:token@github.com/…); never echo that part.
+redact() { printf '%s' "$1" | sed -E 's#(://)[^/@]*@#\1***@#'; }
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 usage="usage: as-agent.sh [--repo <name>]... -- <command> [args...]"
 
@@ -64,7 +69,7 @@ if [[ ${#repos[@]} -eq 0 ]]; then
     shopt -u nocasematch
     repos=("${BASH_REMATCH[1]%.git}")
   else
-    die "cannot tell the repository from origin ('${origin:-none}'); pass --repo <name>"
+    die "cannot tell the repository from origin ('$(redact "${origin:-none}")'); pass --repo <name>"
   fi
 fi
 
@@ -73,6 +78,22 @@ for r in "${repos[@]}"; do repo_args+=(--repo "$r"); done
 
 [[ -z "${GIT_CONFIG_COUNT:-}" ]] || die "GIT_CONFIG_COUNT is already set; refusing to merge credential configuration"
 [[ -z "${GIT_CONFIG_PARAMETERS:-}" ]] || die "GIT_CONFIG_PARAMETERS is set (git -c from a parent process); refusing to merge credential configuration"
+# GIT_CONFIG is read by `git config` only, so the checks below would inspect that file while
+# the command itself still loads the ordinary configuration (PR #256 review r3).
+[[ -z "${GIT_CONFIG:-}" ]] || die "GIT_CONFIG is set; the configuration checks would not see what the command loads — refusing"
+
+# The checks below inspect the repository of the working directory. A git command that points
+# elsewhere, or adds configuration of its own, would escape them: run it from that checkout.
+if [[ "$(basename -- "$1")" == git ]]; then
+  for arg in "${@:2}"; do
+    case "$arg" in
+      -C | -c | --git-dir | --git-dir=* | --work-tree | --work-tree=* | --config-env | --config-env=*)
+        die "git option '${arg}' changes the repository or configuration the checks inspected; cd into that checkout instead" ;;
+      -*) ;;
+      *) break ;; # the subcommand: options after it are its own
+    esac
+  done
+fi
 
 # Process-only git configuration (nothing is written to any file):
 #  0-1  an empty credential.helper resets the list, so the owner's keychain helper is never
@@ -103,7 +124,7 @@ if git rev-parse --git-dir >/dev/null 2>&1; then
       lower="$(lower "$url")"
       [[ "$lower" == *github.com* ]] || continue
       if [[ "$lower" != https://github.com/* ]]; then
-        die "remote '${remote}' still reaches GitHub as '${url}' after the rewrite to HTTPS (an insteadOf in your git config?); the agent token only works over HTTPS — refusing"
+        die "remote '${remote}' still reaches GitHub as '$(redact "$url")' after the rewrite to HTTPS (an insteadOf in your git config?); the agent token only works over HTTPS — refusing"
       fi
       github_urls+=("$url")
     done < <(git remote get-url --all "$remote"; git remote get-url --all --push "$remote")
