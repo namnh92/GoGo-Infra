@@ -27,10 +27,30 @@
 # a remote that still reaches GitHub over anything but HTTPS (an `insteadOf`
 # of your own wins over ours) or an extra header for a more specific GitHub
 # URL (which a reset cannot reach) is refused, never sent alongside the token.
-# Inherited GIT_CONFIG_COUNT / GIT_CONFIG_PARAMETERS / GIT_CONFIG are refused, not merged.
-# The checks cover the working directory's checkout: a git command with -C, -c, --git-dir,
-# --work-tree or --config-env is refused; a command that changes directory by other means
-# (a shell script, `cd` inside `sh -c`) is outside what this script can inspect.
+# Inherited GIT_CONFIG_COUNT / GIT_CONFIG_PARAMETERS / GIT_CONFIG are refused when present at
+# all (an empty GIT_CONFIG still makes `git config` read a different file than `git push`).
+#
+# The checks cover the checkout of the working directory, so the command after `--` must be
+# one they can vouch for (owner decision 2026-10-26, PR #256 review): `git` or `gh`, called by
+# that name. The checks call `git` and `gh` by name through PATH, so the command resolves to the
+# same program they inspected; a path (`/usr/bin/git`), a shell, a script, `env`, `xargs` or
+# anything else is refused before a token is minted — it could run git from another checkout,
+# whose configuration was never looked at. For git, the only global options accepted before the
+# subcommand are the no-value ones (-p, -P, --no-pager, --no-optional-locks, …): -C, -c,
+# --git-dir, --work-tree, --config-env, --exec-path, --namespace, --bare and any spelling of
+# them, attached or not, are refused. The git subcommand must be a builtin
+# (`git --list-cmds=builtins`): an alias is refused — git expands an alias to a shell command
+# (`!…`), or to another git command that may carry -C/-c of its own, and aliases chain — and so
+# is an external `git-<name>` program. For gh, the subcommand must be one gh lists as its own in
+# `gh --help`: gh aliases (shell or not) and gh extensions are refused, and a flag before the
+# subcommand other than -h/--help/--version is refused. If `gh --help` cannot be read or lists
+# nothing recognisable, every gh command is refused (closed, not open).
+#
+# Residual, by design: git and gh still run programs the caller configured — hooks (pre-push),
+# core.pager / core.editor / gpg.program, gh's editor, pager and browser — with this process's
+# environment. The wrapper constrains the command it was handed, not what git or gh launch from
+# your own configuration; such a program sees GH_TOKEN, and SSH key files under ~/.ssh stay
+# readable to it (only the agent socket is dropped).
 
 set -euo pipefail
 
@@ -76,23 +96,78 @@ fi
 repo_args=()
 for r in "${repos[@]}"; do repo_args+=(--repo "$r"); done
 
-[[ -z "${GIT_CONFIG_COUNT:-}" ]] || die "GIT_CONFIG_COUNT is already set; refusing to merge credential configuration"
-[[ -z "${GIT_CONFIG_PARAMETERS:-}" ]] || die "GIT_CONFIG_PARAMETERS is set (git -c from a parent process); refusing to merge credential configuration"
+# Presence, not content: an empty value is still "set" to git (PR #256 review r2, A-F-03).
+[[ -z "${GIT_CONFIG_COUNT+x}" ]] || die "GIT_CONFIG_COUNT is already set; refusing to merge credential configuration"
+[[ -z "${GIT_CONFIG_PARAMETERS+x}" ]] || die "GIT_CONFIG_PARAMETERS is set (git -c from a parent process); refusing to merge credential configuration"
 # GIT_CONFIG is read by `git config` only, so the checks below would inspect that file while
 # the command itself still loads the ordinary configuration (PR #256 review r3).
-[[ -z "${GIT_CONFIG:-}" ]] || die "GIT_CONFIG is set; the configuration checks would not see what the command loads — refusing"
+[[ -z "${GIT_CONFIG+x}" ]] || die "GIT_CONFIG is set (even empty); the configuration checks would not see what the command loads — refusing"
 
-# The checks below inspect the repository of the working directory. A git command that points
-# elsewhere, or adds configuration of its own, would escape them: run it from that checkout.
-if [[ "$(basename -- "$1")" == git ]]; then
+# The checks below inspect the repository of the working directory, calling `git` and `gh` by
+# name. The command must be that same `git` or `gh` (owner decision 2026-10-26): anything that
+# could run git elsewhere, or with configuration of its own, is refused before a token exists.
+cmd="$1"
+case "$cmd" in
+  git | gh) ;;
+  *) die "only 'git' or 'gh', called by name, may follow '--' (got '${cmd}'): the checks cover the checkout of the working directory and the program they inspected — wrap the git or gh call itself, not a shell, script or path around it" ;;
+esac
+
+if [[ "$cmd" == git ]]; then
+  sub=""
   for arg in "${@:2}"; do
     case "$arg" in
-      -C | -c | --git-dir | --git-dir=* | --work-tree | --work-tree=* | --config-env | --config-env=*)
-        die "git option '${arg}' changes the repository or configuration the checks inspected; cd into that checkout instead" ;;
-      -*) ;;
-      *) break ;; # the subcommand: options after it are its own
+      # Global options that take no value and change neither repository nor configuration.
+      -p | --paginate | -P | --no-pager | --no-replace-objects | --no-lazy-fetch | --no-optional-locks | --no-advice \
+      | --literal-pathspecs | --glob-pathspecs | --noglob-pathspecs | --icase-pathspecs \
+      | --html-path | --man-path | --info-path | -v | --version | -h | --help) ;;
+      # Everything else before the subcommand: -C, -c, --git-dir, --work-tree, --config-env,
+      # --exec-path, --namespace, --bare — in any spelling, attached (-C/path, -ck=v) or not.
+      -*) die "git option '${arg}' changes the repository or configuration the checks inspected (or is not one this wrapper knows); cd into that checkout and call the subcommand directly" ;;
+      *) sub="$arg"; break ;; # the subcommand: options after it are its own
     esac
   done
+  if [[ -n "$sub" ]]; then
+    # Captured first: `git … | grep -q` would trip pipefail when grep stops reading early.
+    builtins="$(git --list-cmds=builtins 2>/dev/null)" || die "cannot list git builtins ('git --list-cmds=builtins'); refusing"
+    if ! grep -qxF -- "$sub" <<<"$builtins"; then
+      # git ignores an alias that shadows a builtin, so only a non-builtin can be one.
+      if git config --get "alias.${sub}" >/dev/null 2>&1; then
+        die "git subcommand '${sub}' is an alias: an alias may run a shell command or another git command with -C/-c of its own, which the checks cannot see — call the builtin directly"
+      fi
+      die "git subcommand '${sub}' is not a git builtin (an external git-${sub} program?), which the checks cannot vouch for; refusing"
+    fi
+  fi
+fi
+
+if [[ "$cmd" == gh ]]; then
+  sub=""
+  for arg in "${@:2}"; do
+    case "$arg" in
+      -h | --help | --version) ;;
+      -*) die "gh flag '${arg}' before the subcommand is not one this wrapper knows; put flags after the gh command" ;;
+      *) sub="$arg"; break ;;
+    esac
+  done
+  if [[ -n "$sub" ]]; then
+    # `gh --help` lists gh's own commands by section, plus EXTENSION COMMANDS and ALIAS COMMANDS
+    # (`gh extension list` needs a token; `gh --help` needs neither token nor network).
+    gh_help="$(GH_NO_UPDATE_NOTIFIER=1 gh --help 2>/dev/null)" || die "cannot read 'gh --help' to check the subcommand; refusing"
+    section="" found=""
+    while IFS= read -r line; do
+      case "$line" in
+        "") ;;
+        " "*) [[ "$line" == "  ${sub}:"* ]] && { found="$section"; break; } ;;
+        *) section="$line" ;;
+      esac
+    done <<<"$gh_help"
+    case "$found" in
+      "") die "gh does not list '${sub}' as one of its commands (\`gh --help\`); refusing" ;;
+      "EXTENSION COMMANDS") die "gh subcommand '${sub}' is an extension — a program of its own, which the checks cannot vouch for; refusing" ;;
+      "ALIAS COMMANDS") die "gh subcommand '${sub}' is a gh alias (shell aliases run arbitrary commands); call the gh command directly" ;;
+      *" COMMANDS") ;;
+      *) die "gh lists '${sub}' under '${found}', not as a command; refusing" ;;
+    esac
+  fi
 fi
 
 # Process-only git configuration (nothing is written to any file):

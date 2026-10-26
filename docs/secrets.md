@@ -580,12 +580,36 @@ way the command can authenticate to GitHub: SSH remotes (`git@github.com:…`, `
 the SSH agent is not passed on, and inherited `http.extraHeader` values for github.com are
 reset. Before minting it checks the checkout: a remote that still reaches GitHub over anything
 but HTTPS (your own `insteadOf` wins over the rewrite), an extra header configured for a more
-specific GitHub URL, or inherited `GIT_CONFIG_COUNT` / `GIT_CONFIG_PARAMETERS` / `GIT_CONFIG` is
-refused rather than worked around. The checks cover the checkout of the working directory, so a
-`git` command with `-C`, `-c`, `--git-dir`, `--work-tree` or `--config-env` is refused too: `cd`
-into that checkout instead. A command that changes directory some other way (a script, `cd`
-inside `sh -c`) is outside what the wrapper can inspect. Refusal messages never print the
-credential part of a remote URL. Runs on macOS bash 3.2. Tests: `scripts/secrets/as-agent.test.sh`.
+specific GitHub URL, or an inherited `GIT_CONFIG_COUNT` / `GIT_CONFIG_PARAMETERS` / `GIT_CONFIG`
+present in the environment at all (empty included) is refused rather than worked around.
+
+The checks cover the checkout of the working directory, so the command after `--` must be one
+they can vouch for (owner decision 2026-10-26): **`git` or `gh`, called by that name**. The
+wrapper calls `git` and `gh` by name through `PATH` for its checks, so the command resolves to
+the same program it inspected; a path (`/usr/bin/git`), a shell (`sh -c 'cd … && git push'`), a
+script, `env`, `xargs` or anything else is refused before a token is minted — it could run git in
+another checkout whose configuration was never looked at. Within that:
+
+- `git`: the only global options accepted before the subcommand are the no-value ones (`-p`,
+  `-P`, `--no-pager`, `--no-optional-locks`, …). `-C`, `-c`, `--git-dir`, `--work-tree`,
+  `--config-env`, `--exec-path`, `--namespace`, `--bare` — attached (`-C/path`, `-ck=v`) or not —
+  are refused: `cd` into that checkout instead. The subcommand must be a git builtin
+  (`git --list-cmds=builtins`): an alias is refused whatever it expands to, because git expands
+  an alias to a shell command (`!…`) or to another git command that may carry `-C`/`-c` of its
+  own, and aliases chain; an external `git-<name>` program is refused for the same reason. An
+  alias that shadows a builtin is ignored by git, so the builtin runs.
+- `gh`: the subcommand must be one `gh --help` lists as gh's own. gh aliases (shell or not) and gh
+  extensions appear there under their own headings and are refused; a flag before the subcommand
+  other than `-h` / `--help` / `--version` is refused. If `gh --help` cannot be read or lists
+  nothing recognisable, every gh command is refused — the check fails closed.
+
+Residual, by design: git and gh still run programs *you* configured — hooks (`pre-push`),
+`core.pager` / `core.editor` / `gpg.program`, gh's editor, pager and browser — with the wrapped
+process's environment. The wrapper constrains the command it was handed, not what git or gh
+launch from your own configuration; such a program sees `GH_TOKEN`, and SSH key files under
+`~/.ssh` stay readable to it (only the agent socket is dropped). Refusal messages never print the
+credential part of a remote URL. Runs on macOS bash 3.2. Tests: `scripts/secrets/as-agent.test.sh`
+(they need `git` and `gh` installed; no network, no AWS).
 
 The lower-level form, for anything else:
 

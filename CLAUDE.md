@@ -12,6 +12,10 @@ and the owner can approve it:
 ./scripts/secrets/as-agent.sh -- gh issue comment <n> --body-file <file>
 ```
 
+- The command after `--` is `git` or `gh` itself, by name, with a builtin git subcommand or a gh
+  command of gh's own: a shell, a script, `env`, a path to git, `git -C …`/`-c …`, a git alias
+  or a gh alias/extension is refused before any token is minted. Run it from the checkout it
+  concerns. (`docs/secrets.md` → *Using it* has the exact rules and the stated residual.)
 - Read-only calls (`gh pr view`, `gh pr checks`, `gh issue list`, `gh api` GETs) may use the
   session's own login.
 - Minting the token needs AWS credentials for the `ci` rows (on the owner's workstation:
