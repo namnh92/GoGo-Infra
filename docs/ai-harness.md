@@ -347,7 +347,7 @@ opted in (owner decision 2026-10-23 on #247), and then a short advisory is added
 {
   "hooks": {
     "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "timeout": 20, "command": "mkdir -p \"$HOME/.gogo-harness\" 2>/dev/null; node \"$HOME/.gogo-harness/install/bin/harness.mts\" prompt-hook 2>\"$HOME/.gogo-harness/prompt-hook.last-error\"; exit 0" }] }
+      { "hooks": [{ "type": "command", "timeout": 20, "command": "mkdir -p \"$HOME/.gogo-harness\" 2>/dev/null; \"$HOME/.gogo-harness/install/bin/harness\" prompt-hook 2>\"$HOME/.gogo-harness/prompt-hook.last-error\"; exit 0" }] }
     ]
   }
 }
@@ -356,10 +356,10 @@ opted in (owner decision 2026-10-23 on #247), and then a short advisory is added
 **Opting in** (owner, on a terminal; off by default):
 
 ```bash
-node ~/.gogo-harness/install/bin/harness.mts jev-prompt setup      # allow `#jev` on single prompts
-node ~/.gogo-harness/install/bin/harness.mts jev-prompt on --for 8h # every prompt, 1–24 h, then off by itself
-node ~/.gogo-harness/install/bin/harness.mts jev-prompt off         # stop sending every prompt (#jev still allowed)
-node ~/.gogo-harness/install/bin/harness.mts jev-prompt status
+~/.gogo-harness/install/bin/harness jev-prompt setup      # allow `#jev` on single prompts
+~/.gogo-harness/install/bin/harness jev-prompt on --for 8h # every prompt, 1–24 h, then off by itself
+~/.gogo-harness/install/bin/harness jev-prompt off         # stop sending every prompt (#jev still allowed)
+~/.gogo-harness/install/bin/harness jev-prompt status
 ```
 
 `setup` and `on` show what is sent where and ask the owner to type a confirmation; they take no
