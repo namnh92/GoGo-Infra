@@ -537,6 +537,42 @@ describe('I11: the real closure, through runChild (installed-chain stand-in unti
     assert.match(context(r.stdout), /typesafe\/jev-1\.14-20261014/);
   });
 
+  // #260: the session without AWS credentials gets its own code and a note that names AWS_PROFILE,
+  // not jev_wrapper_failed. Both messages of the real require_aws are covered.
+  for (const [name, setup] of [
+    ['AWS_PROFILE set, no session', (w: World) => {}],
+    ['AWS_PROFILE unset, named profiles only', (w: World) => {
+      delete w.env.AWS_PROFILE;
+      mkdirSync(join(w.dir, '.aws'), { recursive: true });
+      writeFileSync(join(w.dir, '.aws/config'), '[profile gogobootstrap]\nregion = ap-southeast-1\n');
+    }],
+  ] as const) {
+    it(`#260: real exec-with.sh, ${name}: jev_aws_unavailable, nothing sent, the note names AWS_PROFILE`, async () => {
+      const { w, entry } = realWorld(false);
+      writeFileSync(join(w.dir, 'bin/aws'), '#!/bin/sh\nexit 255\n');
+      setup(w);
+      await grant(w, 'setup');
+      const r = await hook(w, '#jev\nCó nên tách module?', { entry });
+      assert.deepEqual([r.record.code, r.sent.length], ['jev_aws_unavailable', 0], JSON.stringify(r.record));
+      assert.match(context(r.stdout), /\(jev_aws_unavailable\).*AWS_PROFILE/);
+    });
+  }
+
+  it('#260: any other wrapper failure is still jev_wrapper_failed', async () => {
+    const w = world(() => '#!/bin/sh\ncat >/dev/null\necho "error: could not read /gogo/dev/x (missing, or this session may not read it)" >&2\nexit 1\n');
+    await grant(w, 'setup');
+    const r = await hook(w, '#jev\nCó nên tách module?');
+    assert.equal(r.record.code, 'jev_wrapper_failed');
+    assert.equal(context(r.stdout).includes('AWS_PROFILE'), false);
+  });
+
+  it('#260: the AWS text counts only from a failed wrapper, at the start of a line', async () => {
+    const w = world(() => '#!/bin/sh\ncat >/dev/null\necho "note: error: not authenticated to AWS" >&2\nexit 1\n');
+    await grant(w, 'setup');
+    const r = await hook(w, '#jev\nCó nên tách module?');
+    assert.equal(r.record.code, 'jev_wrapper_failed');
+  });
+
   it('[new-guard] planted scripts/lib/re.py and user-site usercustomize.py are not executed', { todo: pending }, async () => {
     const { w, entry, sentinels } = realWorld(true);
     await grant(w, 'setup');

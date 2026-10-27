@@ -189,11 +189,13 @@ const FALLBACK_CATEGORIES = [
 /** The errors prompt-live.ts may return. */
 const CHILD_ERRORS = ['suppressed', 'not_live', 'no_key', 'child_failed', 'invalid_observation', 'stdin_too_large', 'stdin_timeout', 'stdin_error'] as const;
 const MODEL_ID = /^[A-Za-z0-9._/:-]{1,80}$/;
+/** require_aws in scripts/secrets/common.sh, both messages: no usable AWS session for the send. */
+const AWS_UNAVAILABLE = /^error: not authenticated to AWS\b/m;
 
 /** Every code a note or a record may carry (I8); nothing else reaches stdout. */
 export const NOTE_CODES: ReadonlySet<string> = new Set([
   'invalid_data', 'sanitize_failed', 'jev_not_configured', 'session_cap', 'session_unreadable', 'session_busy',
-  'jev_wrapper_missing', 'jev_wrapper_unverified', 'jev_timeout', 'jev_wrapper_failed', 'jev_spawn_failed', 'jev_bad_output', 'jev_fallback',
+  'jev_wrapper_missing', 'jev_wrapper_unverified', 'jev_timeout', 'jev_aws_unavailable', 'jev_wrapper_failed', 'jev_spawn_failed', 'jev_bad_output', 'jev_fallback',
   ...FALLBACK_CATEGORIES.map((c) => `jev_fallback_${c}`),
   ...CHILD_ERRORS.map((e) => `jev_child_${e}`),
 ]);
@@ -301,7 +303,9 @@ function runChild(o: Options, wrapper: string, observationId: string, payload: s
   const code = (r.error as NodeJS.ErrnoException | undefined)?.code;
   if (code === 'ETIMEDOUT') return { error: 'jev_timeout' };
   // A wrapper that exits before reading stdin (no AWS session, missing row) also breaks the pipe.
-  if ((r.status !== null && r.status !== 0) || code === 'EPIPE') return { error: 'jev_wrapper_failed' };
+  // No AWS session is told apart (#260) by require_aws's own line in common.sh, one of the
+  // verified closure files; the text is matched, never kept or shown.
+  if ((r.status !== null && r.status !== 0) || code === 'EPIPE') return { error: AWS_UNAVAILABLE.test(r.stderr ?? '') ? 'jev_aws_unavailable' : 'jev_wrapper_failed' };
   if (r.error || r.status === null) return { error: 'jev_spawn_failed' };
   let parsed: unknown;
   try {
@@ -321,12 +325,17 @@ const GUIDANCE: Record<Outcome, string> = {
   HUMAN_APPROVAL: 'JEV: nên hỏi owner trước khi làm.',
 };
 
+const NOTE_HINTS: Record<string, string> = {
+  jev_not_configured: ' Owner chạy `jev-prompt setup` trên terminal để cho phép.',
+  jev_aws_unavailable: ' Phiên Claude Code không có AWS session: mở lại bằng `AWS_PROFILE=<profile> claude` (máy owner: gogobootstrap), đã đăng nhập SSO.',
+};
+
 /** The only stdout writer: a closed note code, or the fixed advisory for a validated outcome. */
 function hookOutput(m: { kind: 'note'; code: string } | { kind: 'advisory'; outcome: Outcome; model: string | null }): string {
   let text: string;
   if (m.kind === 'note') {
     if (!NOTE_CODES.has(m.code)) return '';
-    text = `GoGo harness · #jev: prompt này không được gửi cho JEV (${m.code}).${m.code === 'jev_not_configured' ? ' Owner chạy `jev-prompt setup` trên terminal để cho phép.' : ''}`;
+    text = `GoGo harness · #jev: prompt này không được gửi cho JEV (${m.code}).${NOTE_HINTS[m.code] ?? ''}`;
   } else {
     text = [
       'GoGo harness · gợi ý JEV cho yêu cầu này — chỉ tư vấn, không phải quyền; policy, hard gate và quyền của Claude Code vẫn áp dụng như cũ.',
