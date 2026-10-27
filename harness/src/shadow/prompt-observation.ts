@@ -59,12 +59,13 @@ export const SHADOW_LIMITS = { stdinBytes: 512 * 1024, readTimeoutMs: 2_000, log
 
 /**
  * The hook command (owner action to install, docs/ai-harness.md). It runs the
- * approved install (#245), never a checkout. A missing or failing launcher
- * still exits 0 and prints nothing; its last error is kept in one file that
+ * approved install (#245) through bin/harness, never a checkout and never
+ * `node …/harness.mts`, which would load NODE_OPTIONS before any check
+ * (#253 I-6). A missing or failing launcher still exits 0 and prints nothing; its last error is kept in one file that
  * every run overwrites, so it can be seen without growing.
  */
 export const PROMPT_HOOK_COMMAND =
-  'mkdir -p "$HOME/.gogo-harness" 2>/dev/null; node "$HOME/.gogo-harness/install/bin/harness.mts" prompt-hook 2>"$HOME/.gogo-harness/prompt-hook.last-error"; exit 0';
+  'mkdir -p "$HOME/.gogo-harness" 2>/dev/null; "$HOME/.gogo-harness/install/bin/harness" prompt-hook 2>"$HOME/.gogo-harness/prompt-hook.last-error"; exit 0';
 
 export type PromptRecord = {
   at: string;

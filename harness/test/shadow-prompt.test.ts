@@ -146,7 +146,9 @@ describe('#247 AC3: the hook never blocks and never injects context', () => {
     // An install whose integrity check fails (the #245 launcher exits 2 with a message).
     mkdirSync(join(home, '.gogo-harness/install/bin'), { recursive: true });
     const launcher = join(home, '.gogo-harness/install/bin/harness.mts');
-    writeFileSync(launcher, "process.stderr.write('harness install: harness/src/cli.ts does not match its MANIFEST\\n'); process.exit(2);\n");
+    // bin/harness as the first activation writes it (#253 I-6): runs the Node beside its harness.mts.
+    writeFileSync(join(home, '.gogo-harness/install/bin/harness'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} "$(dirname "$0")/harness.mts" "$@"\n`, { mode: 0o755 });
+    writeFileSync(launcher,"process.stderr.write('harness install: harness/src/cli.ts does not match its MANIFEST\\n'); process.exit(2);\n");
     r = run();
     assert.deepEqual([r.status, r.stdout], [0, '']);
     assert.match(readFileSync(join(home, '.gogo-harness/prompt-hook.last-error'), 'utf8'), /does not match its MANIFEST/);
@@ -232,6 +234,14 @@ describe('#247 docs', () => {
   it('the documented hook command is the one the tests run', () => {
     const docs = readFileSync(join(HARNESS, '../docs/ai-harness.md'), 'utf8');
     assert.ok(docs.includes(JSON.stringify(PROMPT_HOOK_COMMAND)), 'docs/ai-harness.md hook snippet drifted from PROMPT_HOOK_COMMAND');
+  });
+
+  it('the hook and the documented jev-prompt commands go through bin/harness, never node …/harness.mts (#253 launch boundary)', () => {
+    // A `node …/harness.mts` call loads NODE_OPTIONS (--import/--require) before the bootstrap checks anything.
+    assert.match(PROMPT_HOOK_COMMAND, /"\$HOME\/\.gogo-harness\/install\/bin\/harness" prompt-hook/);
+    assert.equal(/\bnode\b|harness\.mts/.test(PROMPT_HOOK_COMMAND), false, PROMPT_HOOK_COMMAND);
+    const docs = readFileSync(join(HARNESS, '../docs/ai-harness.md'), 'utf8');
+    assert.deepEqual(docs.split('\n').filter((l) => /^node .*harness\.mts (jev-prompt|prompt-hook)/.test(l)), []);
   });
 });
 
