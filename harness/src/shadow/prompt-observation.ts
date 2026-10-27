@@ -200,6 +200,20 @@ export const NOTE_CODES: ReadonlySet<string> = new Set([
   ...CHILD_ERRORS.map((e) => `jev_child_${e}`),
 ]);
 
+/**
+ * The codes that prove nothing left for OpenRouter (#254 S4-02, #260): refused by the hook before
+ * the child, by the child before a provider exists, or by the router before the request. Every
+ * other code — the wrapper or child failing or timing out, unreadable output, a fallback after
+ * the request (timeout, network, any HTTP answer, an invalid response) — cannot tell, and its
+ * note says no usable advice was obtained, never that the prompt was not sent.
+ */
+export const NOT_SENT_CODES: ReadonlySet<string> = new Set([
+  'invalid_data', 'sanitize_failed', 'jev_not_configured', 'session_cap', 'session_unreadable', 'session_busy',
+  'jev_wrapper_missing', 'jev_wrapper_unverified', 'jev_aws_unavailable',
+  ...(['suppressed', 'not_live', 'no_key', 'invalid_observation', 'stdin_too_large', 'stdin_timeout', 'stdin_error'] as const satisfies ReadonlyArray<(typeof CHILD_ERRORS)[number]>).map((e) => `jev_child_${e}`),
+  ...(['disabled', 'budget_exhausted', 'decision_calls', 'invalid_data'] as const satisfies ReadonlyArray<(typeof FALLBACK_CATEGORIES)[number]>).map((c) => `jev_fallback_${c}`),
+]);
+
 type ChildAnswer = { outcome: Outcome; source: (typeof SOURCES)[number]; fallback: boolean; errorCategory: string | null; model: string | null };
 type ChildResult = ChildAnswer | { error: string };
 
@@ -335,7 +349,9 @@ function hookOutput(m: { kind: 'note'; code: string } | { kind: 'advisory'; outc
   let text: string;
   if (m.kind === 'note') {
     if (!NOTE_CODES.has(m.code)) return '';
-    text = `GoGo harness · #jev: prompt này không được gửi cho JEV (${m.code}).${NOTE_HINTS[m.code] ?? ''}`;
+    text = NOT_SENT_CODES.has(m.code)
+      ? `GoGo harness · #jev: prompt này không được gửi cho JEV (${m.code}).${NOTE_HINTS[m.code] ?? ''}`
+      : `GoGo harness · #jev: không lấy được gợi ý JEV dùng được (${m.code}). Request có thể đã tới OpenRouter.`;
   } else {
     text = [
       'GoGo harness · gợi ý JEV cho yêu cầu này — chỉ tư vấn, không phải quyền; policy, hard gate và quyền của Claude Code vẫn áp dụng như cũ.',

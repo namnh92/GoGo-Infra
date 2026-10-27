@@ -403,12 +403,17 @@ privacy review + DPA for real prompts (#244) is not done, and the confirmation s
   does not return them. Advice, never a permission — policy, hard gates and Claude Code's
   permissions apply as before. stderr is empty; exit 0 for any
   input or failure (bad JSON, a wrong event, stdin over 512 KiB or not finished within 2 s, an
-  unwritable log, a failing wrapper, a timeout). A `#jev` that could not be sent gets a one-line
-  note with a reason code from a closed list (`NOTE_CODES` in `prompt-observation.ts`; a child
-  error is `jev_child_<code>`, a fallback `jev_fallback_<category>`, anything unrecognised
-  `jev_bad_output` or `jev_fallback`; a wrapper that stopped with `common.sh`'s "not authenticated
-to AWS" is `jev_aws_unavailable`, any other wrapper failure `jev_wrapper_failed`); a failure while
-`on` stays in the log. The command runs the approved
+  unwritable log, a failing wrapper, a timeout). A `#jev` that got no advice gets a one-line
+  note with a reason code from a closed list. It says the prompt was not sent only for a code in
+  `NOT_SENT_CODES` — refused before the child, by the child before it has a provider, or by the
+  router before the request (`disabled`, `budget_exhausted`, `decision_calls`, `invalid_data`).
+  Every other code (a timeout, a failed wrapper or child, unreadable output, a fallback after the
+  request) says no usable advice was obtained and that the request may have reached OpenRouter
+  (GoGo-Infra#254 S4-02). The codes are `NOTE_CODES` in `prompt-observation.ts`: a child error is
+  `jev_child_<code>`, a fallback `jev_fallback_<category>`, anything unrecognised `jev_bad_output`
+  or `jev_fallback`; a wrapper that stopped with `common.sh`'s "not authenticated to AWS" is
+  `jev_aws_unavailable`, any other wrapper failure `jev_wrapper_failed`. A failure while `on`
+  stays in the log. The command runs the approved
   install (#245), never a checkout; a missing launcher or a failed integrity check still exits 0
   with empty stdout, and the launcher's message is kept in `~/.gogo-harness/prompt-hook.last-error`
   (overwritten by every run).
