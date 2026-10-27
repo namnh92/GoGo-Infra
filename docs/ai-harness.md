@@ -382,7 +382,8 @@ paste the body. Claude Code wraps pasted text in `<pasted_content>`, so a pasted
 the first line and never opts in — nothing is sent, by design. The send runs with the `AWS_*` of
 the Claude Code process (the child's environment below), so start the session with a profile that
 can read the key — on the owner's workstation `cd <repo> && AWS_PROFILE=gogobootstrap claude`,
-logged in. Without one, `exec-with.sh` stops before anything is sent.
+logged in. Without one, `exec-with.sh` stops before anything is sent and a `#jev` gets the note
+`jev_aws_unavailable`, which names `AWS_PROFILE`.
 
 Each session's call count is taken under its own lock and replaced atomically, after the wrapper
 check below, so a send that cannot happen takes no call. A counter file that cannot be read, or
@@ -405,7 +406,9 @@ privacy review + DPA for real prompts (#244) is not done, and the confirmation s
   unwritable log, a failing wrapper, a timeout). A `#jev` that could not be sent gets a one-line
   note with a reason code from a closed list (`NOTE_CODES` in `prompt-observation.ts`; a child
   error is `jev_child_<code>`, a fallback `jev_fallback_<category>`, anything unrecognised
-  `jev_bad_output` or `jev_fallback`); a failure while `on` stays in the log. The command runs the approved
+  `jev_bad_output` or `jev_fallback`; a wrapper that stopped with `common.sh`'s "not authenticated
+to AWS" is `jev_aws_unavailable`, any other wrapper failure `jev_wrapper_failed`); a failure while
+`on` stays in the log. The command runs the approved
   install (#245), never a checkout; a missing launcher or a failed integrity check still exits 0
   with empty stdout, and the launcher's message is kept in `~/.gogo-harness/prompt-hook.last-error`
   (overwritten by every run).
