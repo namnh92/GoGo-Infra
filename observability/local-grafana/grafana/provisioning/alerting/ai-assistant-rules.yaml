@@ -94,7 +94,7 @@ groups:
         severity: warning
       annotations:
         summary: "AI assistant has spent 80% of this month's budget"
-        impact: "at 100% GoGo-BE refuses new assistant turns and OpenRouter stops the key; users see the assistant unavailable"
+        impact: "at 100% GoGo-BE refuses new assistant turns; users see the assistant unavailable"
         expected: "ai_assistant_spend_month_usd / ai_assistant_budget_month_usd < 0.8"
         description: "Month-to-date spend (OpenRouter credits + Anthropic BYOK charge) over ASSISTANT_MONTHLY_MAX_USD. Fires once and holds until the month resets or the budget is raised. Decide: raise the budget (put.sh budget/assistant-monthly-max-usd + the OpenRouter key limit), lower the per-user limit, or switch the kill switch off."
         runbook: "docs/environments.md#ai-assistant-spend-80"
@@ -159,5 +159,5 @@ groups:
         summary: "AI assistant reached 100% of this month's budget"
         impact: "the assistant is refusing every turn until the month resets or the budget is raised"
         expected: "ai_assistant_spend_month_usd / ai_assistant_budget_month_usd < 1"
-        description: "The cap is enforced, not just reported: GoGo-BE refuses at 100% and the OpenRouter key limit is the provider-side stop. This alert says the assistant is off for users, not that money is still leaving."
+        description: "GoGo-BE refuses new turns at 100% (it reserves each attempt before calling, ADR-0014 D-4). This does not prove money has stopped leaving: in-flight and unknown-cost attempts settle after, and the OpenRouter key limit may cap only its fee. If spend keeps rising, disable the key in OpenRouter."
         runbook: "docs/environments.md#ai-assistant-spend-cap"

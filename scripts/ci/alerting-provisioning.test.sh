@@ -346,6 +346,21 @@ if "ai-assistant-spend-80" in by:
 if "ai-assistant-spend-cap" in by:
     want(">= bool 1" in by["ai-assistant-spend-cap"]["data"][0]["model"]["expr"],
          "ai-assistant-spend-cap must fire at 100 % of the budget (>= bool 1)")
+# The whole expression, not just its metric names: spend divided by budget,
+# compared with the threshold and nothing else, so no dollar figure can hide in it.
+ratio = re.compile(r'\(max\(ai_assistant_spend_month_usd\{env="dev"\}\) / '
+                   r'max\(ai_assistant_budget_month_usd\{env="dev"\}\)\) >= bool (0\.8|1)')
+for uid, r in by.items():
+    want(ratio.fullmatch(r["data"][0]["model"]["expr"]) is not None,
+         f"{uid}: expr must be exactly spend / budget >= bool <threshold>")
+
+# `docker compose restart` keeps the environment a container was created with,
+# so flipping GOGO_AI_ALERTS_PAUSED needs a recreate (PR #259 review S-01).
+activation = runbook.split("**Activation**", 1)[-1].split("####", 1)[0]
+want("--force-recreate grafana" in activation,
+     "runbook activation must recreate Grafana (docker compose up -d --force-recreate grafana)")
+want("restart Grafana" not in activation,
+     "runbook activation says 'restart Grafana', which keeps the paused value")
 
 if problems:
     print("FAIL  ai-assistant rules")

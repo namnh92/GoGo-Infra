@@ -61,7 +61,8 @@ cap per turn.
 
 **D-2 Fallback model: `anthropic/claude-haiku-5.5`** (SSM `assistant/fallback-model`). Used
 when the primary errors, times out before the first token, or is overloaded — never as a quiet
-cost saver. Cheaper than the primary, so a fallback can never raise spend. Absent means no
+cost saver. Cheaper per token than the primary, but a fallback is a second billable attempt
+after a primary that may itself have been charged, so it is reserved separately (D-4). Absent means no
 fallback: the turn ends with the "unavailable" answer.
 
 **D-3 One dedicated key per environment, named `gogo_ai_anthropic_<env>`.** DEV
@@ -88,14 +89,33 @@ question) and ~500 output tokens ≈ **$0.010–0.02 per turn** on Sonnet 5.5 wi
 1. **OpenRouter key credit limit** = the cap, with monthly reset, set on `gogo_ai_anthropic_<env>`.
    If the key page offers counting BYOK usage in the limit, turn it on. If it does not, this limit
    caps only OpenRouter's fee on BYOK requests — which is why it is not the only stop.
-2. **GoGo-BE** refuses new assistant turns at 100 % of `ASSISTANT_MONTHLY_MAX_USD`
-   (SSM `budget/assistant-monthly-max-usd`), counting month-to-date spend from each response's
-   reported cost (OpenRouter credits + BYOK upstream). Unset means refuse, the default-deny rule
-   of the place-refresh budget (`docs/environments.md`).
+2. **GoGo-BE reserves before it calls** — the only one of the three tied exactly to
+   `ASSISTANT_MONTHLY_MAX_USD` (SSM `budget/assistant-monthly-max-usd`). Counting spend from each
+   response's reported cost is not enough: concurrent turns all pass a check made before any of
+   them reports, a request that times out can be billed with no cost record, and a fallback is a
+   second billable attempt. So:
+   - Before **every** provider attempt — the primary call, and the fallback call separately —
+     GoGo-BE atomically reserves that attempt's worst-case cost (input tokens actually sent at
+     the input price, plus the turn's `max_tokens` at the output price, list prices including the
+     BYOK upstream charge) in a durable store shared by every API instance, and refuses the turn
+     when month-to-date spend + open reservations + this reservation would exceed the cap.
+   - A reservation settles to the reported cost (OpenRouter credits + BYOK upstream) when the
+     response reports it. An attempt whose cost is unknown — timeout, dropped stream, no usage in
+     the response — **keeps its full reservation** until reconciled against OpenRouter's activity
+     (D-7's collector); it is never released as zero.
+   - Unset means refuse, the default-deny rule of the place-refresh budget
+     (`docs/environments.md`).
+   - **Launch prerequisite** (see *Launch gate*): a build without reservations does not get
+     `assistant.enabled` on in any environment.
 3. **Anthropic workspace spend limit** on the Anthropic key OpenRouter uses for BYOK, auto
    top-up off. That key is configured once per OpenRouter account (as far as we know), so every
    BYOK Claude call on the account shares this limit — set it to at least the sum of the BYOK
    uses, and treat it as the last stop, not the budget.
+
+The ceiling is therefore exactly as good as (2): (1) may cap only OpenRouter's fee, and (3) is
+shared with every other BYOK use on the account. Reaching the cap means new turns are refused;
+it does not by itself prove money has stopped leaving (in-flight and unknown-cost attempts
+settle after), and the runbook and alert text say so.
 
 **D-5 Per-user daily limit: 30 messages per signed-in account per UTC day** (proposed; SSM
 `budget/assistant-user-daily-max-messages`). Enforced in GoGo-BE before any provider call.
@@ -111,14 +131,33 @@ GoGo-BE: disable `gogo_ai_anthropic_<env>` in OpenRouter (401/402 → unavailabl
 entry point has its own gate (GoGo-MobileApp#379); neither replaces the other. No assistant row
 is `required` anywhere, so an environment without them deploys and the assistant is off.
 
+The switch's contract, which BE#713 implements and the launch gate checks:
+
+- **Bounded propagation:** every API instance sees a change within **60 s** (proposed; the
+  owner sets it) — a cache of `assistant.enabled` never lives longer than that.
+- **Read failure is off:** if the flag cannot be read, new turns answer "unavailable" (fail
+  closed), the same as off.
+- **Active streams:** off refuses new turns; a stream already started finishes within its
+  `max_tokens`, its cost already reserved (D-4). Cutting streams is the hard stop's job
+  (disabling the key).
+- **Seed once:** `FLAG_ASSISTANT` creates the row only if it does not exist; a deploy never
+  overwrites it, so an operator's off survives every later deploy.
+- **Who operates it:** the owner (CMS super admin), who is also the Telegram alert recipient.
+
 **D-7 Cost Center: its own spend line.** The key family `gogo_ai_anthropic_*` is recorded beside
 the others in the manifest comment at `openrouter/management-key`. GoGo-BE must file it:
 `openRouterServiceFor()` gains `gogo_ai_anthropic_*` → **`openrouter.assistant`** (proposed id),
 and the BYOK Claude charge of those keys → **`anthropic.assistant`** rather than the shared
 `anthropic.claude_byok`. Until then the OpenRouter fee lands in `openrouter.other_keys` and the
-Claude charge is mixed with other BYOK spend. A `cost_budgets` row (scope SERVICE
-`openrouter.assistant`, amount = the cap) then gives the CMS Cost Center its existing ≥ 80 %
-`warning` state in every environment, prod included. Feeds GoGo-BE#711's AI breakdown.
+Claude charge is mixed with other BYOK spend. Feeds GoGo-BE#711's AI breakdown.
+
+The assistant's budget is the **sum of both lines** — `openrouter.assistant` (OpenRouter's fee)
+plus `anthropic.assistant` (the Claude charge), each charge counted once — the same spend
+definition as D-4's ceiling and D-8's gauges. A `cost_budgets` row scoped to the SERVICE
+`openrouter.assistant` alone would see only the fee and warn late. The Cost Center needs a budget
+whose scope is both lines (a service-group scope, e.g. `ai.assistant`, if `cost_budgets` cannot
+express it today — GoGo-BE#711/#713), amount = the cap, which gives the existing ≥ 80 %
+`warning` state in every environment, prod included.
 
 **D-8 Observability and the 80 % alert.** GoGo-BE#713 exports, closed label sets only (no user
 id, no model id as free text, no prompt):
@@ -137,8 +176,8 @@ runbook, ships paused): `observability/local-grafana/grafana/provisioning/alerti
 — `ai-assistant-spend-80` (spend / budget ≥ 0.8, warning, absent gauge = NoData) and
 `ai-assistant-spend-cap` (≥ 1, high), routed to the existing Telegram contact point by
 `service=ai-assistant`, paused by its own `GOGO_AI_ALERTS_PAUSED` until the two gauges exist.
-The LAN Grafana is DEV only (ADR-0007); prod's 80 % signal is D-7's Cost Center budget until
-prod observability exists.
+The LAN Grafana is DEV only (ADR-0007); prod's 80 % signal is D-7's combined Cost Center budget
+until prod observability exists.
 
 **D-9 Guests excluded.** A guest session gets 401/403 from `/v1/assistant/*` before any limit is
 read or provider called. The per-user limit is keyed by account id; the `user` field sent to
@@ -148,6 +187,22 @@ OpenRouter, if any, is an opaque hash, never an email or a name.
 deletion on account deletion or a privacy request, through the privacy ledger). Prompts and
 answers leave GoGo for OpenRouter and Anthropic: the owner confirms on the OpenRouter account
 that prompt logging and training use are off before prod.
+
+## Launch gate
+
+`assistant.enabled` goes on in an environment only after each item below is recorded on
+GoGo-BE#713 (link to the evidence). Prod additionally needs the owner's explicit approval on
+GoGo-Infra#257 naming the build.
+
+1. **Reservations (D-4.2) in the build:** a test with concurrent turns against a cap that fits
+   one shows one admitted and the rest `refused_budget`; a timed-out attempt keeps its
+   reservation; a fallback attempt reserves separately.
+2. **Kill switch shut down on DEV (D-6):** switch off in the CMS; a new turn answers `disabled`
+   within the propagation bound; OpenRouter activity shows no call for it; switch back on.
+   Recorded with timestamps.
+3. **Combined budget (D-7):** the budget the environment warns on covers both service lines, and
+   one turn's charge appears once in it — the same figure as the ceiling's month-to-date spend.
+4. **Provider settings (D-10):** prompt logging and training use off on the OpenRouter account.
 
 ## Consequences
 
@@ -164,6 +219,9 @@ that prompt logging and training use are off before prod.
 1. BE#713 reads `OPENROUTER_ASSISTANT_API_KEY`, `ASSISTANT_MODEL`, `ASSISTANT_FALLBACK_MODEL`,
    `ASSISTANT_MONTHLY_MAX_USD`, `ASSISTANT_USER_DAILY_MAX_MESSAGES`, `FLAG_ASSISTANT` and the
    `assistant.enabled` feature flag, with the semantics above.
-2. BE#713 exports D-8's metrics — above all the two gauges the alert reads.
-3. `openRouterServiceFor()` + the BYOK collector file `gogo_ai_anthropic_*` (D-7).
-4. Measured Vietnamese quality and time-to-first-token for D-1/D-2, which may move the model.
+2. BE#713 reserves before every provider attempt (D-4.2) and implements D-6's switch contract.
+3. BE#713 exports D-8's metrics — above all the two gauges the alert reads.
+4. `openRouterServiceFor()` + the BYOK collector file `gogo_ai_anthropic_*`, and the combined
+   assistant budget (D-7; GoGo-BE#711).
+5. Measured Vietnamese quality and time-to-first-token for D-1/D-2, which may move the model.
+6. The launch gate's evidence, recorded on BE#713.
