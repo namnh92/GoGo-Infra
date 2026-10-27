@@ -101,6 +101,10 @@ open a pull request — see `docs/adr/0001`.
 /gogo/<env>/backend/google/{server-api-key,routes-api-key,sheets-api-key}
 /gogo/<env>/backend/observability/sentry-dsn
 /gogo/<env>/backend/observability/metrics-token
+/gogo/<env>/backend/openrouter/assistant-api-key  GoGo AI assistant key gogo_ai_anthropic_<env> (ADR-0014)
+/gogo/<env>/backend/assistant/{model,fallback-model}   String — OpenRouter model ids
+/gogo/<env>/backend/budget/assistant-{monthly-max-usd,user-daily-max-messages}   String — limits
+/gogo/<env>/backend/flags/assistant             String — kill-switch seed
 /gogo/<env>/backend/cms/super-admin-email      String, tagged gogo:infra-readable — API + Terraform
 /gogo/<env>/backend/cms/access-staff-emails    String (JSON array), tagged — Terraform only, never rendered
 
@@ -131,6 +135,20 @@ staging/prod build without one. Write them with `put.sh <env> adjust/ios-app-tok
 manifest puts them under `mobile/`. Event tokens are not SSM values (named constants in the app,
 per flavour, when events exist); the API/Report and S2S tokens are credentials nothing calls, so
 none is declared — if GoGo-BE ever needs one it goes under `backend/adjust/*`, never `mobile/`.
+
+`openrouter/assistant-api-key` (GoGo-Infra#257, [`adr/0014`](adr/0014-gogo-ai-assistant-model-keys-budget.md))
+is the GoGo AI assistant's own OpenRouter inference key, named `gogo_ai_anthropic_<env>` in
+OpenRouter (DEV: `gogo_ai_anthropic_dev`; staging/prod are created by the owner with those
+environments). It is a `backend` **runtime** row, because the API serves the assistant. That is
+the opposite of `openrouter/api-key` (decisions POC, `consumer: seed`) and of
+`ci:ai-harness/openrouter-api-key` (harness, `pipeline`): three keys, three credit limits, three
+spend lines, and `manifest.test.sh` pins that `OPENROUTER_ASSISTANT_API_KEY` belongs to exactly
+one row. Write it only after the manifest row is on `develop`, and only with
+`put.sh <env> openrouter/assistant-api-key` (stdin, never an argument). **Rotate:** create a new
+key with the same name and credit limit in OpenRouter, `put.sh`, deploy, confirm one assistant
+turn, then delete the old key and add a row to the rotation register. **Kill switch:** the
+audited `assistant.enabled` feature flag in the CMS (no deploy). **Hard stop:** disable the key in
+OpenRouter. The limits and the flag are in `docs/environments.md` § GoGo AI assistant.
 
 `SecureString`, Standard tier. One parameter per independently permissioned value — a single
 JSON blob would force every consumer to hold every secret.

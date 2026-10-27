@@ -100,6 +100,10 @@ services:
       # cf5989c is deployed. `true` is the only safe default and the runbook's
       # activation step is the only thing that changes it.
       GOGO_ADM_ALERTS_PAUSED: ${GOGO_ADM_ALERTS_PAUSED:?set GOGO_ADM_ALERTS_PAUSED in .env — true until the acceptance run}
+      # ADR-0014 D-8. The same mechanism for provisioning/alerting/ai-assistant-rules.yaml,
+      # its own flag: the assistant's spend gauges arrive with GoGo-BE#713, not with
+      # the administrative build. `true` until docs/environments.md § Activation.
+      GOGO_AI_ALERTS_PAUSED: ${GOGO_AI_ALERTS_PAUSED:?set GOGO_AI_ALERTS_PAUSED in .env — true until GoGo-BE exports the assistant spend gauges}
       # The org's existing root receiver, repeated so provisioning the child
       # route does not silently re-point everything else (ADR-0009 §F6).
       # `:-` and not `:?`: this is a name, not a credential, and Grafana's

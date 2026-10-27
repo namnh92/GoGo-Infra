@@ -378,6 +378,84 @@ same rule `google/maps-ios-api-key` follows, and for the reason INF-053 exists: 
 real, a missing one has to break something visible.
 
 
+## GoGo AI assistant: key, limits, kill switch (GoGo-Infra#257)
+
+[ADR-0014](adr/0014-gogo-ai-assistant-model-keys-budget.md). The in-app assistant
+(GoGo-BE#713, `/v1/assistant/*`) calls Claude through OpenRouter on its **own** key,
+`gogo_ai_anthropic_<env>`. That is not the decisions key (`openrouter/api-key`) and not the
+harness key. None of these rows is read by GoGo-BE `develop` yet, and none is `required`
+anywhere, so an environment without them deploys normally with the assistant off. Capability
+`ai_assistant` is `planned: [dev]`: `validate.sh dev --strict --include-planned` lists what is
+missing.
+
+| Parameter | Env var | Proposed value (owner sets) | Absent means |
+| --- | --- | --- | --- |
+| `openrouter/assistant-api-key` | `OPENROUTER_ASSISTANT_API_KEY` | key `gogo_ai_anthropic_<env>` | assistant unavailable |
+| `assistant/model` | `ASSISTANT_MODEL` | `anthropic/claude-sonnet-5.5` | assistant unavailable |
+| `assistant/fallback-model` | `ASSISTANT_FALLBACK_MODEL` | `anthropic/claude-haiku-5.5` | no fallback |
+| `budget/assistant-monthly-max-usd` | `ASSISTANT_MONTHLY_MAX_USD` | dev 20 · staging 20 · prod 150 | **refuse** (default-deny) |
+| `budget/assistant-user-daily-max-messages` | `ASSISTANT_USER_DAILY_MAX_MESSAGES` | 30 | **refuse**, never unlimited |
+| `flags/assistant` | `FLAG_ASSISTANT` | dev `true` · prod `false` until launch | seed only, see below |
+
+**The budget is enforced in three places** (ADR-0014 D-4): the credit limit on the OpenRouter key
+(monthly reset, same figure as `ASSISTANT_MONTHLY_MAX_USD`), GoGo-BE's own refusal, and the
+Anthropic workspace spend limit behind BYOK. Only GoGo-BE's is tied exactly to the cap: it
+reserves each attempt's worst-case cost before calling, and keeps the reservation of an attempt
+whose cost never came back. The OpenRouter limit may count only OpenRouter's fee on a BYOK
+request, and the Anthropic limit is shared with every other BYOK use on the account. The
+assistant stays off until ADR-0014's *Launch gate* is recorded on GoGo-BE#713.
+
+**Kill switch, no redeploy:** the `assistant.enabled` row in `FEATURE_FLAGS`, changed through the
+CMS and audited. `FLAG_ASSISTANT` only seeds it when the row does not exist, so a deploy never
+turns an operator's off back on. Off answers "unavailable" without calling OpenRouter, on every
+API instance within 60 s (ADR-0014 D-6); a flag that cannot be read counts as off; streams
+already started finish within their `max_tokens`. **Hard stop that does not depend on
+GoGo-BE:** disable `gogo_ai_anthropic_<env>` in OpenRouter. Off is a decision. An unset budget is
+an omission that also refuses, and the metric `ai_assistant_requests_total{outcome}` tells the
+two apart (`disabled` vs `refused_budget`).
+
+### Spend alerts
+
+`observability/local-grafana/grafana/provisioning/alerting/ai-assistant-rules.yaml`, routed to
+the existing Telegram contact point by `service=ai-assistant`. Both rules read
+`ai_assistant_spend_month_usd / ai_assistant_budget_month_usd`. **GoGo-BE does not export these
+gauges yet** (dependency on GoGo-BE#713, ADR-0014 D-8), so the rules ship paused behind
+`GOGO_AI_ALERTS_PAUSED=true`. The observability host's `.env` needs that line before its next
+`docker compose up`, because compose refuses to start without it.
+
+**Activation**, on DEV, once the BE build that exports both gauges is deployed:
+
+1. Prometheus shows both series for `env="dev"` (Explore: `ai_assistant_budget_month_usd`).
+2. Set `GOGO_AI_ALERTS_PAUSED=false` in the observability host's `.env`, then recreate the
+   container so it reads the new value: `docker compose up -d --force-recreate grafana`. A plain
+   `docker compose restart` keeps the environment the container was created with, and both rules
+   stay paused. Check that both rules show as not paused (Alerting → Alert rules, or
+   `GET /api/v1/provisioning/alert-rules/<uid>` → `"isPaused": false`). Pausing again is the same
+   two steps with `true`.
+3. Test fire: temporarily `put.sh dev budget/assistant-monthly-max-usd` to a value just above
+   the current month's spend (so spend/budget ≥ 0.8), deploy, and confirm the Telegram message
+   and then the resolved message after restoring the real value. Write the date here.
+
+#### ai-assistant-spend-80
+
+Month-to-date assistant spend reached 80 % of `ASSISTANT_MONTHLY_MAX_USD`. Nothing is refused yet.
+Look at the Cost Center service line and `ai_assistant_requests_total` by outcome. A spike in
+`ok` points to traffic, and a high `fallback` share points to a primary outage. Then choose one of:
+raise the budget (`put.sh <env> budget/assistant-monthly-max-usd` and the OpenRouter key limit
+to the same figure, then deploy), lower the per-user limit, or switch `assistant.enabled` off in
+the CMS. NoData on this rule after activation means the gauges disappeared, so spend is no
+longer being measured. Treat that as the alert, not as quiet.
+
+#### ai-assistant-spend-cap
+
+The budget is used up. GoGo-BE refuses new turns (`refused_budget`), and users see the
+assistant as unavailable until the 1st (UTC) or until the budget is raised. This alert does
+**not** prove money has stopped leaving: attempts already in flight, and attempts whose cost is
+still unknown, settle after it, and the OpenRouter key limit may cap only OpenRouter's fee. Watch
+the spend gauge over the next hour. If it rises beyond what was already reserved, or
+`refused_budget` is not climbing while traffic continues, the BE refusal is not working: disable
+`gogo_ai_anthropic_<env>` in OpenRouter (the hard stop), then switch `assistant.enabled` off.
+
 ## Terraform state
 
 One bucket, one key per environment:

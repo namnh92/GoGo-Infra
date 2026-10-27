@@ -1,0 +1,163 @@
+# ADR-0014 D-8 — spend alerts for the GoGo AI assistant. GoGo-Infra#257.
+#
+# Extends ADR-0009's narrow exception to ADR-0006 §D3 by one more surface, on the
+# same terms: a defined, owned signal (the assistant's month-to-date spend against
+# its configured budget), a runbook, one Telegram route, nothing else re-routed.
+#
+# THE METRIC CONTRACT IS NOT EXPORTED YET. Both gauges are what ADR-0014 D-8 asks
+# GoGo-BE#713 to export; nothing on GoGo-BE `develop` emits them today, and the
+# OpenRouter cost collector (GoGo-BE#709, `openrouter_activity`) writes Postgres
+# rows, not Prometheus series. So every rule ships paused —
+# `isPaused: ${GOGO_AI_ALERTS_PAUSED}`, `true` by default, its own flag so the
+# administrative family and this one are activated independently.
+#
+#   ai_assistant_spend_month_usd{env}   gauge, USD. Assistant spend in the current
+#       UTC calendar month: OpenRouter credits + the BYOK upstream (Anthropic)
+#       charge, summed by BE from each response's reported cost. Resets on the 1st.
+#   ai_assistant_budget_month_usd{env}  gauge, USD. ASSISTANT_MONTHLY_MAX_USD
+#       (SSM budget/assistant-monthly-max-usd). Not exported when unset or <= 0, so
+#       the ratio is never a division by zero.
+#
+# Gauges, not a counter: a month-to-date figure has to survive a process restart
+# and reset on a calendar boundary, which increase() over a rolling window does
+# not do. The cap is read from BE and never written here: one rule serves any
+# environment's budget, and changing the budget is put.sh + deploy, not an edit.
+#
+# `>= bool` returns 0 or 1 while both gauges exist and nothing when either is
+# absent, so "below threshold" (0) and "not measured" (empty → NoData) stay
+# different answers.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: ai-assistant
+    folder: GoGo AI Assistant
+    # Equal to the Alloy scrape interval (60s), as in administrative-rules.yaml.
+    interval: 60s
+    rules:
+    - uid: ai-assistant-spend-80
+      title: "AI assistant spend at 80% of the monthly budget"
+      condition: B
+      data:
+        - refId: A
+          relativeTimeRange:
+            from: 600
+            to: 0
+          datasourceUid: gogo-prometheus-local
+          model:
+            refId: A
+            datasource:
+              type: prometheus
+              uid: gogo-prometheus-local
+            editorMode: code
+            expr: "(max(ai_assistant_spend_month_usd{env=\"dev\"}) / max(ai_assistant_budget_month_usd{env=\"dev\"})) >= bool 0.8"
+            instant: true
+            range: false
+            intervalMs: 60000
+            maxDataPoints: 43200
+        - refId: B
+          relativeTimeRange:
+            from: 600
+            to: 0
+          datasourceUid: __expr__
+          model:
+            refId: B
+            type: threshold
+            datasource:
+              type: __expr__
+              uid: __expr__
+            expression: A
+            conditions:
+              - evaluator:
+                  type: gt
+                  params:
+                    - 0
+                operator:
+                  type: and
+                query:
+                  params:
+                    - A
+                reducer:
+                  type: last
+                type: query
+            intervalMs: 1000
+            maxDataPoints: 43200
+      for: 0s
+      # NoData, not OK: once activated, a missing gauge means spend is no longer
+      # measured — the one state this rule must never report as fine.
+      noDataState: NoData
+      execErrState: Error
+      isPaused: ${GOGO_AI_ALERTS_PAUSED}
+      labels:
+        service: ai-assistant
+        env: dev
+        severity: warning
+      annotations:
+        summary: "AI assistant has spent 80% of this month's budget"
+        impact: "at 100% GoGo-BE refuses new assistant turns; users see the assistant unavailable"
+        expected: "ai_assistant_spend_month_usd / ai_assistant_budget_month_usd < 0.8"
+        description: "Month-to-date spend (OpenRouter credits + Anthropic BYOK charge) over ASSISTANT_MONTHLY_MAX_USD. Fires once and holds until the month resets or the budget is raised. Decide: raise the budget (put.sh budget/assistant-monthly-max-usd + the OpenRouter key limit), lower the per-user limit, or switch the kill switch off."
+        runbook: "docs/environments.md#ai-assistant-spend-80"
+    - uid: ai-assistant-spend-cap
+      title: "AI assistant monthly budget exhausted"
+      condition: B
+      data:
+        - refId: A
+          relativeTimeRange:
+            from: 600
+            to: 0
+          datasourceUid: gogo-prometheus-local
+          model:
+            refId: A
+            datasource:
+              type: prometheus
+              uid: gogo-prometheus-local
+            editorMode: code
+            expr: "(max(ai_assistant_spend_month_usd{env=\"dev\"}) / max(ai_assistant_budget_month_usd{env=\"dev\"})) >= bool 1"
+            instant: true
+            range: false
+            intervalMs: 60000
+            maxDataPoints: 43200
+        - refId: B
+          relativeTimeRange:
+            from: 600
+            to: 0
+          datasourceUid: __expr__
+          model:
+            refId: B
+            type: threshold
+            datasource:
+              type: __expr__
+              uid: __expr__
+            expression: A
+            conditions:
+              - evaluator:
+                  type: gt
+                  params:
+                    - 0
+                operator:
+                  type: and
+                query:
+                  params:
+                    - A
+                reducer:
+                  type: last
+                type: query
+            intervalMs: 1000
+            maxDataPoints: 43200
+      for: 0s
+      # The 80% rule already reports an absent gauge; reporting it twice would
+      # only double the message.
+      noDataState: OK
+      execErrState: Error
+      isPaused: ${GOGO_AI_ALERTS_PAUSED}
+      labels:
+        service: ai-assistant
+        env: dev
+        severity: high
+      annotations:
+        summary: "AI assistant reached 100% of this month's budget"
+        impact: "the assistant is refusing every turn until the month resets or the budget is raised"
+        expected: "ai_assistant_spend_month_usd / ai_assistant_budget_month_usd < 1"
+        description: "GoGo-BE refuses new turns at 100% (it reserves each attempt before calling, ADR-0014 D-4). This does not prove money has stopped leaving: in-flight and unknown-cost attempts settle after, and the OpenRouter key limit may cap only its fee. If spend keeps rising, disable the key in OpenRouter."
+        runbook: "docs/environments.md#ai-assistant-spend-cap"

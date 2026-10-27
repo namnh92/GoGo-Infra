@@ -234,13 +234,18 @@ root = pols[0]
 want(root["receiver"] == "${GOGO_ALERTS_DEFAULT_RECEIVER}",
      "root receiver must stay the org default; provisioning policies replaces the whole tree")
 routes = root.get("routes", [])
-want(len(routes) == 1, f"expected exactly one child route, found {len(routes)}")
-route = routes[0]
-want(route["receiver"] == CONTACT, f"child route receiver is {route['receiver']!r}")
-want(route["object_matchers"] == [["service", "=", "administrative-data"]],
-     f"child route must match only service=administrative-data, found {route['object_matchers']}")
-want("continue" not in route,
-     "child route must not set continue: an administrative alert would then also hit the root receiver")
+# One child route per surface that has earned Grafana alerting: the
+# administrative data (ADR-0009) and the AI assistant's spend (ADR-0014 D-8).
+# Each matches exactly one `service` label, so neither can capture the other or
+# an unrelated alert.
+SERVICES = ["administrative-data", "ai-assistant"]
+want(len(routes) == len(SERVICES), f"expected exactly {len(SERVICES)} child routes, found {len(routes)}")
+for service, route in zip(SERVICES, routes):
+    want(route["receiver"] == CONTACT, f"{service} route receiver is {route['receiver']!r}")
+    want(route["object_matchers"] == [["service", "=", service]],
+         f"child route must match only service={service}, found {route['object_matchers']}")
+    want("continue" not in route,
+         f"{service} route must not set continue: its alert would then also hit the root receiver")
 
 # --- template --------------------------------------------------------------
 tpls = templates["templates"]
@@ -263,6 +268,113 @@ if problems:
 print(f"ok    provisioning content ({len(rs)} rules, 1 contact point, 1 route, 1 template)")
 PY
 [[ $? -ne 0 ]] && fail=1
+
+# ---------------------------------------------------------------------------
+# 2b. The AI assistant spend rules (GoGo-Infra#257, ADR-0014 D-8).
+#
+# Same conventions as the administrative file, with one difference that is the
+# whole point of a separate file: its own pause flag. The assistant's metrics
+# arrive with GoGo-BE#713, not with the administrative build, so activating one
+# family must not be able to activate the other.
+# ---------------------------------------------------------------------------
+ai_rules="$alerting/ai-assistant-rules.yaml"
+if [[ ! -f "$ai_rules" ]]; then
+  printf 'FAIL  %s is missing\n' "$ai_rules"
+  fail=1
+else
+AI_JSON="$(json_of "$ai_rules")" python3 - <<'PY'
+import json, os, re, sys
+
+doc = json.loads(os.environ["AI_JSON"])
+problems = []
+def want(cond, msg):
+    if not cond:
+        problems.append(msg)
+
+# The metric contract ADR-0014 D-8 asks GoGo-BE#713 to export. Not exported
+# yet — which is why every rule ships paused. Update with BE's metric-labels.ts.
+KNOWN = {"ai_assistant_spend_month_usd", "ai_assistant_budget_month_usd"}
+metric_re = re.compile(r"\b(ai_assistant_[a-z0-9_]+)\b")
+RUNBOOK = "docs/environments.md"
+
+groups = doc["groups"]
+want(len(groups) == 1, f"expected exactly one rule group, found {len(groups)}")
+g = groups[0]
+want(g["folder"] == "GoGo AI Assistant", f"folder is {g['folder']!r}")
+want(g["interval"] == "60s", f"group interval is {g['interval']!r}; it must equal the 60s scrape")
+rs = g["rules"]
+uids = [r["uid"] for r in rs]
+want(sorted(uids) == ["ai-assistant-spend-80", "ai-assistant-spend-cap"],
+     f"expected the 80% and the cap rule, found {uids}")
+runbook = open(RUNBOOK).read()
+for r in rs:
+    uid = r["uid"]
+    want(len(uid) <= 40 and re.fullmatch(r"[A-Za-z0-9_-]+", uid), f"{uid}: not a valid Grafana uid")
+    want(r.get("condition") == "B", f"{uid}: condition must be B")
+    want(r.get("isPaused") == "${GOGO_AI_ALERTS_PAUSED}",
+         f"{uid}: isPaused must be ${{GOGO_AI_ALERTS_PAUSED}}, found {r.get('isPaused')!r}")
+    want(r.get("execErrState") in {"Alerting", "OK", "Error"}, f"{uid}: execErrState")
+    labels = r.get("labels", {})
+    want(labels.get("service") == "ai-assistant", f"{uid}: label service must be ai-assistant")
+    want(labels.get("env") == "dev", f"{uid}: label env must be dev; the LAN Grafana is DEV-only")
+    want(labels.get("severity") in {"high", "warning"}, f"{uid}: severity {labels.get('severity')!r}")
+    ann = r.get("annotations", {})
+    for key in ("summary", "impact", "expected", "description", "runbook"):
+        want(str(ann.get(key, "")).strip(), f"{uid}: missing annotation {key!r}")
+    want(ann.get("runbook") == f"{RUNBOOK}#{uid}", f"{uid}: runbook must be {RUNBOOK}#{uid}")
+    want(f"\n#### {uid}\n" in runbook, f"{uid}: {RUNBOOK} has no '#### {uid}' section")
+    q, thr = r["data"]
+    want(q["datasourceUid"] == "gogo-prometheus-local", f"{uid}: wrong datasource")
+    want(thr["datasourceUid"] == "__expr__" and thr["model"]["expression"] == "A",
+         f"{uid}: threshold must be a server-side expression on A")
+    expr = q["model"]["expr"]
+    want(q["model"].get("instant") is True, f"{uid}: query must be instant")
+    want(expr.count('env="dev"') == 2, f"{uid}: both gauges must pin env=\"dev\"")
+    want("staging" not in expr and "prod" not in expr, f"{uid}: query names a non-DEV environment")
+    names = set(metric_re.findall(expr))
+    # Spend is compared with the budget gauge the BE exports, never with a
+    # dollar figure written here: the cap is an SSM value per environment.
+    want(names == KNOWN, f"{uid}: must read spend over the budget gauge, found {sorted(names)}")
+
+by = {r["uid"]: r for r in rs}
+if "ai-assistant-spend-80" in by:
+    r = by["ai-assistant-spend-80"]
+    want(">= bool 0.8" in r["data"][0]["model"]["expr"],
+         "ai-assistant-spend-80 must fire at 80 % of the budget (>= bool 0.8)")
+    want(r["noDataState"] == "NoData",
+         "ai-assistant-spend-80: an absent gauge must surface as NoData, never read as OK")
+if "ai-assistant-spend-cap" in by:
+    want(">= bool 1" in by["ai-assistant-spend-cap"]["data"][0]["model"]["expr"],
+         "ai-assistant-spend-cap must fire at 100 % of the budget (>= bool 1)")
+# The whole expression, not just its metric names: spend divided by budget,
+# compared with the threshold and nothing else, so no dollar figure can hide in it.
+ratio = re.compile(r'\(max\(ai_assistant_spend_month_usd\{env="dev"\}\) / '
+                   r'max\(ai_assistant_budget_month_usd\{env="dev"\}\)\) >= bool (0\.8|1)')
+for uid, r in by.items():
+    want(ratio.fullmatch(r["data"][0]["model"]["expr"]) is not None,
+         f"{uid}: expr must be exactly spend / budget >= bool <threshold>")
+
+# `docker compose restart` keeps the environment a container was created with,
+# so flipping GOGO_AI_ALERTS_PAUSED needs a recreate (PR #259 review S-01).
+activation = runbook.split("**Activation**", 1)[-1].split("####", 1)[0]
+want("--force-recreate grafana" in activation,
+     "runbook activation must recreate Grafana (docker compose up -d --force-recreate grafana)")
+want("restart Grafana" not in activation,
+     "runbook activation says 'restart Grafana', which keeps the paused value")
+
+if problems:
+    print("FAIL  ai-assistant rules")
+    for p in problems:
+        print("      - " + p)
+    sys.exit(1)
+print(f"ok    ai-assistant rules ({len(rs)} rules)")
+PY
+[[ $? -ne 0 ]] && fail=1
+fi
+check "GOGO_AI_ALERTS_PAUSED is required by compose (:?)" \
+  bash -c "grep -q 'GOGO_AI_ALERTS_PAUSED:.*:?' '$compose'"
+check "GOGO_AI_ALERTS_PAUSED defaults to true in .env.example" \
+  bash -c "grep -qx 'GOGO_AI_ALERTS_PAUSED=true' observability/local-grafana/.env.example"
 
 # ---------------------------------------------------------------------------
 # 3. No credential anywhere in the provisioning files, and no second evaluator.
