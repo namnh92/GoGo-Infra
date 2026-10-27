@@ -364,6 +364,9 @@ jobs:
       - name: github-app-token.sh signs a valid JWT and leaks neither key nor JWT
         run: ./scripts/secrets/github-app-token.test.sh
       - name: as-agent.sh runs a command as the agent App, never as the owner
+        # The real-gh checks (T8b/T8c) skip when gh is missing; on CI they must run (GoGo-Infra#260).
+        env:
+          AS_AGENT_REQUIRE_GH: "1"
         run: ./scripts/secrets/as-agent.test.sh
 
       # NTF-BE-008. The identity signing key is the one credential here that is
