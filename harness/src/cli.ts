@@ -6,6 +6,8 @@
  *   node harness/src/cli.ts status
  *   node harness/src/cli.ts billing --mode interactive|automation
  *   node harness/src/cli.ts handoff --input handoff.json --out docs/handoffs/<file>.md
+ *   node harness/src/cli.ts prompt-hook < hook.json   # #247 UserPromptSubmit hook: always exit 0
+ *   node harness/src/cli.ts jev-prompt setup|on [--for 8h]|off|status   # owner opt-in for prompts
  *
  * Live mode, through the SSM wrapper so the key reaches this process only:
  *
@@ -19,11 +21,16 @@
  * checkout that directory belongs to — `cd harness` does not turn
  * `src/cli.ts` into an ordinary in-scope file (PR #242 A-F-03).
  *
+ * Hooks and automation run the approved install instead
+ * (`~/.gogo-harness/install/bin/harness`, see install/launcher.ts); this
+ * file run from a checkout is the development and CI entry point (#245).
+ *
  * Exit codes: 0 AUTO_EXECUTE, 10 RESEARCH_AND_CONTINUE, 20 HUMAN_APPROVAL,
  * 2 usage or configuration error — so a hook or a script can branch on it.
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { createProvider, loadConfig } from './config.ts';
 import type { MockFixture, MockOutcome } from './decisions/mock.ts';
@@ -37,11 +44,26 @@ import { LoopController } from './runtime/loop.ts';
 import { JsonlSink, summarize } from './runtime/metrics.ts';
 import { withStateLock } from './runtime/lock.ts';
 import { loadTaskState, saveTaskState } from './runtime/task-state.ts';
+import { jevPromptCommand } from './shadow/jev-optin.ts';
+import { runLiveChild } from './shadow/prompt-live.ts';
+import { observePrompt } from './shadow/prompt-observation.ts';
 
 const EXIT = { AUTO_EXECUTE: 0, RESEARCH_AND_CONTINUE: 10, HUMAN_APPROVAL: 20 } as const;
 
 async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
+  // Prompt hook (#247): before argument parsing and config, so neither the environment nor a
+  // bad flag can turn sending on, print, or exit non-zero; only the owner's opt-in sends.
+  if (command === 'prompt-hook') {
+    if (rest[0] === '--live-child') {
+      const at = rest.indexOf('--observation');
+      process.stdout.write(`${JSON.stringify(await runLiveChild({ input: process.stdin, env: process.env, observationId: rest[at + 1] ?? '' }))}\n`);
+      return 0;
+    }
+    process.stdout.write(await observePrompt({ input: process.stdin, env: process.env }));
+    return 0;
+  }
+  if (command === 'jev-prompt') return jevPromptCommand(rest, process.env);
   const { values } = parseArgs({
     args: rest,
     options: { input: { type: 'string' }, fixture: { type: 'string' }, out: { type: 'string' }, mode: { type: 'string' } },
@@ -91,7 +113,7 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     default:
-      throw new Usage('commands: decide | status | billing | handoff');
+      throw new Usage('commands: decide | status | billing | handoff | prompt-hook | jev-prompt');
   }
 }
 
@@ -108,10 +130,17 @@ function fixtureFrom(file: string): MockFixture {
 
 class Usage extends Error {}
 
-main(process.argv.slice(2)).then(
-  (code) => process.exit(code),
-  (e: unknown) => {
+/** One command → its exit code; an error is reported on stderr as exit 2. The installed launcher calls this (#245). */
+export async function run(argv: string[]): Promise<number> {
+  try {
+    return await main(argv);
+  } catch (e) {
     process.stderr.write(`harness: ${(e as Error).message}\n`);
-    process.exit(2);
-  },
-);
+    return 2;
+  }
+}
+
+// Run only as the entry point: the launcher imports this module and calls run().
+if (process.argv[1] !== undefined && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
+  run(process.argv.slice(2)).then((code) => process.exit(code));
+}

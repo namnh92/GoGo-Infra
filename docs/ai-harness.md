@@ -136,18 +136,21 @@ no file contents, no environment, no repository data — is sent.
 
 ## Configuration
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `JEV_MODE` | `disabled` | `disabled` · `mock` · `live` |
-| `JEV_LIVE_AUTHORIZED` | — | must be `yes` for `live` |
-| `JEV_MODEL` | `typesafe/jev-1.14` | pinned id; aliases refused |
-| `JEV_TIMEOUT_MS` | `5000` | 100…15000 |
-| `HARNESS_STATE_DIR` | `~/.gogo-harness` | ledger, decision log and per-task state `tasks/<task>-<hash>.json` (loop counters + decision cache, so limits hold across separate `decide` calls) — per machine, not committed |
-| `HARNESS_JEV_MONTHLY_USD` | `2` | local JEV target |
-| `HARNESS_ANTHROPIC_MONTHLY_USD` / `_RESERVE_USD` | `100` / `10` | local Anthropic API target |
-| `HARNESS_CONCURRENCY` | `1` | checkpoint serialization only; only `1` is accepted — `decide` holds `HARNESS_STATE_DIR/harness.lock` across load, limits, inference and save, so overlapping `decide` calls queue instead of losing counters or charges. The lock ends when `decide` returns: it does not limit how many Claude sessions or automation jobs run (not enforced here) |
-| `JEV_PRIVACY_REVIEWED` | — | must be `yes` for `live`: the privacy review + DPA for the outbound data contract are recorded |
-| `OPENROUTER_API_KEY` | — | from `exec-with.sh dev ai-harness/openrouter-api-key` |
+The last column is what the prompt hook (below) hands its live child: the child's environment is
+an allowlist, and of this table only `passed` rows reach it from the owner's shell.
+
+| Variable | Default | Meaning | Prompt-hook child |
+| --- | --- | --- | --- |
+| `JEV_MODE` | `disabled` | `disabled` · `mock` · `live` | set by the hook (`live`, after opt-in) |
+| `JEV_LIVE_AUTHORIZED` | — | must be `yes` for `live` | set by the hook (the opt-in) |
+| `JEV_MODEL` | `typesafe/jev-1.14` | pinned id; aliases refused | not passed (pinned, D-2) |
+| `JEV_TIMEOUT_MS` | `5000` | 100…15000 | passed |
+| `HARNESS_STATE_DIR` | `~/.gogo-harness` | ledger, decision log and per-task state `tasks/<task>-<hash>.json` (loop counters + decision cache, so limits hold across separate `decide` calls) — per machine, not committed | set by the hook (same directory) |
+| `HARNESS_JEV_MONTHLY_USD` | `2` | local JEV target | passed |
+| `HARNESS_ANTHROPIC_MONTHLY_USD` / `_RESERVE_USD` | `100` / `10` | local Anthropic API target | not passed (unused by the child) |
+| `HARNESS_CONCURRENCY` | `1` | checkpoint serialization only; only `1` is accepted — `decide` holds `HARNESS_STATE_DIR/harness.lock` across load, limits, inference and save, so overlapping `decide` calls queue instead of losing counters or charges. The lock ends when `decide` returns: it does not limit how many Claude sessions or automation jobs run (not enforced here) | not passed (the child is one call) |
+| `JEV_PRIVACY_REVIEWED` | — | must be `yes` for `live`: the privacy review + DPA for the outbound data contract are recorded | set by the hook (the opt-in) |
+| `OPENROUTER_API_KEY` | — | from `exec-with.sh dev ai-harness/openrouter-api-key` | from the installed `exec-with.sh` only |
 
 ## Cost controls and monitoring
 
@@ -186,17 +189,147 @@ The BE POC's key, when created, is `gogo_be_<env>` → `openrouter.decisions`. A
 `openrouter.jev_shared`, neither harness nor product. Any other name lands in
 `openrouter.other_keys`. Nothing is summed across services.
 
+## Installed copy (hooks and automation)
+
+`node harness/src/cli.ts` above runs the checkout: that is the development and CI entry point.
+Hooks and automation run an approved install outside every checkout instead, so an edit in a
+worktree never changes the verdicts the session receives (ADR-0013 D-3, GoGo-Infra#245):
+
+```
+~/.gogo-harness/install/          (--install-dir / $HARNESS_INSTALL_DIR for prepare.ts; separate from ledger/logs)
+  versions/<full-sha>/MANIFEST    schema 2: sha256 and exec bit of every file of the version
+  versions/<full-sha>/harness/    the commit's harness/, read-only
+  versions/<full-sha>/scripts/    the JEV send closure (D6): scripts/secrets/exec-with.sh,
+  versions/<full-sha>/config/       scripts/secrets/common.sh, scripts/lib/manifest.py, config/secrets.manifest.yml
+  ACTIVE                          { sha, manifestDigest } of the running version
+  history.jsonl                   journal: an `intent` and an `activated` record per activation
+  bin/harness.mts                 bootstrap: launcher.ts of the first installed commit, placed once by the owner
+  bin/harness                     launch boundary (POSIX sh), written by the first activation, never rewritten
+  quarantine/                     a broken ACTIVE or a damaged journal, kept as found
+```
+
+**First install** (owner, once per machine, on a terminal). Fill the four slots — `<sha>` the full
+SHA of a `develop` commit, `<node>` the absolute path of the Node to run the harness with (22.18
+or later; it is written into `bin/harness` and stays, D3), `<root>` e.g.
+`$HOME/.gogo-harness/install`, `<approval>` the link to the owner approval — and paste the block.
+Every step runs with an empty environment: git without system or global config, only `https`, no
+redirects, no credential helper; Node without `NODE_OPTIONS`. It clones `develop` from GitHub,
+checks the commit is on it, places that commit's `harness/src/install/launcher.ts` as
+`bin/harness.mts` (refusing if one is there), then runs its `activate`. Prepare the commit first
+(below) with `--install-dir <root>`. `harness/test/install.test.ts` runs this exact block.
+
+```sh
+/usr/bin/env -i PATH=/usr/bin:/bin HOME="$HOME" /bin/sh -euc '
+sha="<sha>"
+node="<node>"
+root="<root>"
+approval="<approval>"
+g() {
+  env -i PATH=/usr/bin:/bin HOME="$tmp" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 \
+    git -c protocol.allow=never -c protocol.https.allow=always -c http.followRedirects=false -c credential.helper= "$@"
+}
+tmp=$(mktemp -d)
+g clone --quiet --bare --branch develop --single-branch https://github.com/namnh92/GoGo-Infra.git "$tmp/src.git"
+g --git-dir="$tmp/src.git" merge-base --is-ancestor "$sha" develop
+mkdir -p "$root/bin"
+test ! -e "$root/bin/harness.mts"
+new=$(mktemp "$root/bin/.harness.mts.XXXXXX")
+g --git-dir="$tmp/src.git" cat-file blob "$sha:harness/src/install/launcher.ts" >"$new"
+chmod 555 "$new"
+mv "$new" "$root/bin/harness.mts"
+rm -rf "$tmp"
+env -i PATH=/usr/bin:/bin HOME="$HOME" "$node" "$root/bin/harness.mts" activate "$sha" --approval "$approval"
+'
+```
+
+This first download is the trust anchor (trust on first use over HTTPS to GitHub): nothing the
+block fetches can vouch for itself. To check it out of band, compare
+`git hash-object <root>/bin/harness.mts` with the blob id GitHub shows for
+`harness/src/install/launcher.ts` at `<sha>` (`git rev-parse <sha>:harness/src/install/launcher.ts`
+in any clone).
+
+```bash
+# 1. Prepare (anyone; changes nothing that runs, proves nothing). Reads the commit's Git objects
+#    in --repo (default: the working directory) — no fetch, no working tree —, writes harness/ and
+#    the four closure files to staging, runs the commit's own tests against those bytes, and
+#    publishes read-only. There is no --remote or --branch.
+node harness/src/install/prepare.ts <commit> [--repo DIR] [--install-dir DIR]
+
+# 2. Activate or roll back (owner, on a terminal):
+~/.gogo-harness/install/bin/harness activate <full-sha> --approval <link to the approval>
+
+# 3. Use. Same commands and exit codes as cli.ts:
+~/.gogo-harness/install/bin/harness decide --input task.json
+~/.gogo-harness/install/bin/harness install-verify     # { sha, manifestDigest } or exit 2
+```
+
+**Activation proves provenance.** Before the owner is asked, `activate` fetches `develop` from
+`https://github.com/namnh92/GoGo-Infra.git` (constant; no option changes it) into a private
+temporary repository with the same sanitized git, requires the commit to be an ancestor of it,
+and requires every installed file to be that commit's blob with the same exec bit — same path
+set, and the `MANIFEST` exactly what those files give. A commit on another branch, a version
+edited after prepare, or a git configuration (`insteadOf`, `GIT_DIR`, a git shim moving
+`FETCH_HEAD`) pointing elsewhere is refused. Then the owner sees old → new SHA, `MANIFEST` digest,
+provenance and approval, and types `<old-sha12|none|broken> <new-sha12> <digest12>`.
+
+**Offline rollback (D2).** Without network, `activate` accepts only a version this journal
+records as `activated` with the same `MANIFEST` digest; the plan shows `provenance: recorded
+<time>`. A version never activated here, a different digest, a damaged journal, or an activation
+that has an `intent` but no `activated` record (interrupted after the switch) needs the network.
+
+**ACTIVE is the only switch.** Activation takes `activate.lock` (a link there is refused), and
+after confirmation: quarantines a damaged journal and starts a new one, writes `bin/harness` if
+absent, quarantines a broken `ACTIVE`, appends `intent`, replaces `ACTIVE` by rename, appends
+`activated`, and releases the lock (a lock replaced meanwhile is left, with a warning). An
+interruption leaves the previous `ACTIVE`; running the same `activate` again completes it, and
+`node <root>/bin/harness.mts activate …` under `env -i` (the block's last line) works even
+without `bin/harness`. A left-over lock: compare `ACTIVE` with the last journal records, then
+remove it.
+
+`activate` and `install-verify` are the bootstrap's own code whatever `ACTIVE` says: no version's
+code takes part in replacing a version. Every other command reads `ACTIVE` once, checks the
+`MANIFEST` digest against it and every file against the `MANIFEST` (missing, extra, changed,
+wrong exec bit, linked, hard-linked, a `.git` anywhere), and only then imports that version's
+`cli.ts`. Any mismatch exits `2` with `harness install: …` — no decision, no provider call, no
+fallback to a checkout, no `HARNESS_DEV` bypass. The bootstrap anywhere but `<root>/bin/` refuses
+to run; so does an install whose real path is inside a git checkout or worktree, or that has a
+symbolic link or a `.git` entry anywhere on the way to a file it reads.
+
+**Broken `ACTIVE`.** A file that is not a valid record, or a symbolic link, is shown with its
+evidence (sha256, or where the link points — never followed), the confirmation starts with
+`broken`, and after confirmation it is moved to `quarantine/` unchanged. Recover with
+`bin/harness activate <sha> …` of a known version. A directory, fifo, socket or device at
+`ACTIVE` is not something an activation leaves behind: `activate` refuses (`remove it by hand`);
+remove it, then activate.
+
+**Launch boundary.** Hooks call `bin/harness`, never `node …/harness.mts`: it clears
+`NODE_OPTIONS`, `NODE_PATH`, `NODE_COMPILE_CACHE` and `NODE_REPL_EXTERNAL_MODULE` before Node
+starts (a `--import` or `--require` there runs before any check), runs the Node path written at
+the first activation, finds `harness.mts` beside itself, and keeps the caller's working
+directory. The bootstrap also exits 2 when it sees a preload flag, but that is a diagnostic: the
+preloaded code has already run by then.
+
+**Limits.** This stops checkout edits from taking effect, the harness from approving its own
+change, and an unmerged commit from being activated. It does not stop the same OS user from
+rewriting payload, `MANIFEST`, `ACTIVE`, journal and bootstrap together, or from swapping a
+directory or file between verification and import; the journal is not tamper evidence against
+that user. `git`, `bash`, `python3` and `aws` as found on `PATH` (the closure scripts run
+`python3 -I`), and the Node in `bin/harness`, are trusted like the rest of the machine. Provenance
+fetches need direct HTTPS to GitHub: the environment is wiped, so a proxy or a private CA is not
+supported. Changing Node, or a bootstrap fix, is a new first install. That boundary is Claude
+Code's sandbox and permissions on writes outside the workspace. A declared write to the install
+is a hard gate anyway: it is outside the checkout, so the policy engine classifies it `unknown`.
+
 ## Proposed Claude Code hook (owner action — not installed)
 
 Installing this edits `.claude/settings.json`, a permission-policy change. Proposed shape, for
-the owner to adopt or not. It runs the harness from an editable checkout; running an approved,
-pinned copy outside the worktree is tracked separately (ADR-0013 D-3, A-F-03):
+the owner to adopt or not. It runs the installed copy above, never the checkout:
 
 ```json
 {
   "hooks": {
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR\"/../GoGo-Infra/harness/src/cli.ts status >/dev/null" }] }
+      { "hooks": [{ "type": "command", "command": "\"$HOME\"/.gogo-harness/install/bin/harness status >/dev/null" }] }
     ]
   }
 }
@@ -204,3 +337,115 @@ pinned copy outside the worktree is tracked separately (ADR-0013 D-3, A-F-03):
 
 The checkpoint call itself (`decide`) is made by the session at intake and on failures, as the
 workflow in ADR-0013 D-4 describes; a per-tool-call hook is deliberately not proposed.
+
+## Prompt hook and JEV opt-in (GoGo-Infra#247 — owner action to install)
+
+A `UserPromptSubmit` hook. Every prompt is observed; a prompt goes to JEV only when the owner
+opted in (owner decision 2026-10-23 on #247), and then a short advisory is added to the context:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "timeout": 20, "command": "mkdir -p \"$HOME/.gogo-harness\" 2>/dev/null; \"$HOME/.gogo-harness/install/bin/harness\" prompt-hook 2>\"$HOME/.gogo-harness/prompt-hook.last-error\"; exit 0" }] }
+    ]
+  }
+}
+```
+
+**Opting in** (owner, on a terminal; off by default):
+
+```bash
+~/.gogo-harness/install/bin/harness jev-prompt setup      # allow `#jev` on single prompts
+~/.gogo-harness/install/bin/harness jev-prompt on --for 8h # every prompt, 1–24 h, then off by itself
+~/.gogo-harness/install/bin/harness jev-prompt off         # stop sending every prompt (#jev still allowed)
+~/.gogo-harness/install/bin/harness jev-prompt status
+```
+
+`setup` and `on` show what is sent where and ask the owner to type a confirmation; they take no
+other option and record the consent (schema 2) in `~/.gogo-harness/jev-prompt.json`, and every
+change is a line in `jev-prompt-history.jsonl`. No wrapper path is recorded or accepted: a
+schema-1 file from before PR #254 rev 3, which named one, is not consent — run `setup` again.
+
+In a prompt, `#jev` asks for JEV on that prompt (after `setup`) and `#nojev` refuses it even while
+`on` (owner decision D5, 2026-10-26):
+`#jev` counts only when it is the first non-blank line of the prompt; `#nojev` on any line, inside code or pasted content too, stops sending.
+Both is `#nojev`. No fence or `<pasted_content>` parsing decides either, so a later `#jev`, or one
+in a quote or inside a sentence, is text and sends nothing, and a `#nojev` cannot be hidden in a
+block. Control lines are removed before anything is summarized. What the extraction heuristics
+can still change, for a prompt that *is* authorized, is what gets summarized and whether the
+sanitizer refuses it (`invalid_data`) — sanitizer-first, accepted; privacy and data selection stay
+with #244.
+
+Each session's call count is taken under its own lock and replaced atomically, after the wrapper
+check below, so a send that cannot happen takes no call. A counter file that cannot be read, or
+with any entry that is not `{ calls: non-negative integer, last: date }`, refuses every call
+(`session_unreadable`) with the file untouched until the owner removes
+`~/.gogo-harness/prompt-hook/sessions.json`.
+`JEV_MODE`, the approval flags or a key in the environment never turn sending on by themselves.
+The owner's opt-in stands in for `JEV_LIVE_AUTHORIZED` and `JEV_PRIVACY_REVIEWED` for these calls;
+privacy review + DPA for real prompts (#244) is not done, and the confirmation says so.
+
+- **Never blocks.** stdout is empty, or one JSON object whose `additionalContext` is the advisory
+  (at most 900 characters), every byte of it the hook's own: fixed text for what JEV suggests
+  (research first, ask the owner, or no open question — an outcome outside those three is
+  `jev_bad_output`), the fixed line "JEV read prompt text only; assessed no scope, no
+  authorization, no action; check actual scope and owner authorization before acting", and the
+  model build only when it is a plain model id. The router's reasons are not shown and the child
+  does not return them. Advice, never a permission — policy, hard gates and Claude Code's
+  permissions apply as before. stderr is empty; exit 0 for any
+  input or failure (bad JSON, a wrong event, stdin over 512 KiB or not finished within 2 s, an
+  unwritable log, a failing wrapper, a timeout). A `#jev` that could not be sent gets a one-line
+  note with a reason code from a closed list (`NOTE_CODES` in `prompt-observation.ts`; a child
+  error is `jev_child_<code>`, a fallback `jev_fallback_<category>`, anything unrecognised
+  `jev_bad_output` or `jev_fallback`); a failure while `on` stays in the log. The command runs the approved
+  install (#245), never a checkout; a missing launcher or a failed integrity check still exits 0
+  with empty stdout, and the launcher's message is kept in `~/.gogo-harness/prompt-hook.last-error`
+  (overwritten by every run).
+- **One JEV call, the key in one child.** The hook process loads no config and builds no provider.
+  When sending, it starts `prompt-hook --live-child` through `scripts/secrets/exec-with.sh` of the
+  installed version it runs from (`<version>/scripts/secrets/exec-with.sh dev
+  ai-harness/openrouter-api-key -- node <launcher> …`) with the payload on the child's stdin, never
+  in a file, and a 12 s limit. The child asks the `intake` questions as a
+  prompt observation: the "criteria stated, no question → AUTO" shortcut does not apply, the only
+  action is `read`, no scope or authorization comes from the text. Cost goes to the shared
+  `openrouter_jev` budget ($2/month) and `decisions.jsonl` like any checkpoint; each session is
+  capped at 20 calls.
+- **What runs, checked before every send.** The wrapper closure is four files of the installed
+  version: `scripts/secrets/exec-with.sh`, `scripts/secrets/common.sh`, `scripts/lib/manifest.py`,
+  `config/secrets.manifest.yml`. Before the session call is taken, each must be listed in that
+  version's `MANIFEST`, be a regular file (no symlink) with the listed sha256, and the wrapper must
+  be executable: absent or unlisted is `jev_wrapper_missing`, anything else `jev_wrapper_unverified`.
+  Nothing chooses another wrapper — not the consent file, the environment or a flag — and a
+  checkout has no `MANIFEST`, so it refuses. **Until #253 ships these four files in the install
+  and its `MANIFEST` (owner decision D6), every send refuses with `jev_wrapper_missing`.**
+- **The child's environment is an allowlist.** The wrapper and the child start with `PATH`,
+  `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `TZ`, `TERM`, `LANG`, `LC_*`, `AWS_*`,
+  `*_PROXY`/`*_proxy`, `SSL_CERT_FILE`/`SSL_CERT_DIR`, the configuration in the table above marked
+  `passed` (`HARNESS_JEV_MONTHLY_USD`, `JEV_TIMEOUT_MS`, verbatim: a malformed value is
+  `jev_child_child_failed`, `0` an exhausted budget), and what the hook sets
+  (`HARNESS_STATE_DIR`, `JEV_MODE`, `JEV_LIVE_AUTHORIZED`, `JEV_PRIVACY_REVIEWED`). Nothing else:
+  `BASH_ENV`, `ENV`, `PYTHON*`, `NODE_OPTIONS`, `NODE_PATH`, `LD_*`, `DYLD_*`, `AWKPATH`, `JEV_MODEL`
+  and the rest never arrive.
+- **Trusted runtime.** Beyond the four checked files, the send relies on `bash`, `python3`, `aws`,
+  `awk`, `cut`, `sed` and `node` as found on the owner's `PATH` (interpreter, standard library and
+  system site-packages) and on the owner's `~/.aws` configuration, `credential_process` included —
+  the same trust as `node` itself today. `exec-with.sh` and `common.sh` call `python3 -I` (no
+  script directory on `sys.path`, no user site, no `PYTHON*`) once #253 ships those bytes; a
+  same-user swap between the check and the exec, and an `aws` process left running when the 12 s
+  limit kills the wrapper, are the ADR-0013 D-3 / #245 residuals.
+- **An observation, not a task.** The prompt becomes a `TaskSummary` draft (`src/adapters/prompt.ts`,
+  heuristics listed there) with no actions, scope, authorizations, labels or rules; text such as
+  "the owner approved this" grants nothing. The outbound sanitizer runs first, so a malformed email
+  or phone is `invalid_data` and nothing is sent. Each prompt gets its own observation id (a digest
+  of session + `prompt_id` when the client sends one, a local random id otherwise — then repeats are
+  not deduplicated); the session digest only groups them. No task state, loop counter or task cache
+  is read or written.
+- **Log.** `~/.gogo-harness/prompt-hook/observations.jsonl` (`$HARNESS_STATE_DIR`), rotated to `.1`
+  past 5 MiB. One line per prompt: observation and session digests, installed SHA (or `checkout`),
+  adapter version, opt-in (`off`, `toggle`, `marker`, `suppressed`), mode, status and code,
+  sanitizer `field: problem` codes, extraction counts, JEV outcome, fallback and model build,
+  whether context was added, duration. Never the prompt, extracted text, the raw session id, the
+  transcript path or an exception message.
+- **Not in this change.** Blocking a prompt or asking the owner from the hook; measuring JEV's
+  accuracy on real prompts needs a labelled set and the privacy review first.
