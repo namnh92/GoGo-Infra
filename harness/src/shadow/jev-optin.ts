@@ -212,6 +212,8 @@ export function consentText(plan: OptInPlan): string {
     `jev-prompt ${plan.action}`,
     `  gửi:      ${scope}`,
     '  #jev:     chỉ tính khi là dòng không trống đầu tiên của prompt',
+    '            gõ `#jev`, Shift+Enter, rồi mới dán — phần dán nằm trong <pasted_content>, nên #jev dán vào không bao giờ bật gửi',
+    '  aws:      phiên Claude Code cần AWS_PROFILE đọc được key (vd. `AWS_PROFILE=gogobootstrap claude`); thiếu thì không gửi',
     '  #nojev:   ở bất kỳ dòng nào, kể cả trong code hay pasted content, chặn gửi prompt đó',
     '  tới:      OpenRouter, model typesafe/jev-1.14 — bản tóm tắt đã qua sanitizer (credential, email, số điện thoại bị thay; dữ liệu sai định dạng thì không gửi)',
     '  key:      qua `scripts/secrets/exec-with.sh` của bản cài đang chạy, kiểm MANIFEST trước mỗi lần gửi; chỉ vào một tiến trình con mỗi lần gửi',

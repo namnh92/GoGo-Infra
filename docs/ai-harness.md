@@ -377,6 +377,13 @@ can still change, for a prompt that *is* authorized, is what gets summarized and
 sanitizer refuses it (`invalid_data`) — sanitizer-first, accepted; privacy and data selection stay
 with #244.
 
+**Using `#jev` (GoGo-Infra#260).** Type `#jev` as the first line yourself, then Shift+Enter, then
+paste the body. Claude Code wraps pasted text in `<pasted_content>`, so a pasted `#jev` is never
+the first line and never opts in — nothing is sent, by design. The send runs with the `AWS_*` of
+the Claude Code process (the child's environment below), so start the session with a profile that
+can read the key — on the owner's workstation `cd <repo> && AWS_PROFILE=gogobootstrap claude`,
+logged in. Without one, `exec-with.sh` stops before anything is sent.
+
 Each session's call count is taken under its own lock and replaced atomically, after the wrapper
 check below, so a send that cannot happen takes no call. A counter file that cannot be read, or
 with any entry that is not `{ calls: non-negative integer, last: date }`, refuses every call
