@@ -783,6 +783,32 @@ exec "$node" -- "$here/harness.mts" "$@"
 }
 
 /**
+ * Who a left `activate.lock` belongs to (#260): the pid it records, and whether that pid still
+ * runs. Only a diagnosis — the lock is never removed here, since an interrupted activation needs
+ * ACTIVE compared with the journal first. A running pid may also be an unrelated process that
+ * reuses it; a pid that does not run cannot be holding the lock.
+ */
+function lockHolder(install: Install): string {
+  const interrupted = 'check ACTIVE against history.jsonl, then remove the lock';
+  let text: string;
+  try {
+    text = install.read('activate.lock').toString('utf8');
+  } catch {
+    return `another activation is running or one was interrupted; ${interrupted}`;
+  }
+  if (text === '') return `it records no pid: an activation was interrupted before writing it, or one is starting; ${interrupted}`;
+  const m = text.match(/^([1-9][0-9]{0,9})\n$/);
+  if (!m) return `it does not record a pid, so it is not a lock this launcher wrote; ${interrupted}`;
+  const pid = Number(m[1]);
+  try {
+    process.kill(pid, 0);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ESRCH') return `pid ${pid}, which is no longer running, took it: an activation was interrupted; ${interrupted}`;
+  }
+  return `pid ${pid}, which is still running: another activation may hold it; wait for it to finish, or ${interrupted} once it has`;
+}
+
+/**
  * Make `sha` the running version (I-5, I-5b). Bootstrap code only: nothing
  * of the outgoing or incoming version is imported. Before the owner is
  * asked: the lock, ACTIVE and journal classified, the candidate verified and
@@ -814,7 +840,7 @@ export async function activate(
     if ((e as NodeJS.ErrnoException).code !== 'EEXIST' && (e as NodeJS.ErrnoException).code !== 'ELOOP') throw e;
     const st = install.stat('activate.lock');
     if (st?.isSymbolicLink()) throw new UsageError(`${install.path('activate.lock')} is a symbolic link to ${install.readlink('activate.lock')}, not a lock; remove it by hand`);
-    throw new UsageError(`${install.path('activate.lock')} exists: another activation is running or one was interrupted; check ACTIVE against history.jsonl, then remove the lock`);
+    throw new UsageError(`${install.path('activate.lock')} exists: ${lockHolder(install)}`);
   }
   try {
     writeFd(lock.fd, `${process.pid}\n`);

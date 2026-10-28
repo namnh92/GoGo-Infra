@@ -340,7 +340,11 @@ provenance (it was never recorded `activated`) and then appends `activated`; off
 version the journal records as `activated` can be selected again (GoGo-Infra#253 S4-03).
 `node <root>/bin/harness.mts activate …` under `env -i` (the block's last line) works even
 without `bin/harness`. A process killed during activation leaves `activate.lock`: compare `ACTIVE`
-with the last journal records, then remove it.
+with the last journal records, then remove it. The refusal names the pid the lock records and
+whether it still runs (a pid that no longer runs means the activation was interrupted; a running
+one may be another activation, or an unrelated process reusing the pid); the lock is never removed
+for you (GoGo-Infra#260). This message comes from the bootstrap, so a bootstrap placed before #260
+keeps the older one.
 
 `activate` and `install-verify` are the bootstrap's own code whatever `ACTIVE` says: no version's
 code takes part in replacing a version. Every other command reads `ACTIVE` once, checks the

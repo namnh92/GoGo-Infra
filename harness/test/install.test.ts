@@ -644,6 +644,28 @@ describe('#245 activation: an owner act, recorded, reversible', () => {
     assert.equal(existsSync(join(w.install, 'ACTIVE')), false);
   });
 
+  // #260: a lock left by an interrupted activation is told apart from one whose writer still runs.
+  // The lock is never removed for the owner: ACTIVE is compared with the journal first.
+  it('#260: a left lock names its pid and whether that pid still runs, and stays', async () => {
+    const w = world();
+    const a = prep(w);
+    const lock = join(w.install, 'activate.lock');
+    const gone = spawnSync('true').pid!;
+    writeFileSync(lock, `${gone}\n`);
+    await assert.rejects(activateAs(w, a.sha), (e: Error) => {
+      assert.match(e.message, /activate\.lock exists/);
+      assert.match(e.message, new RegExp(`pid ${gone}, which is no longer running`));
+      assert.match(e.message, /interrupted; check ACTIVE against history\.jsonl, then remove the lock/);
+      return true;
+    });
+    assert.equal(readFileSync(lock, 'utf8'), `${gone}\n`);
+    writeFileSync(lock, `${process.pid}\n`);
+    await assert.rejects(activateAs(w, a.sha), new RegExp(`pid ${process.pid}, which is still running: another activation may hold it`));
+    writeFileSync(lock, '');
+    await assert.rejects(activateAs(w, a.sha), /records no pid: an activation was interrupted before writing it/);
+    assert.equal(existsSync(join(w.install, 'ACTIVE')), false);
+  });
+
   it('a corrupted candidate is refused at activation', async () => {
     const w = world();
     const a = prep(w);
