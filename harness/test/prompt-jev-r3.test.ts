@@ -514,6 +514,21 @@ globalThis.fetch = async (url, init) => {
     assert.equal(MAYBE_SENT.exec(context(stdout))?.[1], 'jev_timeout');
   });
 
+  it('#260: a wrapper killed at the time limit takes its descendants with it (an `aws` left running)', async () => {
+    // The wrapper's own `aws ssm get-parameter` stands in as a background `sleep`; the time
+    // limit leaves room for the shell to start, so the pid is written before the kill.
+    const w = world((d) => `#!/bin/sh\ncat >/dev/null\nsleep 30 &\necho $! > '${join(d.dir, 'grandchild.pid')}'\nwait\n`);
+    await grant(w, 'setup');
+    const stdout = await observePrompt({ input: new PassThrough().end(hookJson('#jev\nCó nên tách module?')), env: w.env, entry: CLI, treeRoot: w.tree, childTimeoutMs: 1_500 } as Parameters<typeof observePrompt>[0]);
+    assert.equal(MAYBE_SENT.exec(context(stdout))?.[1], 'jev_timeout');
+    const pid = Number(readFileSync(join(w.dir, 'grandchild.pid'), 'utf8'));
+    const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    for (let i = 0; i < 20 && alive(); i++) await new Promise((r) => setTimeout(r, 50));
+    const left = alive();
+    if (left) process.kill(pid, 'SIGKILL');
+    assert.equal(left, false, 'the grandchild outlived the time limit');
+  });
+
   it('every "not sent" code is a note code', () => {
     const { NOT_SENT_CODES, NOTE_CODES } = obs as unknown as Record<string, ReadonlySet<string>>;
     for (const c of NOT_SENT_CODES!) assert.equal(NOTE_CODES!.has(c), true, c);

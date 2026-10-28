@@ -19,7 +19,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, describe, it } from 'node:test';
 import { evaluatePolicy } from '../src/policy/policy.ts';
-import { CLOSURE_FILES, Install, activate, buildManifest, confirmation, gitBlobId, readActive, sha256, verifyVersion, wrapperText } from '../src/install/launcher.ts';
+import { CLOSURE_FILES, Install, NODE_MISSING_NOTE, activate, buildManifest, confirmation, gitBlobId, readActive, readJournal, sha256, verifyVersion, wrapperText } from '../src/install/launcher.ts';
 import type { ActivationPlan, Source } from '../src/install/launcher.ts';
 import { prepare } from '../src/install/prepare.ts';
 
@@ -107,7 +107,7 @@ function seed(w: World, sha: string): void {
   writeFileSync(join(w.install, 'bin/harness.mts'), execFileSync('git', ['-C', w.origin, 'cat-file', 'blob', `${sha}:harness/src/install/launcher.ts`]), { mode: 0o555 });
 }
 async function activateAs(w: World, sha: string, approval = APPROVAL, extra: Partial<Parameters<typeof activate>[0]> = {}, confirm: (plan: ActivationPlan) => Promise<boolean> = yes): Promise<ActivationPlan> {
-  return activate({ install: open(w), sha, approval, actor: 'owner@test', source: w.source, ...extra }, confirm);
+  return activate({ install: open(w), sha, approval, actor: 'owner@test', source: w.source, node: NODE, ...extra }, confirm);
 }
 /** prepare, place the bootstrap and activate: a working install of HEAD. */
 async function installed(w: World) {
@@ -171,10 +171,14 @@ function owner(cmd: string[], o: { answer?: string; env?: Record<string, string>
   const r = spawnSync('python3', ['-I', '-c', OWNER, o.answer ?? '-', ...cmd], { cwd: o.cwd ?? tmpdir(), env: { ...process.env, ...o.env }, encoding: 'utf8' });
   return { status: r.status, out: r.stdout + r.stderr };
 }
-/** `bin/harness activate <sha>` (or the bootstrap directly), confirmed on a terminal. */
-function ownerActivates(w: World, sha: string, o: { via?: 'wrapper' | 'bootstrap'; answer?: string } = {}) {
+/**
+ * `bin/harness activate <sha> --node <node>` (or the bootstrap directly), confirmed on a
+ * terminal. `node: null` leaves `--node` out (#272 D-1).
+ */
+function ownerActivates(w: World, sha: string, o: { via?: 'wrapper' | 'bootstrap'; answer?: string; node?: string | null } = {}) {
   const cmd = o.via === 'bootstrap' ? [NODE, join(w.install, 'bin/harness.mts')] : [join(w.install, 'bin/harness')];
-  return owner([...cmd, 'activate', sha, '--approval', APPROVAL], { answer: o.answer, env: { HARNESS_STATE_DIR: w.state } });
+  const node = o.node === undefined ? NODE : o.node;
+  return owner([...cmd, 'activate', sha, '--approval', APPROVAL, ...(node === null ? [] : ['--node', node])], { answer: o.answer, env: { HARNESS_STATE_DIR: w.state } });
 }
 
 function outcome(r: { stdout: string }): string {
@@ -622,7 +626,10 @@ describe('#245 activation: an owner act, recorded, reversible', () => {
       return false;
     }), /not confirmed/);
     assert.deepEqual(seen && [seen.from, seen.to.sha, seen.to.manifestDigest], [null, a.sha, a.manifestDigest]);
-    assert.equal(confirmation(seen!), `none ${a.sha.slice(0, 12)} ${a.manifestDigest.slice(0, 12)}`);
+    // #272 Q-6: the plan writes bin/harness, so the typed string also binds its text.
+    assert.deepEqual(seen!.wrapper, { action: 'write', node: NODE, sha256: sha256(wrapperText(NODE)) });
+    assert.equal(confirmation(seen!), `none ${a.sha.slice(0, 12)} ${a.manifestDigest.slice(0, 12)} ${sha256(wrapperText(NODE)).slice(0, 12)}`);
+    assert.equal(confirmation({ ...seen!, wrapper: 'kept' }), `none ${a.sha.slice(0, 12)} ${a.manifestDigest.slice(0, 12)}`);
     for (const f of ['ACTIVE', 'history.jsonl', 'bin/harness', 'activate.lock']) assert.equal(existsSync(join(w.install, f)), false, f);
   });
 
@@ -914,17 +921,61 @@ describe('#253 rev 3 I-6: bin/harness is the launch boundary', () => {
     assert.match(bare.stderr, /by its path/);
   });
 
-  it('bin/harness is written once: unchanged across activate B and rollback, its node literal fixed (D3)', async () => {
+  it('#272 T-4 (D-3): without --node, or with the same text, bin/harness is kept; another --node rewrites it after confirmation, the old file quarantined and journaled', async () => {
     const w = world();
     const { a, b } = await withB(w);
     const wrapper = readFileSync(join(w.install, 'bin/harness'), 'utf8');
     const boot = readFileSync(join(w.install, 'bin/harness.mts'));
     assert.equal(wrapper, wrapperText(NODE));
     assert.equal(lstatSync(join(w.install, 'bin/harness')).mode & 0o777, 0o555);
-    await activateAs(w, b.sha, APPROVAL, { node: '/elsewhere/node' });
-    await activateAs(w, a.sha, APPROVAL, { node: '/elsewhere/node' });
+    // (a) no --node: kept byte for byte.
+    const toB = await activateAs(w, b.sha, APPROVAL, { node: undefined });
+    assert.equal(toB.wrapper, 'kept');
+    assert.equal(confirmation(toB).split(' ').length, 3);
+    assert.equal(journal(w).filter((r) => r.record === 'intent').pop()!.wrapper, 'kept');
+    // (b) same --node, same template: kept.
+    const back = await activateAs(w, a.sha, APPROVAL, { node: NODE });
+    assert.equal(back.wrapper, 'kept');
     assert.equal(readFileSync(join(w.install, 'bin/harness'), 'utf8'), wrapper);
     assert.deepEqual(readFileSync(join(w.install, 'bin/harness.mts')), boot);
+    // (c) another --node (a stable link): refused confirmation changes nothing; confirmed rewrites.
+    const m = join(w.root, 'stable', 'node');
+    mkdirSync(dirname(m));
+    symlinkSync(NODE, m);
+    await assert.rejects(activateAs(w, b.sha, APPROVAL, { node: m }, async () => false), /not confirmed/);
+    assert.equal(readFileSync(join(w.install, 'bin/harness'), 'utf8'), wrapper);
+    const at = new Date('2026-10-28T12:00:00.000Z');
+    const plan = await activateAs(w, b.sha, APPROVAL, { node: m, now: () => at });
+    assert.ok(plan.wrapper !== 'kept' && plan.wrapper.action === 'rewrite');
+    assert.deepEqual([plan.wrapper.node, plan.wrapper.fromNode, plan.wrapper.from, plan.wrapper.sha256], [m, NODE, sha256(wrapper), sha256(wrapperText(m))]);
+    assert.equal(confirmation(plan).split(' ')[3], sha256(wrapperText(m)).slice(0, 12));
+    const quarantined = `quarantine/harness.${at.toISOString()}`;
+    assert.equal(plan.wrapper.quarantined, quarantined);
+    assert.equal(readFileSync(join(w.install, quarantined), 'utf8'), wrapper);
+    const now = readFileSync(join(w.install, 'bin/harness'), 'utf8');
+    assert.equal(now, wrapperText(m));
+    assert.match(now, new RegExp(`^node='${m.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'$`, 'm'));
+    const st = lstatSync(join(w.install, 'bin/harness'));
+    assert.deepEqual([st.mode & 0o777, st.nlink], [0o555, 1]);
+    assert.deepEqual(journal(w).filter((r) => r.record === 'intent').pop()!.wrapper, { rewritten: sha256(wrapper), node: m, quarantined });
+    assert.equal(readJournal(open(w)).state, 'ok');
+    assert.deepEqual(readFileSync(join(w.install, 'bin/harness.mts')), boot);
+    assert.equal(launch(w, ['install-verify']).status, 0);
+  });
+
+  it('#272 T-4 (d): an owner-written bin/harness is kept without --node; with --node it is rewritten only after confirmation, the original quarantined unchanged', async () => {
+    const w = world();
+    const a = prep(w);
+    seed(w, a.sha);
+    const own = "#!/bin/sh\n# the owner's own\n";
+    writeFileSync(join(w.install, 'bin/harness'), own, { mode: 0o555 });
+    await assert.rejects(activateAs(w, a.sha, APPROVAL, {}, async () => false), /not confirmed/);
+    assert.equal(readFileSync(join(w.install, 'bin/harness'), 'utf8'), own);
+    const at = new Date('2026-10-28T13:00:00.000Z');
+    const plan = await activateAs(w, a.sha, APPROVAL, { now: () => at });
+    assert.ok(plan.wrapper !== 'kept' && plan.wrapper.action === 'rewrite' && plan.wrapper.fromNode === null);
+    assert.equal(readFileSync(join(w.install, `quarantine/harness.${at.toISOString()}`), 'utf8'), own);
+    assert.equal(readFileSync(join(w.install, 'bin/harness'), 'utf8'), wrapperText(NODE));
   });
 
   it('a pre-existing regular bin/harness is kept; a link or directory there, or a pre-placed bin/.harness.<pid> link, is refused', async () => {
@@ -932,7 +983,7 @@ describe('#253 rev 3 I-6: bin/harness is the launch boundary', () => {
     const a = prep(w);
     seed(w, a.sha);
     writeFileSync(join(w.install, 'bin/harness'), '#!/bin/sh\n# the owner\'s own\n', { mode: 0o555 });
-    await activateAs(w, a.sha);
+    await activateAs(w, a.sha, APPROVAL, { node: undefined });
     assert.equal(readFileSync(join(w.install, 'bin/harness'), 'utf8'), "#!/bin/sh\n# the owner's own\n");
     for (const make of [(p: string) => symlinkSync('/bin/sh', p), (p: string) => mkdirSync(p)]) {
       rmSync(join(w.install, 'bin/harness'), { force: true, recursive: true });
@@ -1039,8 +1090,13 @@ g --git-dir="$tmp/src.git" cat-file blob "$sha:harness/src/install/launcher.ts" 
 chmod 555 "$new"
 mv "$new" "$root/bin/harness.mts"
 rm -rf "$tmp"
-env -i PATH=/usr/bin:/bin HOME="$HOME" "$node" "$root/bin/harness.mts" activate "$sha" --approval "$approval"
+env -i PATH=/usr/bin:/bin HOME="$HOME" "$node" "$root/bin/harness.mts" activate "$sha" --approval "$approval" --node "$node"
 '
+`;
+
+  const UPGRADE_MOVE = `root="<root>"
+mkdir -p "$root/quarantine"
+mv "$root/bin/harness.mts" "$root/quarantine/bin-harness.mts.$(date -u +%Y%m%dT%H%M%SZ)"
 `;
 
   it('docs/ai-harness.md holds exactly this block', () => {
@@ -1087,8 +1143,40 @@ env -i PATH=/usr/bin:/bin HOME="$HOME" "$node" "$root/bin/harness.mts" activate 
     assert.deepEqual(readFileSync(join(w.install, 'bin/harness.mts')), blob);
     assert.equal(gitBlobId(readFileSync(join(w.install, 'bin/harness.mts'))), git(w.origin, 'rev-parse', `${a.sha}:harness/src/install/launcher.ts`));
     assert.equal(readActive(open(w)).sha, a.sha);
-    assert.match(readFileSync(join(w.install, 'bin/harness'), 'utf8'), new RegExp(`exec '${NODE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}' -- `));
+    assert.equal(readFileSync(join(w.install, 'bin/harness'), 'utf8'), wrapperText(NODE));
     assert.equal(launch(w).status, 0);
+  });
+
+  it('#272 T-6 (D-6): bootstrap upgrade — quarantine bin/harness.mts, run the block again with a newer SHA: new bootstrap, ACTIVE moves, bin/harness kept', () => {
+    const w = world();
+    const a = prep(w);
+    const fill = (sha: string) => BLOCK.replace('<sha>', sha).replace('<node>', NODE).replace('<root>', w.install).replace('<approval>', APPROVAL)
+      .replace('https://github.com/namnh92/GoGo-Infra.git', w.origin).replace('protocol.https.allow=always', 'protocol.file.allow=always');
+    let r = owner(['/bin/bash', '-c', fill(a.sha)], { cwd: w.work });
+    assert.equal(r.status, 0, r.out);
+    assert.match(r.out, /bin\/harness write: node /);
+    const wrapper = readFileSync(join(w.install, 'bin/harness'), 'utf8');
+    // B: the launcher differs by a comment.
+    appendFileSync(join(w.work, 'harness/src/install/launcher.ts'), '\n// bootstrap B\n');
+    const b = prep(w, commit(w.work, 'B'));
+    // A second run without the quarantine step refuses: the bootstrap is placed once.
+    r = owner(['/bin/bash', '-c', fill(b.sha)], { cwd: w.work });
+    assert.notEqual(r.status, 0, r.out);
+    assert.equal(readActive(open(w)).sha, a.sha);
+    // The documented bootstrap move, verbatim, on an install that has no quarantine/ yet (PR #275 Sol r1 F-01).
+    assert.ok(readFileSync(join(REPO, 'docs/ai-harness.md'), 'utf8').includes(`\`\`\`sh\n${UPGRADE_MOVE}\`\`\`\n`), 'the bootstrap-upgrade block in docs/ai-harness.md differs from the one this test runs');
+    assert.equal(existsSync(join(w.install, 'quarantine')), false);
+    const mv = spawnSync('/bin/sh', ['-euc', UPGRADE_MOVE.replace('<root>', w.install)], { encoding: 'utf8' });
+    assert.equal(mv.status, 0, mv.stderr);
+    assert.equal(existsSync(join(w.install, 'bin/harness.mts')), false);
+    assert.equal(readdirSync(join(w.install, 'quarantine')).filter((f) => f.startsWith('bin-harness.mts.')).length, 1);
+    r = owner(['/bin/bash', '-c', fill(b.sha)], { cwd: w.work });
+    assert.equal(r.status, 0, r.out);
+    assert.match(r.out, /bin\/harness kept/);
+    assert.equal(gitBlobId(readFileSync(join(w.install, 'bin/harness.mts'))), git(w.origin, 'rev-parse', `${b.sha}:harness/src/install/launcher.ts`));
+    assert.equal(readActive(open(w)).sha, b.sha);
+    assert.equal(readFileSync(join(w.install, 'bin/harness'), 'utf8'), wrapper);
+    assert.equal(launch(w, ['install-verify']).status, 0);
   });
 });
 
@@ -1241,6 +1329,115 @@ describe('#253 rev 3 structure: one door to the file system, one to subprocesses
   it('no FETCH_HEAD, --remote, --branch, tar, seed, versionOf or main(', () => {
     for (const [name, text] of [['launcher.ts', launcher], ['prepare.ts', preparer]] as const) {
       for (const word of [/FETCH_HEAD/, /--remote/, /--branch/, /\btar\b/, /\bseed\b/, /versionOf/, /\bmain\(/]) assert.doesNotMatch(text, word, `${name}: ${word}`);
+    }
+  });
+});
+
+describe('#272: bin/harness pins the Node the owner names, and says so when it is gone', () => {
+  const hookStdin = (prompt: string) => JSON.stringify({ session_id: 's-272', transcript_path: '/tmp/t.jsonl', hook_event_name: 'UserPromptSubmit', prompt });
+  const linkTo = (w: World, name: string) => {
+    const l = join(w.root, name, 'bin', 'node');
+    mkdirSync(dirname(l), { recursive: true });
+    symlinkSync(NODE, l);
+    return l;
+  };
+
+  it('T-1 (D-1, AC-1 regression anchor): no bin/harness and no --node → refused before the owner is asked, nothing written', async () => {
+    const w = world();
+    const a = prep(w);
+    seed(w, a.sha);
+    let asked = false;
+    await assert.rejects(activateAs(w, a.sha, APPROVAL, { node: undefined }, async () => (asked = true)), /--node <absolute path of the Node to pin into bin\/harness> is required/);
+    assert.equal(asked, false);
+    const r = ownerActivates(w, a.sha, { via: 'bootstrap', node: null });
+    assert.equal(r.status, 2, r.out);
+    assert.match(r.out, /--node/);
+    assert.doesNotMatch(r.out, /Type "/);
+    assert.deepEqual(readdirSync(join(w.install, 'bin')), ['harness.mts']);
+    for (const f of ['ACTIVE', 'history.jsonl', 'activate.lock']) assert.equal(existsSync(join(w.install, f)), false, f);
+  });
+
+  it('T-2 (D-1, D-2, AC-1): --node a stable link → bin/harness names the link itself, not the versioned file behind it, and runs', async () => {
+    const w = world();
+    const a = prep(w);
+    seed(w, a.sha);
+    const l = linkTo(w, 'opt');
+    assert.notEqual(l, NODE);
+    const r = ownerActivates(w, a.sha, { via: 'bootstrap', node: l });
+    assert.equal(r.status, 0, r.out);
+    assert.match(r.out, new RegExp(`bin/harness write: node ${l.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} `));
+    const text = readFileSync(join(w.install, 'bin/harness'), 'utf8');
+    assert.equal(text, wrapperText(l));
+    assert.ok(text.includes(`node='${l}'\n`));
+    assert.equal(text.includes(NODE), false, 'the resolved target must not be written');
+    const v = launch(w, ['install-verify']);
+    assert.equal(v.status, 0, v.stderr);
+    assert.equal((JSON.parse(v.stdout) as { sha: string }).sha, a.sha);
+    // The same through activate(): the plan carries the literal.
+    const w2 = world();
+    const a2 = prep(w2);
+    seed(w2, a2.sha);
+    const l2 = linkTo(w2, 'opt');
+    const plan = await activateAs(w2, a2.sha, APPROVAL, { node: l2 });
+    assert.deepEqual(plan.wrapper, { action: 'write', node: l2, sha256: sha256(wrapperText(l2)) });
+  });
+
+  it('T-3 (D-2): a relative, quoted, missing, dangling, directory or non-executable --node is refused before the owner is asked', async () => {
+    const w = world();
+    const a = prep(w);
+    seed(w, a.sha);
+    const dir = join(w.root, 'nodes');
+    mkdirSync(dir);
+    const plain = join(dir, 'plain');
+    writeFileSync(plain, '#!/bin/sh\n', { mode: 0o644 });
+    const dangling = join(dir, 'dangling');
+    symlinkSync(join(dir, 'gone'), dangling);
+    for (const [node, why] of [
+      ['node', /absolute path/],
+      [`${dir}/it's`, /absolute path/],
+      [join(dir, 'missing'), /ENOENT/],
+      [dangling, /ENOENT/],
+      [dir, /is a directory/],
+      [plain, /not executable/],
+    ] as const) {
+      let asked = false;
+      await assert.rejects(activateAs(w, a.sha, APPROVAL, { node }, async () => (asked = true)), why, node);
+      assert.equal(asked, false, node);
+    }
+    assert.deepEqual(readdirSync(join(w.install, 'bin')), ['harness.mts']);
+    assert.equal(existsSync(join(w.install, 'ACTIVE')), false);
+  });
+
+  it('T-5 (D-4, AC-3): Node gone → prompt-hook prints one fixed warning (same key path as a TS note) and exits 0; any other command exits 2 on stderr', async () => {
+    const w = world();
+    await installed(w);
+    const env = { ...process.env, HOME: w.root, HARNESS_STATE_DIR: w.state, JEV_MODE: 'disabled' };
+    // A note from the TS hook on the working install: the key path to match.
+    const ts = spawnSync(join(w.install, 'bin/harness'), ['prompt-hook'], { cwd: w.work, env, input: hookStdin('#jev\nĐổi tên biến PORT?'), encoding: 'utf8' });
+    assert.equal(ts.status, 0, ts.stderr);
+    const tsNote = JSON.parse(ts.stdout) as { hookSpecificOutput: Record<string, unknown> };
+    // The post-#272 wrapper whose Node has since disappeared.
+    const gone = join(w.root, 'gone', 'bin', 'node');
+    chmodSync(join(w.install, 'bin'), 0o755);
+    rmSync(join(w.install, 'bin/harness'), { force: true });
+    writeFileSync(join(w.install, 'bin/harness'), wrapperText(gone), { mode: 0o555 });
+    const r = spawnSync(join(w.install, 'bin/harness'), ['prompt-hook'], { cwd: w.work, env, input: hookStdin('#jev\nĐổi tên biến PORT?'), encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout, `${NODE_MISSING_NOTE}\n`);
+    assert.equal(r.stdout.trim().split('\n').length, 1);
+    const note = JSON.parse(r.stdout) as { hookSpecificOutput: { hookEventName: string; additionalContext: string } };
+    assert.deepEqual(Object.keys(note).sort(), Object.keys(tsNote).sort());
+    assert.deepEqual(Object.keys(note.hookSpecificOutput).sort(), Object.keys(tsNote.hookSpecificOutput).sort());
+    assert.equal(note.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+    const text = note.hookSpecificOutput.additionalContext;
+    for (const part of ['CẢNH BÁO', 'harness_node_missing', 'hỏi owner xác nhận', '--node']) assert.ok(text.includes(part), part);
+    assert.ok(text.length <= 900, `${text.length} chars`);
+    assert.match(r.stderr, /harness_node_missing/);
+    assert.ok(r.stderr.includes(gone));
+    for (const args of [['decide', '--input', w.task], ['install-verify'], []]) {
+      const d = spawnSync(join(w.install, 'bin/harness'), args, { cwd: w.work, env, encoding: 'utf8' });
+      assert.deepEqual([d.status, d.stdout], [2, ''], args.join(' '));
+      assert.ok(d.stderr.includes(gone), args.join(' '));
     }
   });
 });
