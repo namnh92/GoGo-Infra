@@ -91,6 +91,9 @@ export SSH_AUTH_SOCK="${SANDBOX}/owner-agent.sock"
 cat >"${SANDBOX}/bin/exec-with.sh" <<'STUB'
 #!/usr/bin/env bash
 echo "exec-with $*" >>"$CALLS"
+# The mint's ancestry (#281 retro-review F-02): which process asked for the token.
+p=$PPID; a=""; for _ in 1 2 3; do a="$a $p"; p=$(ps -o ppid= -p "$p" | tr -d ' '); done
+echo "mint-ancestors$a" >>"$CALLS"
 [[ -n "${STUB_MINT_FAIL:-}" ]] && { echo "stub: no credentials" >&2; exit 1; }
 while [[ "$1" != "--" ]]; do shift; done; shift
 exec "$@"
@@ -1043,17 +1046,20 @@ ghdir="$(sed -n 's/^gh-child: GH_CONFIG_DIR=\([^ ]*\) .*/\1/p' <<<"$out")"
 [[ "$rc" == 0 && "$ghdir" == "${TMPDIR}"/as-agent.*/gh ]] && grep -q 'gh-child: GH_CONFIG_DIR empty dir' <<<"$out" && grep -q 'GH_PROMPT_DISABLED=1 ' <<<"$out" \
   && ok "T8d: gh gets an empty GH_CONFIG_DIR of its own and prompts off; the owner's hosts.yml is not read" || bad "T8d gh config" "rc=$rc out=$out"
 
+# The watcher removes the sealed home within about a second of the command's exit (#281 retro-review).
+sealed_left() { local d; for _ in $(seq 30); do d="$(ls -d "${TMPDIR}"/as-agent.* 2>/dev/null || true)"; [[ -z "$d" ]] && break; sleep 0.1; done; printf '%s' "$d"; }
+
 # 8f. The sealed home is removed when the command ends (#260): on success, with the command's own
 # exit status, and when stage 1 is stopped by TERM while the command runs.
 rm -rf "${TMPDIR}"/as-agent.*
 out="$(cd "$REPO" && "$AS" -- gh pr list 2>&1)"; rc=$?
-left="$(ls -d "${TMPDIR}"/as-agent.* 2>/dev/null || true)"
+left="$(sealed_left)"
 [[ "$rc" == 0 ]] && grep -q 'gh-child: GH_TOKEN agent' <<<"$out" && [[ -z "$left" ]] \
   && ok "T8f: the sealed home is gone once the command has run" || bad "T8f cleanup" "rc=$rc left=$left out=$out"
 printf '%s\n' 'exit 7' >"${CTL}/gh_script"
 out="$(cd "$REPO" && "$AS" -- gh pr list 2>&1)"; rc=$?
 unctl gh_script
-left="$(ls -d "${TMPDIR}"/as-agent.* 2>/dev/null || true)"
+left="$(sealed_left)"
 [[ "$rc" == 7 && -z "$left" ]] \
   && ok "T8f: a failing command keeps its exit status (7) and the sealed home is gone" || bad "T8f cleanup on failure" "rc=$rc left=$left out=$out"
 printf '%s\n' 'echo up >"$SB/ctl/started"; sleep 1' >"${CTL}/gh_script"
@@ -1064,9 +1070,32 @@ for _ in $(seq 50); do [[ -e "${CTL}/started" ]] && break; sleep 0.1; done
 kill -TERM "$stage1" 2>/dev/null
 wait "$stage1"; rc=$?
 unctl gh_script; unctl started
-left="$(ls -d "${TMPDIR}"/as-agent.* 2>/dev/null || true)"
+left="$(sealed_left)"
 [[ "$rc" == 143 && -z "$left" ]] \
   && ok "T8f: stage 1 stopped by TERM exits 143 and removes the sealed home" || bad "T8f cleanup on TERM" "rc=$rc left=$left"
+
+# 8g. #281 retro-review (Sol, 2026-10-28). F-01: TERM to stage 1 stops a long-running command now,
+# not when it ends. F-02: the token is minted by the process that becomes the command; the cleanup
+# watcher, forked before the mint, never holds it.
+printf '%s\n' 'echo "gh-child: pid=$$"; echo up >"$SB/ctl/started"; sleep 10' >"${CTL}/gh_script"
+unctl started
+: >"$CALLS"
+(cd "$REPO" && exec "$AS" -- gh pr list >"${SANDBOX}/8g.out" 2>&1) &
+stage1=$!
+for _ in $(seq 50); do [[ -e "${CTL}/started" ]] && break; sleep 0.1; done
+t0=$SECONDS
+kill -TERM "$stage1" 2>/dev/null
+wait "$stage1"; rc=$?
+took=$((SECONDS - t0))
+unctl gh_script; unctl started
+pkill -f "sleep 10" 2>/dev/null || true
+left="$(sealed_left)"
+[[ "$rc" == 143 && "$took" -le 3 && -z "$left" ]] \
+  && ok "T8g: TERM to stage 1 stops a running command at once (${took}s), exit 143, sealed home gone" || bad "T8g TERM" "rc=$rc took=${took}s left=$left"
+cmdpid="$(sed -n 's/^gh-child: pid=//p' "${SANDBOX}/8g.out")"
+ancestors="$(sed -n 's/^mint-ancestors//p' "$CALLS")"
+[[ -n "$cmdpid" && " $ancestors " == *" $cmdpid "* ]] \
+  && ok "T8g: the token is minted under the process that becomes the command, never under a process that outlives it" || bad "T8g mint topology" "cmd=$cmdpid stage1=$stage1 mint-ancestors=$ancestors"
 
 # 8e. A partial clone's lazy fetch under gh is a git fetch too: no transport.
 PARTIAL="${SANDBOX}/GoGo-Partial"
