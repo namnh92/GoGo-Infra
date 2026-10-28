@@ -322,6 +322,25 @@ describe('I6: only the verified closure of the running tree is executed (A-F-01,
     });
   }
 
+  // #287 retro-review F-01 (Sol, 2026-10-28): only absence is "missing"; any other stat or read
+  // failure of a listed closure file is "unverified", never an internal error.
+  for (const [name, lock, unlock] of [
+    ['an unreadable common.sh', (w: World) => chmodSync(join(w.tree, CLOSURE[1]), 0o000), (w: World) => chmodSync(join(w.tree, CLOSURE[1]), 0o644)],
+    ['an inaccessible scripts/lib/', (w: World) => chmodSync(join(w.tree, 'scripts/lib'), 0o000), (w: World) => chmodSync(join(w.tree, 'scripts/lib'), 0o755)],
+  ] as const) {
+    it(`#260: ${name} → jev_wrapper_unverified, nothing sent`, async () => {
+      const w = world((x) => standInWrapper(x.stub, `touch '${join(x.dir, 'ran')}'\n`));
+      await grant(w, 'setup');
+      lock(w);
+      try {
+        const r = await hook(w, '#jev\nCó nên tách module?');
+        assert.deepEqual([r.record.code, r.sent.length, existsSync(join(w.dir, 'ran'))], ['jev_wrapper_unverified', 0, false]);
+      } finally {
+        unlock(w);
+      }
+    });
+  }
+
   it('[new-guard] a closure file that is a symlink to identical bytes → jev_wrapper_unverified', async () => {
     const w = world();
     await grant(w, 'setup');
@@ -552,6 +571,42 @@ globalThis.fetch = async (url, init) => {
     const left = alive();
     if (left) process.kill(pid, 'SIGKILL');
     assert.equal(left, false, 'the grandchild outlived the time limit');
+  });
+
+  // #277 retro-review (Sol, 2026-10-28). F-01: the wrapper leads its own group, so the hook must
+  // take that group down when it is itself terminated. F-02: the 64 KiB bound is bytes, as maxBuffer was.
+  it('#260: a hook terminated by SIGTERM takes the wrapper group with it, and still dies of SIGTERM', async () => {
+    const w = world((d) => `#!/bin/sh\ncat >/dev/null\nsleep 30 &\necho $! > '${join(d.dir, 'grandchild.pid')}'\nwait\n`);
+    await grant(w, 'setup');
+    const driver = join(w.dir, 'driver.mjs');
+    const obsPath = join(HARNESS, 'src/shadow/prompt-observation.ts');
+    writeFileSync(driver, `import { observePrompt } from ${JSON.stringify(obsPath)};\nawait observePrompt({ input: process.stdin, env: ${JSON.stringify(w.env)}, entry: ${JSON.stringify(CLI)}, treeRoot: ${JSON.stringify(w.tree)}, childTimeoutMs: 20000 });\n`);
+    const { spawn } = await import('node:child_process');
+    const hookProc = spawn(process.execPath, [driver], { stdio: ['pipe', 'ignore', 'ignore'] });
+    hookProc.stdin.end(hookJson('#jev\nCó nên tách module?'));
+    const pidFile = join(w.dir, 'grandchild.pid');
+    for (let i = 0; i < 100 && !existsSync(pidFile); i++) await new Promise((r) => setTimeout(r, 50));
+    assert.equal(existsSync(pidFile), true, 'the wrapper started');
+    const pid = Number(readFileSync(pidFile, 'utf8'));
+    const exited = new Promise<NodeJS.Signals | null>((r) => hookProc.on('exit', (_c, sig) => r(sig)));
+    hookProc.kill('SIGTERM');
+    assert.equal(await exited, 'SIGTERM');
+    const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    for (let i = 0; i < 20 && alive(); i++) await new Promise((r) => setTimeout(r, 50));
+    const left = alive();
+    if (left) process.kill(pid, 'SIGKILL');
+    assert.equal(left, false, 'the grandchild outlived the terminated hook');
+  });
+
+  it('#260: output over 64 KiB in bytes is refused even when it is fewer characters', async () => {
+    const w = world((d) => {
+      const big = join(d.dir, 'big.txt');
+      writeFileSync(big, `${'é'.repeat(40_000)}\n`);
+      return `#!/bin/sh\ncat >/dev/null\ncat '${big}'\n`;
+    });
+    await grant(w, 'setup');
+    const r = await hook(w, '#jev\nCó nên tách module?');
+    assert.equal(r.record.code, 'jev_spawn_failed');
   });
 
   it('every "not sent" code is a note code', () => {

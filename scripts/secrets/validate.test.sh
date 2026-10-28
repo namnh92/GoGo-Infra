@@ -55,6 +55,7 @@ if [[ "$1" == "ssm" && "$2" == "get-parameters-by-path" ]]; then
   if grep -qxF "$env" "${WORK}/empty_envs" 2>/dev/null; then echo ""; exit 0; fi
   case "$prefix" in
     /gogo/ci/*)      ns=ci ;;
+    /gogo/tools*)    ns=tools ;;
     */mobile)        ns=mobile ;;
     *)               ns=backend ;;
   esac
@@ -110,6 +111,7 @@ if [[ "$1" == "ssm" && "$2" == "get-parameter" ]]; then
   # looks wrong when a test deliberately makes it wrong.
   case "$name" in
     /gogo/ci/*) env="$(cut -d/ -f4 <<< "$name")"; ns=ci;     rel="${name#/gogo/ci/${env}/}" ;;
+    /gogo/tools/*) env=tools; ns=tools;                       rel="${name#/gogo/tools/}" ;;
     */mobile/*) env="$(cut -d/ -f3 <<< "$name")"; ns=mobile; rel="${name#/gogo/${env}/mobile/}" ;;
     *)          env="$(cut -d/ -f3 <<< "$name")"; ns=backend; rel="${name#/gogo/${env}/backend/}" ;;
   esac
@@ -321,6 +323,85 @@ if [[ $rc -ne 0 && "$out" == *"MISSING"* && "$out" == *"cms/super-admin-email"* 
   ok "R1a: both rows absent are MISSING, with no tag finding for rows that do not exist"
 else bad "R1a state must read MISSING for both rows" "rc=$rc $out"; fi
 : > "${WORK}/absent"
+
+# --- GoGo-Infra#294: the tools pseudo-environment ---------------------------
+#
+# One env-less namespace, /gogo/tools/, with no capability profile. Validated on
+# its own so the five tool rows are still checked by somebody after they leave
+# /gogo/ci/dev/.
+out="$(run tools)"; rc=$?
+if [[ $rc -eq 0 && "$out" == *"OK: tools"* && "$out" == *"5 declared across 1 namespace"* ]]; then
+  ok "tools: the five tool rows validate under /gogo/tools/"
+else bad "tools: validate.sh tools should pass with the five rows present" "rc=$rc $out"; fi
+
+out="$(run dev)"; rc=$?
+if [[ $rc -eq 0 && "$out" != *"/gogo/tools"* && "$out" != *"agent-app"* ]]; then
+  ok "tools: validate.sh dev never looks at a tool row"
+else bad "tools: validate.sh dev must not report tool rows" "rc=$rc $out"; fi
+
+echo "/gogo/tools" > "${WORK}/deny"
+out="$(run tools)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"SKIPPED"* && "$out" != *"OK: tools"* ]]; then
+  ok "tools: a /gogo/tools listing nobody could read fails, without --strict"
+else bad "tools: an unreadable /gogo/tools must not pass" "rc=$rc $out"; fi
+: > "${WORK}/deny"
+
+printf '/gogo/tools/github/agent-app-id\tString\n' > "${WORK}/extra_tagged"
+out="$(run tools)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"/gogo/tools/github/agent-app-id (String)"* ]]; then
+  ok "tools: an infra-readable tag under /gogo/tools/ is a finding"
+else bad "tools: a tagged tool parameter must fail" "rc=$rc $out"; fi
+: > "${WORK}/extra_tagged"
+
+out="$(run tools --strict --include-planned)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"no capability profile"* ]]; then
+  ok "tools: --include-planned is refused (no capability profile)"
+else bad "tools: --include-planned must be refused" "rc=$rc $out"; fi
+
+# --- GoGo-Infra#294 Sol F-01: a capability never crosses into tools ---------
+#
+# A tools row belongs to no environment, so an environment's readiness can
+# never be satisfied by one. If a capability enabled for dev required a tools
+# row, the requirement used to be skipped like an unreadable namespace — but
+# nothing marked it SKIPPED, and --strict printed READY without having looked.
+# Run against a copy of the tree whose manifest puts the harness capability
+# back into dev's profile: the shipped manifest cannot express the mistake.
+MUT="${WORK}/mutated"
+mkdir -p "$MUT"
+cp -R "${ROOT}/scripts" "${ROOT}/config" "$MUT/"
+python3 - "${MUT}/config/secrets.manifest.yml" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+marker = "  - name: ai_harness_live_decisions\n    kind: feature\n    enabled: []\n"
+assert text.count(marker) == 1, "mutation target moved"
+open(path, "w", encoding="utf-8").write(
+    text.replace(marker, marker.replace("enabled: []", "enabled: [dev]")))
+PY
+out="$(MANIFEST_READER="${MUT}/scripts/lib/manifest.py" PATH="${WORK}:${PATH}" AWS_PROFILE=test \
+  "${MUT}/scripts/secrets/validate.sh" dev --strict 2>&1)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"ai_harness_live_decisions needs tools:ai-harness/openrouter-api-key"* && "$out" != *"READY:"* ]]; then
+  ok "F-01: a dev capability requiring a tools row fails --strict instead of being skipped"
+else bad "F-01: a capability crossing into tools must fail readiness" "rc=$rc $out"; fi
+
+# F-02: the tools failure explains itself in the mode the operator ran.
+echo "/gogo/tools" > "${WORK}/deny"
+out="$(run tools)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"For tools this is always a failure"* && "$out" != *"In --strict mode"* ]]; then
+  ok "F-02: an unreadable /gogo/tools/ says it always fails, not that --strict made it fail"
+else bad "F-02: the tools SKIPPED message must not cite --strict" "rc=$rc $out"; fi
+: > "${WORK}/deny"
+
+# F-04 (Sol r2): the same branch also answers a tag-only failure, where the names
+# and types WERE checked. The text must say the run is incomplete, not that
+# nothing was looked at.
+echo deny > "${WORK}/tag_deny"
+out="$(run tools)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"tags: cannot search tags under /gogo/tools/"* && "$out" == *"validation incomplete"* \
+      && "$out" != *"nothing was checked"* && "$out" != *"OK: tools"* ]]; then
+  ok "F-04: unreadable tool tags fail as incomplete, without claiming nothing was checked"
+else bad "F-04: the tools tag-only SKIPPED text is wrong" "rc=$rc $out"; fi
+: > "${WORK}/tag_deny"
 
 printf '\n'
 if [[ "$failures" -eq 0 ]]; then echo "validate.sh: all checks passed"; else echo "validate.sh: ${failures} failure(s)"; fi

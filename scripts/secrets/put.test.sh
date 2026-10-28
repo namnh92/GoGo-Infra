@@ -225,6 +225,50 @@ else
   bad "a prod write with no terminal is refused with a message, before any AWS call" "exit ${status}; calls: $(tr '\n' ';' <"$CALLS"); out: $(cat "${SANDBOX}/out")"
 fi
 
+# GoGo-Infra#294: the tools pseudo-environment. The owner's copy step pipes
+# `aws ssm get-parameter … --output text` into `put.sh tools <path>`; that output
+# ends in a newline the stored value never had. The request must name
+# /gogo/tools/<path>, take the type from the manifest row, and carry the value
+# byte-exact without the trailing newline — a digits-only App id with "\n" on
+# the end is refused by github-app-token.sh.
+request_field() { python3 -c 'import json, sys; print(json.loads(open(sys.argv[1]).readline())[sys.argv[2]], end="")' "$REQUESTS" "$1"; }
+tools_put() { # tools_put <value-with-newline> <path>
+  : >"$CALLS"
+  : >"$REQUESTS"
+  printf '%s\n' "$1" | PATH="${SANDBOX}:${PATH}" AWS_PROFILE=stub "$SCRIPT" tools "$2" >"${SANDBOX}/out" 2>&1
+}
+
+tools_put 1234567 github/agent-app-id
+status=$?
+if [[ $status -eq 0 ]] && [[ "$(request_field Name)" == /gogo/tools/github/agent-app-id ]] && [[ "$(request_field Type)" == String ]]; then
+  ok "tools: a tool row is written under /gogo/tools/ with the manifest's type"
+else
+  bad "tools: a tool row is written under /gogo/tools/ with the manifest's type" "exit ${status}: $(cat "${SANDBOX}/out") $(cat "$REQUESTS")"
+fi
+if [[ "$(request_field Value)" == 1234567 ]] && ! grep -q 1234567 "$CALLS"; then
+  ok "tools: the piped value is stored without its trailing newline, never on an argument"
+else
+  bad "tools: the piped value is stored without its trailing newline, never on an argument" "$(cat "$REQUESTS") / $(cat "$CALLS")"
+fi
+
+PEM=$'line-one\nline-two\nline-three'  # shape of a .pem, without a key header gitleaks would match
+tools_put "$PEM" github/agent-app-private-key
+status=$?
+if [[ $status -eq 0 ]] && [[ "$(request_field Type)" == SecureString ]] && [[ "$(request_field Value)" == "$PEM" ]]; then
+  ok "tools: a multi-line key keeps its inner newlines and its SecureString type"
+else
+  bad "tools: a multi-line key keeps its inner newlines and its SecureString type" "exit ${status}: $(cat "${SANDBOX}/out")"
+fi
+
+: >"$CALLS"
+printf '1234567' | PATH="${SANDBOX}:${PATH}" AWS_PROFILE=stub "$SCRIPT" dev github/agent-app-id >"${SANDBOX}/out" 2>&1
+status=$?
+if [[ $status -ne 0 ]] && ! grep -q put-parameter "$CALLS" && grep -q "undeclared parameter" "${SANDBOX}/out"; then
+  ok "tools: a tool row is undeclared for a real environment, so put.sh dev refuses it"
+else
+  bad "tools: a tool row is undeclared for a real environment, so put.sh dev refuses it" "exit ${status}: $(cat "${SANDBOX}/out")"
+fi
+
 echo
 if [[ "$failures" -gt 0 ]]; then
   echo "${failures} put test(s) failed."

@@ -165,14 +165,15 @@ export function wrapperReady(root: string | null): Readiness {
     const { sha256: expected, exec } = entry as { sha256?: unknown; exec?: unknown };
     if (typeof expected !== 'string' || typeof exec !== 'boolean') return 'jev_wrapper_unverified';
     const file = join(root, path);
-    let st;
+    // Only absence is `missing`; any other stat or read failure (permissions, a file turned
+    // directory) is `unverified`, never an internal error (#287 retro-review F-01).
     try {
-      st = lstatSync(file);
-    } catch {
-      return 'jev_wrapper_missing';
+      const st = lstatSync(file);
+      if (!st.isFile() || ((st.mode & 0o100) !== 0) !== exec) return 'jev_wrapper_unverified';
+      if (createHash('sha256').update(readFileSync(file)).digest('hex') !== expected) return 'jev_wrapper_unverified';
+    } catch (e) {
+      return (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'jev_wrapper_missing' : 'jev_wrapper_unverified';
     }
-    if (!st.isFile() || ((st.mode & 0o100) !== 0) !== exec) return 'jev_wrapper_unverified';
-    if (createHash('sha256').update(readFileSync(file)).digest('hex') !== expected) return 'jev_wrapper_unverified';
   }
   try {
     accessSync(join(root, WRAPPER_CLOSURE[0]), constants.X_OK);
@@ -307,15 +308,17 @@ async function observe(o: Options): Promise<{ record: PromptRecord; stdout: stri
 }
 
 /**
- * `<wrapper> dev ai-harness/openrouter-api-key -- node <entry> prompt-hook --live-child …`; the answer, validated, or a closed code.
+ * `<wrapper> tools ai-harness/openrouter-api-key -- node <entry> prompt-hook --live-child …`; the answer, validated, or a closed code.
  * The wrapper leads its own process group (#260): the time limit or an oversized output kills the
  * whole group, so an `aws` the wrapper started does not outlive the hook. Killing the wrapper alone
- * left its descendants running.
+ * left its descendants running. Being outside the hook's group, it would also survive the hook
+ * being terminated, so while it runs a SIGTERM, SIGINT or SIGHUP to the hook, or an early exit,
+ * kills the group first and the signal is then raised again (#277 retro-review F-01).
  */
 function runChild(o: Options, wrapper: string, observationId: string, payload: string, stateDir: string): Promise<ChildAnswer | { error: string }> {
   const entry = o.entry ?? realpathSync(process.argv[1] ?? '');
   return new Promise((resolve) => {
-    const child = spawn(wrapper, ['dev', 'ai-harness/openrouter-api-key', '--', process.execPath, entry, 'prompt-hook', '--live-child', '--observation', observationId], {
+    const child = spawn(wrapper, ['tools', 'ai-harness/openrouter-api-key', '--', process.execPath, entry, 'prompt-hook', '--live-child', '--observation', observationId], {
       env: childEnv(o.env, stateDir),
       detached: true,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -324,7 +327,9 @@ function runChild(o: Options, wrapper: string, observationId: string, payload: s
     let overflow = false;
     let epipe = false;
     let settled = false;
-    const out = { stdout: '', stderr: '' };
+    // Raw bytes, bounded as maxBuffer bounded them (F-02), decoded once at the end.
+    const out = { stdout: [] as Buffer[], stderr: [] as Buffer[] };
+    const size = { stdout: 0, stderr: 0 };
     const killGroup = () => {
       try {
         process.kill(-child.pid!, 'SIGKILL');
@@ -332,6 +337,19 @@ function runChild(o: Options, wrapper: string, observationId: string, payload: s
         // The group is already gone.
       }
     };
+    const signals = ['SIGTERM', 'SIGINT', 'SIGHUP'] as const;
+    const onSignal = (sig: NodeJS.Signals) => {
+      killGroup();
+      release();
+      process.kill(process.pid, sig);
+    };
+    const handlers = signals.map((sig) => [sig, () => onSignal(sig)] as const);
+    const release = () => {
+      for (const [sig, h] of handlers) process.removeListener(sig, h);
+      process.removeListener('exit', killGroup);
+    };
+    for (const [sig, h] of handlers) process.once(sig, h);
+    process.once('exit', killGroup);
     const timer = setTimeout(() => {
       timedOut = true;
       killGroup();
@@ -340,17 +358,18 @@ function runChild(o: Options, wrapper: string, observationId: string, payload: s
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      release();
       resolve(r);
     };
     for (const name of ['stdout', 'stderr'] as const) {
-      child[name].setEncoding('utf8');
-      child[name].on('data', (chunk: string) => {
-        if (out[name].length + chunk.length > 64 * 1024) {
+      child[name].on('data', (chunk: Buffer) => {
+        size[name] += chunk.length;
+        if (size[name] > 64 * 1024) {
           overflow = true;
           killGroup();
           return;
         }
-        out[name] += chunk;
+        out[name].push(chunk);
       });
     }
     child.on('error', () => settle({ error: 'jev_spawn_failed' }));
@@ -363,9 +382,9 @@ function runChild(o: Options, wrapper: string, observationId: string, payload: s
       if (timedOut) return settle({ error: 'jev_timeout' });
       // No AWS session is told apart (#260) by require_aws's own line in common.sh, one of the
       // verified closure files; the text is matched, never kept or shown.
-      if ((status !== null && status !== 0) || epipe) return settle({ error: AWS_UNAVAILABLE.test(out.stderr) ? 'jev_aws_unavailable' : 'jev_wrapper_failed' });
+      if ((status !== null && status !== 0) || epipe) return settle({ error: AWS_UNAVAILABLE.test(Buffer.concat(out.stderr).toString('utf8')) ? 'jev_aws_unavailable' : 'jev_wrapper_failed' });
       if (overflow || status === null) return settle({ error: 'jev_spawn_failed' });
-      settle(parseChild(out.stdout));
+      settle(parseChild(Buffer.concat(out.stdout).toString('utf8')));
     });
   });
 }

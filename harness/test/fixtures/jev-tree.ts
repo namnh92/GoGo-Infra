@@ -23,8 +23,8 @@ export function writeManifest(tree: string, paths: readonly string[] = CLOSURE):
  */
 export function standInWrapper(stub: string, before = ''): string {
   return `#!/bin/sh
-# Stand-in for scripts/secrets/exec-with.sh: <env> <path> -- <command…>
-${before}[ "$1" = dev ] && [ "$2" = ai-harness/openrouter-api-key ] && [ "$3" = -- ] || exit 9
+# Stand-in for scripts/secrets/exec-with.sh: tools <path> -- <command…>
+${before}[ "$1" = tools ] && [ "$2" = ai-harness/openrouter-api-key ] && [ "$3" = -- ] || exit 9
 shift 3
 node="$1"; shift
 OPENROUTER_API_KEY=sk-or-v1-faketestkeyfaketest exec "$node" --import '${stub}' "$@"

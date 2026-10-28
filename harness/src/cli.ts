@@ -12,7 +12,7 @@
  * Live mode, through the SSM wrapper so the key reaches this process only:
  *
  *   JEV_MODE=live JEV_LIVE_AUTHORIZED=yes JEV_PRIVACY_REVIEWED=yes \
- *     ./scripts/secrets/exec-with.sh dev ai-harness/openrouter-api-key -- \
+ *     ./scripts/secrets/exec-with.sh tools ai-harness/openrouter-api-key -- \
  *     node harness/src/cli.ts decide --input task.json
  *
  * The outcome is advisory (ADR-0013 D-1): the input declares its own actions
