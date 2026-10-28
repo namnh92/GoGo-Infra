@@ -57,15 +57,26 @@ Cột SSM: `ci:` = `/gogo/ci/<env>/…`, `mobile:` = `/gogo/<env>/mobile/…`, `
 
 Không thuộc môi trường nào, không clone: `ai-harness/*`, `github/agent-app-*` (GoGo-Infra#294).
 
-## 0. Một lần cho cả team Apple (trước dev)
+## 0. Một lần cho cả team Apple (trước dev) — **xong 2026-10-28**
 
-1. **App ID.** Apple Developer → Certificates, Identifiers & Profiles → Identifiers: kiểm tra `max.gogo.dev`,
-   `max.gogo.stag`, `max.gogo.prod` đã đăng ký; thiếu thì tạo, bật **Push Notifications** cho cả ba. Profile Ad Hoc
-   (dev/stag) và profile App Store (prod) đều cần App ID tồn tại trước.
-2. **APNs key.** Apple Developer → Keys. Một `.p8` APNs dùng được cho mọi bundle id của team và Apple giới hạn số key
-   APNs mỗi team, nên kiểm tra key đang có trước khi tạo thêm. `.p8` này **chỉ upload lên OneSignal** (provider-setup.md
-   §5), không vào SSM, không vào Git.
-3. **Thiết bị tester (UDID).** Apple Developer → Devices. Cần trước build Ad Hoc đầu tiên (dev/stag).
+Team `HLSABWU9U8`. Agent đăng ký qua trình duyệt theo lệnh owner trong phiên; owner tự đăng nhập.
+
+App có extension OneSignal (`onesignal-expo-plugin`), nên **mỗi flavour cần 2 App ID + 1 App Group**, và lane
+(GoGo-MobileApp#391, #350) phải tạo profile cho **cả hai target**: app chính và
+`<bundle>.OneSignalNotificationServiceExtension`.
+
+| Flavour | App ID chính (capability) | App ID extension | App Group |
+| --- | --- | --- | --- |
+| dev | `max.gogo.dev`: Push, App Groups, Associated Domains (có từ trước, Xcode tạo) | `max.gogo.dev.OneSignalNotificationServiceExtension` (có từ trước) | `group.max.gogo.dev.onesignal` |
+| stag | `max.gogo.stag`: Push, App Groups — không Associated Domains (stag không claim link) | `max.gogo.stag.OneSignalNotificationServiceExtension`: App Groups | `group.max.gogo.stag.onesignal` |
+| prod | `max.gogo.prod`: Push, App Groups, Associated Domains | `max.gogo.prod.OneSignalNotificationServiceExtension`: App Groups | `group.max.gogo.prod.onesignal` |
+
+In-App Purchase do Apple bật mặc định trên mọi App ID.
+
+- **APNs key:** đã có `GoGoAPNS` (tạo 2026-08-27, Team Scoped — All topics, Sandbox & Production), dùng chung cho cả
+  ba bundle; **không tạo key mới**. `.p8` chỉ upload lên OneSignal (provider-setup.md §5), không vào SSM hay Git.
+- **Thiết bị tester (UDID):** Apple Developer → Devices; đã có thiết bị đăng ký từ trước. Thêm máy mới thì lane phải
+  tạo lại profile Ad Hoc (`sigh --adhoc --force`) trước build kế tiếp.
 
 ## 1. dev
 
