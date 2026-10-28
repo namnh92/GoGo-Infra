@@ -387,10 +387,21 @@ else bad "F-01: a capability crossing into tools must fail readiness" "rc=$rc $o
 # F-02: the tools failure explains itself in the mode the operator ran.
 echo "/gogo/tools" > "${WORK}/deny"
 out="$(run tools)"; rc=$?
-if [[ $rc -ne 0 && "$out" == *"/gogo/tools/ is always a failure"* && "$out" != *"In --strict mode"* ]]; then
+if [[ $rc -ne 0 && "$out" == *"For tools this is always a failure"* && "$out" != *"In --strict mode"* ]]; then
   ok "F-02: an unreadable /gogo/tools/ says it always fails, not that --strict made it fail"
 else bad "F-02: the tools SKIPPED message must not cite --strict" "rc=$rc $out"; fi
 : > "${WORK}/deny"
+
+# F-04 (Sol r2): the same branch also answers a tag-only failure, where the names
+# and types WERE checked. The text must say the run is incomplete, not that
+# nothing was looked at.
+echo deny > "${WORK}/tag_deny"
+out="$(run tools)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"tags: cannot search tags under /gogo/tools/"* && "$out" == *"validation incomplete"* \
+      && "$out" != *"nothing was checked"* && "$out" != *"OK: tools"* ]]; then
+  ok "F-04: unreadable tool tags fail as incomplete, without claiming nothing was checked"
+else bad "F-04: the tools tag-only SKIPPED text is wrong" "rc=$rc $out"; fi
+: > "${WORK}/tag_deny"
 
 printf '\n'
 if [[ "$failures" -eq 0 ]]; then echo "validate.sh: all checks passed"; else echo "validate.sh: ${failures} failure(s)"; fi
