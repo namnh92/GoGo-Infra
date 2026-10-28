@@ -322,6 +322,25 @@ describe('I6: only the verified closure of the running tree is executed (A-F-01,
     });
   }
 
+  // #287 retro-review F-01 (Sol, 2026-10-28): only absence is "missing"; any other stat or read
+  // failure of a listed closure file is "unverified", never an internal error.
+  for (const [name, lock, unlock] of [
+    ['an unreadable common.sh', (w: World) => chmodSync(join(w.tree, CLOSURE[1]), 0o000), (w: World) => chmodSync(join(w.tree, CLOSURE[1]), 0o644)],
+    ['an inaccessible scripts/lib/', (w: World) => chmodSync(join(w.tree, 'scripts/lib'), 0o000), (w: World) => chmodSync(join(w.tree, 'scripts/lib'), 0o755)],
+  ] as const) {
+    it(`#260: ${name} → jev_wrapper_unverified, nothing sent`, async () => {
+      const w = world((x) => standInWrapper(x.stub, `touch '${join(x.dir, 'ran')}'\n`));
+      await grant(w, 'setup');
+      lock(w);
+      try {
+        const r = await hook(w, '#jev\nCó nên tách module?');
+        assert.deepEqual([r.record.code, r.sent.length, existsSync(join(w.dir, 'ran'))], ['jev_wrapper_unverified', 0, false]);
+      } finally {
+        unlock(w);
+      }
+    });
+  }
+
   it('[new-guard] a closure file that is a symlink to identical bytes → jev_wrapper_unverified', async () => {
     const w = world();
     await grant(w, 'setup');

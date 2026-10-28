@@ -165,14 +165,15 @@ export function wrapperReady(root: string | null): Readiness {
     const { sha256: expected, exec } = entry as { sha256?: unknown; exec?: unknown };
     if (typeof expected !== 'string' || typeof exec !== 'boolean') return 'jev_wrapper_unverified';
     const file = join(root, path);
-    let st;
+    // Only absence is `missing`; any other stat or read failure (permissions, a file turned
+    // directory) is `unverified`, never an internal error (#287 retro-review F-01).
     try {
-      st = lstatSync(file);
-    } catch {
-      return 'jev_wrapper_missing';
+      const st = lstatSync(file);
+      if (!st.isFile() || ((st.mode & 0o100) !== 0) !== exec) return 'jev_wrapper_unverified';
+      if (createHash('sha256').update(readFileSync(file)).digest('hex') !== expected) return 'jev_wrapper_unverified';
+    } catch (e) {
+      return (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'jev_wrapper_missing' : 'jev_wrapper_unverified';
     }
-    if (!st.isFile() || ((st.mode & 0o100) !== 0) !== exec) return 'jev_wrapper_unverified';
-    if (createHash('sha256').update(readFileSync(file)).digest('hex') !== expected) return 'jev_wrapper_unverified';
   }
   try {
     accessSync(join(root, WRAPPER_CLOSURE[0]), constants.X_OK);
