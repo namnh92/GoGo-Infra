@@ -170,6 +170,11 @@ esac
 REAL_GIT="$(type -P git)" || die "git is not on PATH"
 prog="$REAL_GIT"
 if [[ "$cmd" == gh ]]; then prog="$(type -P gh)" || die "gh is not on PATH"; fi
+# A relative PATH entry (./tools, or an empty one) gives a relative path; --child runs only an
+# absolute one. Anchored here, to the directory the lookup was made from, before any token
+# exists (#256 S4-02) — the same file the checks inspect, not a second lookup.
+[[ "$REAL_GIT" == /* ]] || REAL_GIT="${PWD}/${REAL_GIT}"
+[[ "$prog" == /* ]] || prog="${PWD}/${prog}"
 
 # --- The allowlist (I9). Every option of a form is named below or the command is refused. ---
 # Checks that need the repositories the token covers (known only after the origin lookup) are
