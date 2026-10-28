@@ -560,6 +560,37 @@ describe('#253 rev 3 I-4b: offline only to a completed activation (D2)', () => {
     assert.ok('tip' in done.provenance);
     assert.deepEqual(journal(w).slice(-3).map((r) => [r.record, (r.to as { sha?: string } | undefined)?.sha ?? r.sha]), [['intent', b.sha], ['intent', b.sha], ['activated', b.sha]]);
   });
+
+  // #253 S4-03 (#260): interrupted after the ACTIVE rename, before `activated`. The new version
+  // stays selected without completed journal evidence; the previous one is not kept.
+  it('post-rename crash: the new version stays ACTIVE; offline only back to an activated one; online completes it', async () => {
+    const w = world();
+    const { a, b } = await withB(w);
+    const install = open(w);
+    install.appendLine('history.jsonl', JSON.stringify({ record: 'intent', kind: 'activate', from: { sha: a.sha, manifestDigest: a.manifestDigest }, to: { sha: b.sha, manifestDigest: b.manifestDigest }, approval: 'x', actor: 'o', source: { source: w.origin, tip: b.sha }, at: '2026-10-28T00:00:00.000Z' }));
+    install.publish('ACTIVE', `${JSON.stringify({ schema: 1, sha: b.sha, manifestDigest: b.manifestDigest }, null, 2)}\n`, 0o644);
+    assert.equal(readActive(open(w)).sha, b.sha, 'B is selected');
+    assert.equal(journal(w).some((r) => r.record === 'activated' && r.sha === b.sha), false, 'no completed evidence for B');
+    const offline = { ...w, source: { url: join(w.root, 'gone.git'), allowLocal: true } };
+    await assert.rejects(activateAs(offline, b.sha), /online provenance required/);
+    assert.equal(readActive(open(w)).sha, b.sha);
+    const done = await activateAs(w, b.sha);
+    assert.ok('tip' in done.provenance);
+    assert.deepEqual(journal(w).slice(-1).map((r) => [r.record, r.sha]), [['activated', b.sha]]);
+    const back = await activateAs(offline, a.sha, 'approval-rollback');
+    assert.equal(back.action, 'rollback');
+    assert.equal(readActive(open(w)).sha, a.sha);
+  });
+
+  it('docs and the activate comment describe interruption before and after the ACTIVE rename', () => {
+    const docs = readFileSync(join(REPO, 'docs/ai-harness.md'), 'utf8').replace(/\s+/g, ' ');
+    const launcher = readFileSync(join(HARNESS, 'src/install/launcher.ts'), 'utf8').replace(/\s*\*\s*/g, ' ');
+    for (const [name, text] of [['docs', docs], ['launcher.ts', launcher]] as const) {
+      assert.equal(/interruption (anywhere )?leaves the previous `?ACTIVE/i.test(text), false, `${name}: the old promise`);
+      assert.match(text, /before the `?ACTIVE`? rename/i, name);
+      assert.match(text, /after (it|the `?ACTIVE`? rename)[^.]*new version (stays|remains) selected/i, name);
+    }
+  });
 });
 
 describe('#245 activation: an owner act, recorded, reversible', () => {

@@ -788,11 +788,15 @@ exec "$node" -- "$here/harness.mts" "$@"
  * asked: the lock, ACTIVE and journal classified, the candidate verified and
  * its provenance proven. Nothing changes unless `confirm` returns true; then,
  * in order: a damaged journal quarantined and restarted, bin/harness written
- * if absent, a broken ACTIVE quarantined, the `intent` record, ACTIVE
- * replaced by rename — the only step that changes what runs — and the
- * `activated` record. An interruption anywhere leaves the previous ACTIVE,
- * and re-running activation completes it; a version whose `activated`
- * record is missing needs online provenance again.
+ * from --node if absent or replaced if its text differs (old file to
+ * quarantine/), a broken ACTIVE quarantined, the `intent` record, ACTIVE
+ * replaced by rename — the only step that changes which version runs — and
+ * the `activated` record. Interrupted before the ACTIVE rename, no version
+ * that runs has changed (a bin/harness already written stays and matches
+ * on the re-run) and re-running activation completes it. After the ACTIVE
+ * rename, before `activated`, the new version stays selected without
+ * completed journal evidence (#253 S4-03): re-activating it needs online
+ * provenance again, and offline only an `activated` version can be chosen.
  */
 export async function activate(
   o: { install: Install; sha: string; approval: string; actor?: string; now?: () => Date; source?: Source; node?: string; warn?: (m: string) => void },
