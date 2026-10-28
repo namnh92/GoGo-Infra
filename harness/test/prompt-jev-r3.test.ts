@@ -460,6 +460,83 @@ describe('I8: stdout is written by the hook only, from closed codes and fixed te
   });
 });
 
+describe('#260 / #254 S4-02: a note says "not sent" only when nothing can have left', () => {
+  const NOT_SENT = /không được gửi/;
+  const MAYBE_SENT = /không lấy được gợi ý JEV dùng được \((jev_[a-z_]+)\)\. Request có thể đã tới OpenRouter/;
+
+  /** The real child, with a fetch stub that logs the request, then answers `respond` (a JS expression). */
+  function afterRequest(respond: string): World {
+    const w = world();
+    writeFileSync(w.stub, `import { appendFileSync } from 'node:fs';
+globalThis.fetch = async (url, init) => {
+  appendFileSync(${JSON.stringify(w.fetchLog)}, JSON.stringify({ url: String(url), hasKey: Boolean(process.env.OPENROUTER_API_KEY), body: JSON.parse(init.body) }) + '\\n');
+  return ${respond};
+};
+`);
+    return w;
+  }
+
+  for (const [name, respond, code] of [
+    ['HTTP 200, body not JSON', "new Response('<html>', { status: 200 })", 'jev_fallback_invalid_response'],
+    ['HTTP 200, answers invalid', "new Response(JSON.stringify({ id: 'gen-1', model: 'typesafe/jev-1.14-20261014', answers: { nope: 1 } }), { status: 200 })", 'jev_fallback_invalid_response'],
+    ['HTTP 502', "new Response('{}', { status: 502 })", 'jev_fallback_server'],
+    ['no answer before JEV_TIMEOUT_MS', 'new Promise((_, reject) => init.signal.addEventListener(\'abort\', () => reject(init.signal.reason)))', 'jev_fallback_timeout'],
+  ] as const) {
+    it(`${name}: the request was made, and the note does not say it was not sent`, async () => {
+      const w = afterRequest(respond);
+      await grant(w, 'setup');
+      const r = await hook(w, '#jev\nCó nên tách module?', { env: { JEV_TIMEOUT_MS: '300' } });
+      assert.deepEqual([r.sent.length, r.record.code], [1, code], JSON.stringify(r.record));
+      const text = context(r.stdout);
+      assert.equal(NOT_SENT.test(text), false, text);
+      assert.equal(MAYBE_SENT.exec(text)?.[1], code, text);
+    });
+  }
+
+  for (const [name, out, code] of [
+    ['a child that crashed', { error: 'child_failed' }, 'jev_child_child_failed'],
+    ['unreadable child output', 'not json', 'jev_bad_output'],
+    ['a network fallback', { outcome: 'HUMAN_APPROVAL', source: 'fallback', fallback: true, errorCategory: 'network', model: null }, 'jev_fallback_network'],
+  ] as const) {
+    it(`${name}: delivery unknown, neutral note`, async () => {
+      const w = world(answering(out));
+      await grant(w, 'setup');
+      const r = await hook(w, '#jev\nCó nên tách module?');
+      assert.equal(r.record.code, code);
+      assert.equal(MAYBE_SENT.exec(context(r.stdout))?.[1], code);
+    });
+  }
+
+  it('a wrapper killed at the time limit: delivery unknown, neutral note', async () => {
+    const w = world(() => '#!/bin/sh\ncat >/dev/null\nsleep 5\n');
+    await grant(w, 'setup');
+    const stdout = await observePrompt({ input: new PassThrough().end(hookJson('#jev\nCó nên tách module?')), env: w.env, entry: CLI, treeRoot: w.tree, childTimeoutMs: 300 } as Parameters<typeof observePrompt>[0]);
+    assert.equal(MAYBE_SENT.exec(context(stdout))?.[1], 'jev_timeout');
+  });
+
+  it('every "not sent" code is a note code', () => {
+    const { NOT_SENT_CODES, NOTE_CODES } = obs as unknown as Record<string, ReadonlySet<string>>;
+    for (const c of NOT_SENT_CODES!) assert.equal(NOTE_CODES!.has(c), true, c);
+  });
+
+  it('refusals before the request still say "not sent"', async () => {
+    let w = world();
+    let r = await hook(w, '#jev\nCó nên tách module?');
+    assert.deepEqual([r.record.code, r.sent.length], ['jev_not_configured', 0]);
+    assert.match(context(r.stdout), NOT_SENT);
+    w = world();
+    await grant(w, 'setup');
+    r = await hook(w, '#jev\nCó nên tách module?', { env: { HARNESS_JEV_MONTHLY_USD: '0' } });
+    assert.deepEqual([r.record.code, r.sent.length], ['jev_fallback_budget_exhausted', 0]);
+    assert.match(context(r.stdout), NOT_SENT);
+    w = world(answering({ error: 'no_key' }));
+    await grant(w, 'setup');
+    r = await hook(w, '#jev\nCó nên tách module?');
+    assert.equal(r.record.code, 'jev_child_no_key');
+    assert.match(context(r.stdout), NOT_SENT);
+  });
+});
+
 describe('I10: consent box and docs state the D5 grammar, the closure and the config rule', () => {
   const docs = readFileSync(join(REPO, 'docs/ai-harness.md'), 'utf8');
   const adr = readFileSync(join(REPO, 'docs/adr/0013-ai-harness-jev-decision-router.md'), 'utf8');
