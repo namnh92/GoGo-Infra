@@ -63,6 +63,15 @@ FAKE_PID=""
 trap '[[ -n "$FAKE_PID" ]] && { kill "$FAKE_PID" 2>/dev/null; wait "$FAKE_PID" 2>/dev/null; }; rm -rf "$SANDBOX"' EXIT
 mkdir -p "${SANDBOX}/bin" "${SANDBOX}/path" "${SANDBOX}/helpers" "${SANDBOX}/ctl" "${SANDBOX}/tmp" "${SANDBOX}/owner"
 export TMPDIR="${SANDBOX}/tmp"
+# An inert ssh first on every PATH this script hands out, stub and real runs alike (#256 S4-04):
+# the owner's sshCommand is not loaded by the wrapper (D7) and HTTP proxies do not carry SSH, so
+# without it a regressed transport gate (I4) would run the real ssh against example.com:22. It
+# records its use in ssh.log, which the checks require to stay empty, and connects nowhere.
+mkdir -p "${SANDBOX}/inert"
+printf '#!/bin/sh\necho "INERT-SSH $*" >>"%s/ssh.log"\nexit 255\n' "$SANDBOX" >"${SANDBOX}/inert/ssh"
+chmod +x "${SANDBOX}/inert/ssh"
+ORIG_PATH="${SANDBOX}/inert:${ORIG_PATH}"
+export PATH="$ORIG_PATH"
 cp "${DIR}/as-agent.sh" "${SANDBOX}/bin/"
 export CALLS="${SANDBOX}/calls"
 TOKEN='ghs_stubAgentToken_0123456789abcdef'
@@ -510,12 +519,17 @@ git -C "$SSH_REPO" remote set-url origin git@github.com:namnh92/GoGo-Ssh.git
 # Git's SSH transport is not allowed at all (one transport, I4), and the SSH agent is not passed on.
 : >"$SSH_LOG"
 cat >"${CTL}/push_script" <<'S'
+echo "child: ssh-program=$(command -v ssh)"
 echo "child: ssh=$("$REAL_GIT" ls-remote ssh://git@example.com/x 2>&1)"
 S
 out="$(cd "$SSH_REPO" && "$AS" -- "${PUSH[@]}" 2>&1)"
 unctl push_script
 grep -q 'child: GIT_SSH_COMMAND=unset SSH_AUTH_SOCK=unset' <<<"$out" && grep -q "child: ssh=.*transport 'ssh' not allowed" <<<"$out" && [[ ! -s "$SSH_LOG" ]] \
-  && ok "T6: git's SSH transport is not allowed for the command, and the SSH agent is not passed on" || bad "ssh disabled" "out=$out"
+  && ok "T6: git's SSH transport is not allowed for the command, and the SSH agent is not passed on" || bad "ssh disabled" "out=$out ssh.log=$(cat "$SSH_LOG")"
+# #256 S4-04: the ssh the command would run is the inert one, so a regressed I4 fails here
+# (ssh.log) instead of opening a connection to example.com:22.
+grep -qx "child: ssh-program=${SANDBOX}/inert/ssh" <<<"$out" \
+  && ok "S4-04: the command's ssh is the sandbox's inert ssh" || bad "S4-04 inert ssh" "$(grep 'ssh-program' <<<"$out")"
 
 git -C "$SSH_REPO" config 'http.https://github.com/.extraheader' 'AUTHORIZATION: basic OWNER_STUB'
 git -C "$SSH_REPO" config http.extraheader 'AUTHORIZATION: basic GENERIC_STUB'
