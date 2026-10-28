@@ -27,8 +27,9 @@
 #      HOME, GH_CONFIG_DIR and core.hooksPath point there, GIT_CONFIG_GLOBAL=/dev/null and
 #      GIT_CONFIG_NOSYSTEM=1. The owner's ~/.gitconfig, ~/.config/git, ~/.netrc, ~/.ssh, gh
 #      hosts.yml/config.yml/aliases and global safe.directory are not loaded (owner decision D7:
-#      proxy and CA come from the environment only). Nothing secret is written there; the
-#      directory is left to the TMPDIR policy because this process execs into the command.
+#      proxy and CA come from the environment only). Nothing secret is written there. This process
+#      waits for the command and removes the directory when it ends, or when HUP, INT or TERM
+#      stops it (#260); only a SIGKILL leaves one behind.
 #  I3  One credential. Process-only git configuration (GIT_CONFIG_*, read last): an empty
 #      credential.helper resets every helper collected from any file, then one helper for
 #      https://github.com answers with GH_TOKEN, and only when asked for protocol=https,
@@ -333,8 +334,11 @@ fi
 
 # --- The sealed world (I2) and the constructed environment (I1–I7). ---
 W="$(mktemp -d "${TMPDIR:-/tmp}/as-agent.XXXXXX")" || die "cannot create the sealed home under ${TMPDIR:-/tmp}"
-# Removed again if a check refuses below; once the command runs (exec), it stays for it.
+# Removed when this process exits: a refusal below, the command's end, or a signal (#260).
 trap 'rm -rf "$W"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 chmod 700 "$W"
 mkdir "${W}/home" "${W}/gh" "${W}/hooks"
 
@@ -481,6 +485,10 @@ token="$("${DIR}/exec-with.sh" dev \
   || die "could not mint an agent token (AWS credentials? see docs/secrets.md → Agent GitHub App). Not falling back to the owner's identity."
 [[ -n "$token" ]] || die "could not mint an agent token. Not falling back to the owner's identity."
 
-# --- I11: seal and exec. The pairs leave through a pipe, written by a builtin; stage 2 imports them. ---
+# --- I11: seal and run. The pairs leave through a pipe, written by a builtin; stage 2 imports them. ---
+# Stage 2 runs in a subshell that execs it, not in place of this process, so the EXIT trap above
+# removes the sealed home once the command ends (#260). The command's exit status is this one's.
 emit() { printf '%s\0' "${child_env[@]}" "GH_TOKEN=${token}"; }
-exec -c "$BASH" "${DIR}/as-agent.sh" --child -- "$prog" "${@:2}" 3< <(emit)
+rc=0
+(exec -c "$BASH" "${DIR}/as-agent.sh" --child -- "$prog" "${@:2}" 3< <(emit)) || rc=$?
+exit "$rc"
