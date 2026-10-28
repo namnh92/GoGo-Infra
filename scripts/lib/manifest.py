@@ -163,8 +163,11 @@ def main():
 
     env = sys.argv[1]
     # GoGo-Infra#286 (ADR-0015). Any other word would match no row and answer
-    # "nothing required" with exit 0, which reads like a real answer.
-    if env not in ("dev", "stag", "prod"):
+    # "nothing required" with exit 0, which reads like a real answer. `ci` is
+    # not an environment but the env-less pipeline tree (/gogo/ci, see
+    # ssm_prefix and `require_env_arg … allow-ci`): put.sh/get.sh/delete.sh pass
+    # it through to resolve a row's namespace, and must keep working (Sol F-06).
+    if env not in ("dev", "stag", "prod", "ci"):
         sys.stderr.write(f"error: environment must be one of: dev, stag, prod (got '{env}')\n")
         return 2
     args = sys.argv[2:]

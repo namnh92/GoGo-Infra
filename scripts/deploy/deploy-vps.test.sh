@@ -231,6 +231,21 @@ for retired in staging production; do
   fi
 done
 
+# The `.env.` prefix is the contract (remote.sh); a bare word must not pass
+# the vocabulary check while naming a file the host does not have.
+: >"${SANDBOX}/calls"
+out="$(REV_MODE=ok SANDBOX_LOG="${SANDBOX}/calls" PATH="${SANDBOX}:${PATH}" \
+  DEPLOY_HOST=fake.invalid DEPLOY_USER=deploy DEPLOY_PATH=/srv/gogo \
+  KNOWN_HOSTS_FILE=/dev/null SSH_KEY_FILE=/dev/null REMOTE_ENV_FILE="dev" \
+  COMPOSE_EDGE=docker/docker-compose.edge-tunnel.yml \
+  bash "$DEPLOY" develop /dev/null 2>&1)"
+code=$?
+if [[ $code -eq 2 ]] && [[ "$out" == *"must look like .env.<environment>"* ]] && [[ ! -s "${SANDBOX}/calls" ]]; then
+  pass "deploy refuses REMOTE_ENV_FILE without the .env. prefix"
+else
+  fail "deploy accepted REMOTE_ENV_FILE=dev (exit ${code})"
+fi
+
 check_case() {
   local name="$1" mode="$2" want_marker="$3" needle="$4" out code marker
   : >"${SANDBOX}/calls"

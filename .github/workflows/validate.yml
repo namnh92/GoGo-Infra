@@ -313,6 +313,12 @@ jobs:
       - name: the seed forwards its production confirmation
         run: ./scripts/deploy/seed-vps.test.sh
 
+      # GoGo-Infra#286 (ADR-0015), Sol F-07. The provisioners create the provider
+      # resource first and store its value second: a retired environment word
+      # must be refused before the first provider call, or it leaves an orphan.
+      - name: provisioners refuse a retired environment before any provider call
+        run: ./scripts/bootstrap/provision-env.test.sh
+
       # GoGo-Infra#187 / GoGo-BE#679. An optional value that exists but cannot
       # be read must stop the deploy, not render as absent: absent
       # cms/password-login-enabled means `true`, so one throttled read of an

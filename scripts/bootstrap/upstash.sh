@@ -23,6 +23,15 @@
 set -euo pipefail
 
 ENVIRONMENT="${1:-dev}"
+
+# GoGo-Infra#286 (ADR-0015): checked before guard_existing and before any
+# provider call. A retired `staging`/`production` would otherwise create a
+# `gogo-<word>` resource at the provider and only then be refused by put.sh —
+# an orphan with its connection value never stored (Sol F-07).
+case "$ENVIRONMENT" in
+  dev | stag | prod) ;;
+  *) echo "error: environment must be one of: dev, stag, prod (got '${ENVIRONMENT}')" >&2; exit 2 ;;
+esac
 NAME="gogo-${ENVIRONMENT}-redis"
 REGION="${UPSTASH_REGION:-ap-southeast-1}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

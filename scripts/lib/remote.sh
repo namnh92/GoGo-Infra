@@ -25,6 +25,9 @@ DEPLOY_PORT="${DEPLOY_PORT:-22}"
 REMOTE_ENV_FILE="${REMOTE_ENV_FILE:?set REMOTE_ENV_FILE, e.g. .env.dev or .env.prod}"
 
 # Derived from the env file name so the two cannot disagree: .env.dev -> dev.
+# The prefix is part of the contract: a bare `dev` would pass the check below
+# while naming a file the host does not have.
+[[ "$REMOTE_ENV_FILE" == .env.* ]] || { echo "error: REMOTE_ENV_FILE must look like .env.<environment> (got '${REMOTE_ENV_FILE}')" >&2; exit 2; }
 ENVIRONMENT_NAME="${REMOTE_ENV_FILE#.env.}"
 : "${ENVIRONMENT_NAME:?REMOTE_ENV_FILE must look like .env.<environment>}"
 # GoGo-Infra#286 (ADR-0015): deploy, rollback and seed all derive the compose

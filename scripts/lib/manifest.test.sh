@@ -690,6 +690,14 @@ for retired in staging production; do
   fi
 done
 rm -f "${TMPDIR:-/tmp}/mt.err"
+# Sol F-06: `ci` is the env-less pipeline tree, not an environment; the reader
+# answers for it (put.sh/get.sh/delete.sh resolve ci rows through it).
+ci_rows="$(python3 "$READER" ci --namespace all --consumer all 2>/dev/null | grep -c . || true)"
+if [[ "$ci_rows" -gt 0 ]]; then
+  ok "manifest.py still answers for the ci namespace (${ci_rows} rows)"
+else
+  bad "manifest.py no longer answers for the ci namespace" "exit $(python3 "$READER" ci --namespace all --consumer all >/dev/null 2>&1; echo $?)"
+fi
 
 echo
 if [[ "$failures" -gt 0 ]]; then
