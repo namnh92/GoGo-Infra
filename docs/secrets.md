@@ -91,12 +91,36 @@ SSO session (`gogobootstrap`) does. Other scripts (`pull.sh`, `setup-env.sh`, �
 
    A row never provisioned at the old path (`ai-harness/anthropic-api-key` until ADR-0013's owner
    action) stops the loop at `get-parameter`; skip it and re-run the rest.
-3. Check: `./scripts/secrets/as-agent.sh -- gh issue list` prints no legacy line; one `#jev`
-   turn; **every machine that wants to use the harness reinstalls it from `develop`**
-   (the installed hook carries its own `exec-with.sh` and keeps calling the old shape until
-   then; `install-verify` reports it stale after the merge).
+3. Prove every reader is on the new path **before** anything is deleted. A `#jev` turn that
+   works proves nothing here: the hook keeps the wrapper's stderr only when the wrapper fails
+   (`harness/src/shadow/prompt-observation.ts`, `runChild`), so a turn served through the
+   fallback looks exactly like one served from `/gogo/tools/`. On **every machine that wants to
+   use the harness**, in this order:
+
+   ```bash
+   # a. reinstall from develop (the install carries its own frozen exec-with.sh and keeps
+   #    calling `dev …` until then; install-verify reports it stale after the merge)
+   #    — docs/ai-harness.md → "Installed copy (hooks and automation)", then:
+   ~/.gogo-harness/install/bin/harness install-verify
+
+   # b. the installed wrapper itself, on the OpenRouter row, with a no-op child, under the
+   #    AWS identity the hook runs with. It must exit 0 AND print no "legacy path" line.
+   active="$(python3 -c 'import json,os; print(json.load(open(os.path.expanduser("~/.gogo-harness/install/ACTIVE")))["sha"])')"
+   ~/.gogo-harness/install/versions/"$active"/scripts/secrets/exec-with.sh \
+     tools ai-harness/openrouter-api-key -- true
+
+   # c. only then a #jev smoke turn
+   ```
+
+   And from the checkout: `./scripts/secrets/as-agent.sh -- gh issue list` must print no
+   `legacy path` line either. A legacy line anywhere means step 2 is incomplete for that row —
+   fix that, do not go on.
 4. The owner deletes the five old parameters with `aws ssm delete-parameter --name
-   /gogo/ci/dev/<path>` (not `delete.sh`, which resolves paths through the manifest).
+   /gogo/ci/dev/<path>` (not `delete.sh`, which resolves paths through the manifest). Then
+   record the ACs on the tools-only state: `./scripts/secrets/as-agent.sh -- gh issue list`
+   (AC-1), one `#jev` turn (AC-1), `./scripts/secrets/validate.sh dev` with no UNDECLARED
+   `ai-harness/` or `github/agent-app-*` rows (AC-2), `./scripts/secrets/validate.sh tools`
+   OK.
 5. A follow-up PR removes the fallback (`LEGACY_TOOLS_PREFIX` in `common.sh`).
 
 `ai-harness/*` (GoGo-Infra#241, [`adr/0013`](adr/0013-ai-harness-jev-decision-router.md)) follow the
