@@ -32,7 +32,15 @@ Usage:
                                          caller can read `scope`, `provider` or
                                          `infra_readable` without a YAML parser
 
-Namespace defaults to `backend` and consumer defaults to `runtime`. Both
+`<env>` is dev, staging or prod — or `tools` (GoGo-Infra#294), the
+pseudo-environment of the developer-tooling keys under /gogo/tools/. The
+`tools` namespace belongs to `tools` alone: a real environment is never handed
+a tools row, whatever filter it asks for, and `tools` is handed nothing else.
+That is what keeps the agent App key and the harness's provider keys out of
+every environment's validation, rendering and parity — one rule here instead
+of one filter in each caller.
+
+Namespace defaults to `backend` (`tools` for `tools`) and consumer defaults to `runtime`. Both
 defaults are load-bearing rather than convenient: render-env.sh renders every
 row it is given into the API's runtime env file, so a caller written before
 either field existed must keep receiving exactly the rows it was written to
@@ -188,11 +196,11 @@ def main():
             return 2
         extra_field = args[index + 1]
 
-    namespace = "backend"
+    namespace = "tools" if env == "tools" else "backend"
     if "--namespace" in args:
         index = args.index("--namespace")
         if index + 1 >= len(args):
-            sys.stderr.write("--namespace needs a value: backend, mobile, or all\n")
+            sys.stderr.write("--namespace needs a value: backend, mobile, ci, tools, or all\n")
             return 2
         namespace = args[index + 1]
 
@@ -207,6 +215,10 @@ def main():
         consumer = args[index + 1]
 
     for entry in parse():
+        # The tools namespace and the tools pseudo-environment imply each other
+        # (module docstring). Before every other filter, so no flag widens it.
+        if (entry.get("namespace", "backend") == "tools") != (env == "tools"):
+            continue
         if required_only and env not in entry["required_list"]:
             continue
         if namespace != "all" and entry.get("namespace", "backend") != namespace:

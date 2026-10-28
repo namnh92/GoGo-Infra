@@ -4,7 +4,7 @@
  * Run only as a child of `prompt-hook`, started through the secrets wrapper
  * so the OpenRouter key exists in this process and nowhere else:
  *
- *   exec-with.sh dev ai-harness/openrouter-api-key -- node <launcher> prompt-hook --live-child --observation <id>
+ *   exec-with.sh tools ai-harness/openrouter-api-key -- node <launcher> prompt-hook --live-child --observation <id>
  *
  * The prompt is re-read from stdin (never a file), parsed and sanitized the
  * same way, and asked as an `intake` observation: no deterministic shortcut,

@@ -42,13 +42,16 @@ echo "aws $*" >>"$CALLS"
 # GoGo-Infra#231, Sol F-01: a later fetch must not inherit an earlier secret.
 for v in SENTRY_AUTH_TOKEN ASC_KEY_CONTENT ASC_KEY_ID ASC_ISSUER_ID \
   ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD \
-  FIREBASE_SERVICE_CREDENTIALS_JSON FIREBASE_APP_ID_IOS FIREBASE_APP_ID_ANDROID; do
+  FIREBASE_SERVICE_CREDENTIALS_JSON FIREBASE_APP_ID_IOS FIREBASE_APP_ID_ANDROID \
+  GITHUB_APP_PRIVATE_KEY GITHUB_APP_ID GITHUB_APP_INSTALLATION_ID OPENROUTER_API_KEY; do
   [[ -n "${!v:-}" ]] && echo "aws-inherited $v" >>"$CALLS"
 done
 case "$1 $2" in
   "sts get-caller-identity") echo '{}' ;;
   "ssm get-parameter")
     [[ -n "${STUB_GET_FAIL:-}" ]] && { echo "ParameterNotFound" >&2; exit 254; }
+    # GoGo-Infra#294: fail only the reads under one tree, to drive the fallback.
+    [[ -n "${STUB_FAIL_PREFIX:-}" && "$4" == "${STUB_FAIL_PREFIX}"* ]] && { echo "ParameterNotFound" >&2; exit 254; }
     printf '%s\n' "${STUB_VALUE}" ;;
 esac
 exit 0
@@ -85,6 +88,17 @@ done
 exit "${CHILD_EXIT:-0}"
 LANE
 chmod +x "${SANDBOX}/fblane"
+
+# The agent App's set (GoGo-Infra#294): the three rows as-agent.sh hands to
+# github-app-token.sh.
+cat >"${SANDBOX}/appchild" <<'LANE'
+#!/usr/bin/env bash
+for v in GITHUB_APP_PRIVATE_KEY GITHUB_APP_ID GITHUB_APP_INSTALLATION_ID; do
+  if [[ "${!v:-}" == "$STUB_VALUE" ]]; then echo "app: $v present"; else echo "app: $v absent"; fi
+done
+exit 0
+LANE
+chmod +x "${SANDBOX}/appchild"
 
 run() {
   : >"$CALLS"
@@ -229,6 +243,77 @@ if grep -q "get-parameter" "$CALLS"; then
   bad "a row with no env_var never reaches SSM" "$(cat "$CALLS")"
 else
   ok "a row with no env_var never reaches SSM"
+fi
+
+# 3d. The tools pseudo-environment (GoGo-Infra#294). Tool keys live under
+# /gogo/tools/, belong to no environment, and until the owner has copied them
+# there a read falls back to their old home /gogo/ci/dev/ — once per path, with
+# a line on stderr naming the old path so the cutover can see who still uses it.
+APP_SET=(github/agent-app-private-key github/agent-app-id github/agent-app-installation-id)
+app_present() { [[ "$(grep -c '^app: .* present$' "${SANDBOX}/out")" == 3 ]]; }
+gets() { grep -c "ssm get-parameter" "$CALLS"; }
+
+run tools "${APP_SET[@]}" -- appchild
+status=$?
+if [[ $status -eq 0 ]] && app_present; then
+  ok "tools: the agent App set reaches the command"
+else
+  bad "tools: the agent App set reaches the command" "status=${status}: $(cat "${SANDBOX}/out")"
+fi
+if [[ "$(gets)" == 3 ]] && [[ "$(grep -c -- '--name /gogo/tools/github/agent-app-' "$CALLS")" == 3 ]] && ! grep -q '/gogo/ci/' "$CALLS"; then
+  ok "tools: each row is read once, under /gogo/tools/, when the new path holds it"
+else
+  bad "tools: each row is read once, under /gogo/tools/, when the new path holds it" "$(cat "$CALLS")"
+fi
+if grep -q "legacy" "${SANDBOX}/out"; then
+  bad "tools: no legacy notice when the new path holds the value" "$(cat "${SANDBOX}/out")"
+else
+  ok "tools: no legacy notice when the new path holds the value"
+fi
+
+STUB_FAIL_PREFIX=/gogo/tools/ run tools "${APP_SET[@]}" -- appchild
+status=$?
+if [[ $status -eq 0 ]] && app_present; then
+  ok "tools: a value still at /gogo/ci/dev/ reaches the command (transitional fallback)"
+else
+  bad "tools: a value still at /gogo/ci/dev/ reaches the command (transitional fallback)" "status=${status}: $(cat "${SANDBOX}/out")"
+fi
+order="$(grep -o -- '--name [^ ]*' "$CALLS" | cut -d' ' -f2 | tr '\n' ' ')"
+want=""
+for p in "${APP_SET[@]}"; do want+="/gogo/tools/${p} /gogo/ci/dev/${p} "; done
+if [[ "$order" == "$want" ]]; then
+  ok "tools: the fallback reads the new path first, then the old one, per row"
+else
+  bad "tools: the fallback reads the new path first, then the old one, per row" "got: ${order}"
+fi
+if [[ "$(grep -c 'legacy path /gogo/ci/dev/github/agent-app-' "${SANDBOX}/out")" == 3 ]]; then
+  ok "tools: each fallback read names the old path on stderr"
+else
+  bad "tools: each fallback read names the old path on stderr" "$(cat "${SANDBOX}/out")"
+fi
+if grep -qF "$VALUE" "${SANDBOX}/out" || grep -qF "$VALUE" "$CALLS"; then
+  bad "tools: no value is printed or passed as an argument on the fallback path" "found in output or aws argv"
+else
+  ok "tools: no value is printed or passed as an argument on the fallback path"
+fi
+if grep -q "^aws-inherited" "$CALLS"; then
+  bad "tools: no fallback read inherits a credential already fetched" "$(grep '^aws-inherited' "$CALLS")"
+else
+  ok "tools: no fallback read inherits a credential already fetched"
+fi
+
+STUB_GET_FAIL=1 refuses "tools: a row at neither path stops the command, naming both" \
+  "could not read /gogo/tools/ai-harness/openrouter-api-key or /gogo/ci/dev/ai-harness/openrouter-api-key" \
+  tools ai-harness/openrouter-api-key -- child
+refuses "a tool row is not declared for a real environment" "is not declared" dev github/agent-app-id -- child
+refuses "an environment row is not declared for tools" "is not declared" tools sentry/mobile-auth-token -- child
+
+STUB_FAIL_PREFIX=/gogo/ci/dev/ run dev sentry/mobile-auth-token -- child
+status=$?
+if [[ $status -ne 0 ]] && [[ "$(gets)" == 1 ]]; then
+  ok "an environment row never falls back: one read, then refuse"
+else
+  bad "an environment row never falls back: one read, then refuse" "status=${status}: $(cat "$CALLS")"
 fi
 
 # 3c. The prod confirmation (GoGo-Infra#231, Sol F-02). It is read from the

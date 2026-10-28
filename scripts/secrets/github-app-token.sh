@@ -3,7 +3,7 @@
 # Mint a short-lived GitHub App installation token for the agent identity
 # (GoGo-Infra#250).
 #
-#   GH_TOKEN="$(./scripts/secrets/exec-with.sh dev \
+#   GH_TOKEN="$(./scripts/secrets/exec-with.sh tools \
 #       github/agent-app-private-key github/agent-app-id github/agent-app-installation-id -- \
 #       ./scripts/secrets/github-app-token.sh --repo GoGo-Infra)" \
 #     gh pr create --repo namnh92/GoGo-Infra …

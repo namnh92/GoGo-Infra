@@ -27,8 +27,8 @@ and the owner can approve it:
   your `PATH` or named in this checkout's own config still run as you, with the token.
 - Read-only calls (`gh pr view`, `gh pr checks`, `gh issue list`, `gh api` GETs) may use the
   session's own login.
-- Minting the token needs AWS credentials for the `ci` rows (on the owner's workstation:
-  `AWS_PROFILE=gogobootstrap`). If it fails, stop and tell the owner. Do not fall back to the
+- Minting the token needs AWS credentials for the `tools` rows, `/gogo/tools/` (GoGo-Infra#294;
+  on the owner's workstation: `AWS_PROFILE=gogobootstrap`). If it fails, stop and tell the owner. Do not fall back to the
   owner's `gh` login or git keychain: a pull request authored by the owner cannot be approved by
   the owner, and the code-owner gate on `develop` exists for exactly that.
 - A session with no AWS access (e.g. a cloud session) may push its branch with the access it

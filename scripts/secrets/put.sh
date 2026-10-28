@@ -6,6 +6,11 @@
 #   ./scripts/secrets/put.sh ci  terraform/apply/cloudflare-api-token
 #   ./scripts/secrets/put.sh ci  deploy/known-hosts String
 #   ./scripts/secrets/put.sh dev cms/access-staff-emails --infra-readable
+#   ./scripts/secrets/put.sh tools github/agent-app-id
+#
+# `tools` (GoGo-Infra#294) writes a developer-tooling key under /gogo/tools/,
+# with the type its manifest row declares. Those rows belong to no environment:
+# `put.sh dev github/agent-app-id` treats the path as undeclared.
 #
 # --infra-readable (GoGo-Infra#194, ADR-0010) is for the rows the manifest marks
 # `infra_readable: true` — Strings Terraform reads through a data source. After
@@ -37,8 +42,8 @@ done
 ENVIRONMENT="${positional[0]:-}"
 PARAM_PATH="${positional[1]:-}"
 
-require_env_arg "$ENVIRONMENT" allow-ci
-[[ -n "$PARAM_PATH" ]] || die "usage: put.sh <env|ci> <path> [type] [--infra-readable]   e.g. put.sh dev database/url"
+require_env_arg "$ENVIRONMENT" allow-ci allow-tools
+[[ -n "$PARAM_PATH" ]] || die "usage: put.sh <env|ci|tools> <path> [type] [--infra-readable]   e.g. put.sh dev database/url"
 [[ "${#positional[@]}" -le 3 ]] || die "too many arguments: the value is read from stdin, never from the command line"
 # Path is validated before authenticating: a typo should not wait on an SSO
 # round trip to be reported.

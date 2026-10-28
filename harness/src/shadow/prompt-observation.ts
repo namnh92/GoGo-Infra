@@ -307,7 +307,7 @@ async function observe(o: Options): Promise<{ record: PromptRecord; stdout: stri
 }
 
 /**
- * `<wrapper> dev ai-harness/openrouter-api-key -- node <entry> prompt-hook --live-child …`; the answer, validated, or a closed code.
+ * `<wrapper> tools ai-harness/openrouter-api-key -- node <entry> prompt-hook --live-child …`; the answer, validated, or a closed code.
  * The wrapper leads its own process group (#260): the time limit or an oversized output kills the
  * whole group, so an `aws` the wrapper started does not outlive the hook. Killing the wrapper alone
  * left its descendants running. Being outside the hook's group, it would also survive the hook
@@ -317,7 +317,7 @@ async function observe(o: Options): Promise<{ record: PromptRecord; stdout: stri
 function runChild(o: Options, wrapper: string, observationId: string, payload: string, stateDir: string): Promise<ChildAnswer | { error: string }> {
   const entry = o.entry ?? realpathSync(process.argv[1] ?? '');
   return new Promise((resolve) => {
-    const child = spawn(wrapper, ['dev', 'ai-harness/openrouter-api-key', '--', process.execPath, entry, 'prompt-hook', '--live-child', '--observation', observationId], {
+    const child = spawn(wrapper, ['tools', 'ai-harness/openrouter-api-key', '--', process.execPath, entry, 'prompt-hook', '--live-child', '--observation', observationId], {
       env: childEnv(o.env, stateDir),
       detached: true,
       stdio: ['pipe', 'pipe', 'pipe'],

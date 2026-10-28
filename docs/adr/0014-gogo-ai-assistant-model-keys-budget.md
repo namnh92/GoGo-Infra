@@ -70,7 +70,8 @@ fallback: the turn ends with the "unavailable" answer.
 created by the owner when those environments are. SSM `/gogo/<env>/backend/openrouter/assistant-api-key`
 → `OPENROUTER_ASSISTANT_API_KEY`, `SecureString`, `consumer: runtime` (the API serves the
 assistant). It is **not** `openrouter/api-key` (decisions POC, `gogo_be_<env>`) and **not**
-`ci:ai-harness/openrouter-api-key` (harness, `gogo_ai_harness_<env>`): three keys, three credit
+`ci:ai-harness/openrouter-api-key` (harness, `gogo_ai_harness_<env>`; since 2026-10-28
+`tools:ai-harness/openrouter-api-key`, GoGo-Infra#294): three keys, three credit
 limits, three spend lines (ADR-0013 D-7/D-11). `scripts/lib/manifest.test.sh` pins that the
 variable is declared by exactly one row. No key ever reaches the app.
 
