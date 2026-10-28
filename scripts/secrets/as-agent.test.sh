@@ -452,6 +452,16 @@ out="$(cd "$REPO" && STUB_MINT_FAIL=1 "$AS" -- git push origin x 2>&1)"; rc=$?
 [[ "$rc" != 0 ]] && ! grep -q 'child:' <<<"$out" && grep -q "Not falling back to the owner's identity" <<<"$out" \
   && ok "no token: the command does not run, and says it will not fall back" || bad "mint failure" "rc=$rc out=$out"
 
+# #256 S4-02: git or gh found through a relative PATH entry (here ../path, the stub directory seen
+# from the checkout) is run by its absolute path, not refused by --child after the mint.
+for c in "git push origin x" "gh pr view 42"; do
+  : >"$CALLS"
+  # shellcheck disable=SC2086
+  out="$(cd "$REPO" && PATH="../path:${ORIG_PATH}" "$AS" -- $c 2>&1)"; rc=$?
+  [[ "$rc" == 0 ]] && grep -q 'child: GH_TOKEN agent' <<<"$out" && ! grep -q 'must be an absolute' <<<"$out" \
+    && ok "S4-02: ${c%% *} found through a relative PATH entry runs, as the App" || bad "S4-02 relative PATH ${c%% *}" "rc=$rc out=$out calls=$(cat "$CALLS")"
+done
+
 out="$(cd "$SANDBOX" && "$AS" -- git push origin x 2>&1)"; rc=$?
 [[ "$rc" != 0 ]] && ! grep -q 'child:' <<<"$out" && grep -q 'pass --repo' <<<"$out" \
   && ok "outside a GoGo checkout without --repo: refused" || bad "no origin" "rc=$rc out=$out"
