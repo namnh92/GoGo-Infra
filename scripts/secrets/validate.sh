@@ -303,8 +303,9 @@ if [[ "${#skipped[@]}" -gt 0 ]]; then
   echo "SKIPPED (namespace or tags not readable by this identity):"
   printf '  - %s\n' "${skipped[@]}"
   if [[ "$TOOLS" == "yes" ]]; then
-    echo "  For tools an unreadable /gogo/tools/ is always a failure: it is the only namespace,"
-    echo "  so nothing was checked. Re-run from the owner's SSO session (gogobootstrap)."
+    echo "  For tools this is always a failure: an unreadable /gogo/tools/ listing or unreadable"
+    echo "  tag metadata leaves the validation incomplete, and there is no other namespace to"
+    echo "  stand on. Re-run from the owner's SSO session (gogobootstrap)."
     status=1
   elif [[ "$STRICT" == "yes" ]]; then
     echo "  In --strict mode this is a failure. A readiness check that passes because it could"
