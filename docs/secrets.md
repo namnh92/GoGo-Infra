@@ -60,7 +60,7 @@ through the pseudo-environment `tools` only:
 ```
 
 `scripts/lib/manifest.py` enforces the split: a `tools` row reaches `tools` and nothing else, so
-`validate.sh dev|staging|prod`, `render-env.sh`, `mobile-env.py` and the parity of #293 never see
+`validate.sh dev|stag|prod`, `render-env.sh`, `mobile-env.py` and the parity of #293 never see
 one, and `exec-with.sh dev github/agent-app-id` refuses it as undeclared (`manifest.test.sh` pins
 both directions). No GoGo role reads `/gogo/tools`: the permissions boundary confines every
 capped role to `/gogo/<env>` and `/gogo/ci/<env>`, and no role policy names it. Only the owner's

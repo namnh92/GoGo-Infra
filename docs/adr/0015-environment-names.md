@@ -57,4 +57,12 @@ Out of scope, by definition not environments: `NODE_ENV`, Adjust `sandbox | prod
 
 Reverse rename in one PR (the change is names only; no SSM value moved — `/gogo/staging/` and
 `/gogo/prod/` were empty when this landed). The GitHub Environments can be recreated under the old
-names; both were empty.
+names; both were empty. Two limits (Astra, 2026-10-28):
+
+- The PR also reconciled `config/dev.tfvars` with the DEV public IP the owner confirmed
+  (`14.232.225.59`, record `vps-dev`). A wholesale revert of the PR would put the obsolete IP back
+  and the next dev apply would move the record; revert the rename, keep that line.
+- The rollback is clean only while stag stays unprovisioned and the downstream repos have not
+  moved. Once stag has SSM values, Terraform state or a GitHub Environment with rules, or once
+  GoGo-BE has run its enum migration, the reverse rename is a coordinated change across those,
+  not a single PR here.
