@@ -793,8 +793,11 @@ command can use, because the command does not inherit your environment (shape re
   `GIT_CONFIG_NOSYSTEM=1`. Owner decision D7: your global and system git config, `~/.netrc`,
   `~/.ssh`, gh's `hosts.yml`/`config.yml`/aliases are **not loaded** — `insteadOf`, credential
   helpers, `safe.directory`, file-based proxy and CA settings included. Proxy and CA come from
-  the environment only. Nothing secret is written there; the directory is left for the TMPDIR
-  policy to clear (the wrapper execs into the command), and removed when a check refuses.
+  the environment only. Nothing secret is written there. The wrapper waits for the command and
+  removes the directory when it ends, when a check refuses, or when `HUP`/`INT`/`TERM` stops it;
+  the command's exit status is the wrapper's (#260). Only a `SIGKILL` leaves one behind.
+  Directories left by versions before #260 can be removed by hand once no `as-agent.sh` runs:
+  `find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'as-agent.*' -type d -user "$(id -u)" -mmin +60 -exec rm -rf {} +`.
 - **One credential.** Process-only git configuration (`GIT_CONFIG_*`, read after every file):
   an empty `credential.helper` resets every helper collected from any file and any URL key, then
   one helper for `https://github.com` answers with `GH_TOKEN`, only when asked for
