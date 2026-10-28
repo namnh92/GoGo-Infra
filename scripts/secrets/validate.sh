@@ -3,6 +3,8 @@
 # Diff SSM against secrets.manifest.yaml.
 #
 #   ./scripts/secrets/validate.sh dev              names and types, best effort
+#   ./scripts/secrets/validate.sh tools            the developer-tooling keys
+#                                                  under /gogo/tools/ (#294)
 #   ./scripts/secrets/validate.sh dev --strict     readiness for what runs today
 #   ./scripts/secrets/validate.sh staging --strict --include-planned
 #                                                  readiness for what it is
@@ -50,7 +52,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 ENVIRONMENT="${1:-}"
-require_env_arg "$ENVIRONMENT"
+require_env_arg "$ENVIRONMENT" allow-tools
 
 STRICT=no
 INCLUDE_PLANNED=no
@@ -64,6 +66,16 @@ done
 
 if [[ "$INCLUDE_PLANNED" == "yes" && "$STRICT" != "yes" ]]; then
   die "--include-planned only means something with --strict"
+fi
+
+# `tools` (GoGo-Infra#294): the developer-tooling keys under /gogo/tools/, which
+# belong to no environment. One namespace and no capability profile, so a
+# listing nobody could read leaves nothing checked — a failure in either mode —
+# and there is no planned profile to widen to.
+TOOLS=no
+if [[ "$ENVIRONMENT" == "tools" ]]; then
+  TOOLS=yes
+  [[ "$INCLUDE_PLANNED" == "no" ]] || die "tools has no capability profile: --include-planned does not apply"
 fi
 
 PLANNED_FLAG=()
@@ -180,8 +192,12 @@ while IFS=$'\t' read -r namespace path; do
   [[ "$tag_value" == "true" ]] || tag_missing+="  - ${namespace}/${path}"$'\n'
 done <<< "$infra_rows"
 
+tag_trees=("$(ssm_prefix "$ENVIRONMENT" backend | sed 's#/backend$##')/" "$(ssm_prefix "$ENVIRONMENT" ci)/")
+# /gogo/tools has no backend or ci level; no row there is infra_readable, so any
+# tag found is a finding.
+[[ "$TOOLS" == "yes" ]] && tag_trees=("$(ssm_prefix tools)/")
 if [[ -z "$tag_skipped" ]]; then
-  for tree in "$(ssm_prefix "$ENVIRONMENT" backend | sed 's#/backend$##')/" "$(ssm_prefix "$ENVIRONMENT" ci)/"; do
+  for tree in "${tag_trees[@]}"; do
     if ! tagged="$(aws ssm describe-parameters \
         --parameter-filters "Key=tag:${INFRA_TAG_KEY},Values=true" "Key=Name,Option=BeginsWith,Values=${tree}" \
         --query 'Parameters[].[Name,Type]' --output text 2>&1)"; then
@@ -236,7 +252,7 @@ fi
 # Only meaningful in strict mode. Outside it a namespace may have been skipped,
 # and reporting a credential missing because nobody could look is worse than not
 # reporting it.
-if [[ "$STRICT" == "yes" ]]; then
+if [[ "$STRICT" == "yes" && "$TOOLS" == "no" ]]; then
   # An environment no capability mentions has no declared shape, so nothing here
   # can call it ready.
   if ! python3 "$MANIFEST_READER" "$ENVIRONMENT" --declares; then
@@ -249,8 +265,17 @@ if [[ "$STRICT" == "yes" ]]; then
   fi
 
   cap_gaps=""
+  env_namespaces="$(manifest_namespaces "$ENVIRONMENT")"
   while IFS=$'\t' read -r capability namespace path; do
     [[ -n "$capability" ]] || continue
+    # A requirement in a namespace this environment does not hold at all can
+    # never be satisfied here — above all `tools`, which belongs to no
+    # environment (GoGo-Infra#294, Sol F-01). Nothing lists it, so nothing
+    # marks it SKIPPED: it has to be a gap, or --strict reports READY unlooked.
+    if ! grep -qxF "$namespace" <<< "$env_namespaces"; then
+      cap_gaps+="  - ${capability} needs ${namespace}:${path}, in a namespace ${ENVIRONMENT} does not hold — fix the capability's requires:"$'\n'
+      continue
+    fi
     # A requirement in a namespace this identity could not read is unresolved,
     # not satisfied. The SKIPPED block below is what fails the run; naming it
     # here as well would report the same gap twice.
@@ -277,7 +302,12 @@ fi
 if [[ "${#skipped[@]}" -gt 0 ]]; then
   echo "SKIPPED (namespace or tags not readable by this identity):"
   printf '  - %s\n' "${skipped[@]}"
-  if [[ "$STRICT" == "yes" ]]; then
+  if [[ "$TOOLS" == "yes" ]]; then
+    echo "  For tools this is always a failure: an unreadable /gogo/tools/ listing or unreadable"
+    echo "  tag metadata leaves the validation incomplete, and there is no other namespace to"
+    echo "  stand on. Re-run from the owner's SSO session (gogobootstrap)."
+    status=1
+  elif [[ "$STRICT" == "yes" ]]; then
     echo "  In --strict mode this is a failure. A readiness check that passes because it could"
     echo "  not look is the failure it exists to prevent. Re-run with an identity that can read"
     echo "  every namespace — a developer SSO session, not the deploy role."
@@ -291,7 +321,7 @@ fi
 
 if [[ "$status" -eq 0 ]]; then
   namespaces="$(manifest_namespaces "$ENVIRONMENT" | wc -l | tr -d ' ')"
-  if [[ "$STRICT" == "yes" ]]; then
+  if [[ "$STRICT" == "yes" && "$TOOLS" == "no" ]]; then
     caps="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --capabilities "${PLANNED_FLAG[@]-}")"
     cap_count="$(echo "$caps" | grep -c . || true)"
     planned_count="$(echo "$caps" | awk -F'\t' '$3 == "planned"' | grep -c . || true)"

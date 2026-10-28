@@ -553,6 +553,97 @@ else
   bad "infra_readable has a value other than true" "$bad_flag — write it as true or omit it"
 fi
 
+# --- GoGo-Infra#294: the tools namespace belongs to no environment ----------
+#
+# Developer-tooling keys (the agent GitHub App, the harness's provider keys) are
+# not part of any GoGo environment (owner, 2026-10-28). They live under
+# /gogo/tools/ and are read through the pseudo-environment `tools` only. A tool
+# row reaching dev, staging or prod would be validated, rendered or cloned as if
+# the environment owned it — the mistake #293's parity work would then copy.
+TOOL_PATHS="ai-harness/anthropic-api-key
+ai-harness/openrouter-api-key
+github/agent-app-id
+github/agent-app-installation-id
+github/agent-app-private-key"
+
+tools_rows="$(python3 "$READER" tools --namespace all --consumer all)"
+if [[ "$(cut -f1 <<< "$tools_rows" | sort)" == "$TOOL_PATHS" ]]; then
+  ok "tools: the reader emits exactly the five tool rows"
+else
+  bad "tools: the reader emits a different set than the five tool rows" "$(cut -f1 <<< "$tools_rows" | tr '\n' ' ')"
+fi
+off_shape="$(awk -F'\t' '$5 != "tools" || $4 != "" || $6 != "pipeline" { print $1 " (" $5 ", required=" $4 ", " $6 ")" }' <<< "$tools_rows")"
+if [[ -z "$off_shape" ]]; then
+  ok "tools: every tool row is namespace tools, consumer pipeline, required nowhere"
+else
+  bad "tools: a tool row has the wrong namespace, consumer or required list" "$off_shape"
+fi
+if [[ "$(python3 "$READER" tools --consumer all | cut -f1 | sort)" == "$TOOL_PATHS" ]]; then
+  ok "tools: the namespace defaults to tools for the tools pseudo-environment"
+else
+  bad "tools: the default namespace for tools is not tools" "$(python3 "$READER" tools --consumer all | cut -f1 | tr '\n' ' ')"
+fi
+
+for env in dev staging prod; do
+  env_rows="$(python3 "$READER" "$env" --namespace all --consumer all)"
+  leaked="$(awk -F'\t' '$5 == "tools" { print $1 }' <<< "$env_rows")"
+  while read -r tool_path; do
+    grep -qxF "$tool_path" <(cut -f1 <<< "$env_rows") && leaked+="${tool_path}"$'\n'
+  done <<< "$TOOL_PATHS"
+  if [[ -z "$leaked" ]]; then
+    ok "${env}: no tool row is declared for the environment, under any namespace"
+  else
+    bad "${env}: a tool row is declared for the environment" "$(sort -u <<< "$leaked" | tr '\n' ' ')"
+  fi
+  in_tools_ns="$(python3 "$READER" "$env" --namespace tools --consumer all | cut -f1)"
+  if [[ -z "$in_tools_ns" ]]; then
+    ok "${env}: asking for the tools namespace by name yields nothing"
+  else
+    bad "${env}: the tools namespace is reachable from an environment" "$in_tools_ns"
+  fi
+  tool_caps="$(python3 "$READER" "$env" --capability-requires --include-planned | awk -F'\t' '$2 == "tools"')"
+  if [[ -z "$tool_caps" ]]; then
+    ok "${env}: no capability profile waits on a tool key"
+  else
+    bad "${env}: a capability profile requires a tool key" "$tool_caps"
+  fi
+done
+
+# Sol F-01 (#294): the guard against a capability requiring a tools row from a
+# real environment is the dangling-requirement check above, which is generic —
+# a tools row is never declared for dev, staging or prod. Proven on a copy of the
+# reader whose manifest puts the harness capability back into dev's profile.
+MUT="$(mktemp -d)"
+mkdir -p "${MUT}/scripts/lib" "${MUT}/config"
+cp "$READER" "${MUT}/scripts/lib/manifest.py"
+python3 - "${DIR}/../../config/secrets.manifest.yml" "${MUT}/config/secrets.manifest.yml" <<'PY'
+import sys
+text = open(sys.argv[1], encoding="utf-8").read()
+marker = "  - name: ai_harness_live_decisions\n    kind: feature\n    enabled: []\n"
+assert text.count(marker) == 1, "mutation target moved"
+open(sys.argv[2], "w", encoding="utf-8").write(
+    text.replace(marker, marker.replace("enabled: []", "enabled: [dev]")))
+PY
+mut_declared="$(python3 "${MUT}/scripts/lib/manifest.py" dev --namespace all --consumer all | awk -F'\t' '{ print $5 ":" $1 }' | sort -u)"
+mut_dangling="$(python3 "${MUT}/scripts/lib/manifest.py" dev --capability-requires \
+  | awk -F'\t' '{ print $2 ":" $3 }' | while read -r req; do grep -qxF "$req" <<< "$mut_declared" || echo "$req"; done)"
+rm -rf "$MUT"
+if [[ "$mut_dangling" == "tools:ai-harness/openrouter-api-key" ]]; then
+  ok "F-01: a dev capability requiring a tools row is reported as an undeclared requirement"
+else
+  bad "F-01: a dev capability requiring a tools row is not caught" "dangling: ${mut_dangling:-<none>}"
+fi
+
+harness_requires="$(cd "$DIR" && python3 -c 'import manifest
+for c in manifest.parse("capabilities"):
+    if c["name"] == "ai_harness_live_decisions":
+        print(" ".join(c["requires_list"]) + "|" + ",".join(c["enabled_list"] + c["planned_list"]))')"
+if [[ "$harness_requires" == "tools:ai-harness/openrouter-api-key|" ]]; then
+  ok "ai_harness_live_decisions requires the tools row and names no environment"
+else
+  bad "ai_harness_live_decisions is not the env-less tools capability" "requires|envs = ${harness_requires:-<absent>}"
+fi
+
 echo
 if [[ "$failures" -gt 0 ]]; then
   echo "${failures} test(s) failed."
