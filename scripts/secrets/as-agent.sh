@@ -479,7 +479,7 @@ fi
 
 # --- I12: the mint, in this process's own environment, with the API endpoint pinned (S-04). ---
 export GITHUB_API_URL=https://api.github.com
-token="$("${DIR}/exec-with.sh" dev \
+token="$("${DIR}/exec-with.sh" tools \
     github/agent-app-private-key github/agent-app-id github/agent-app-installation-id -- \
     "${DIR}/github-app-token.sh" "${repo_args[@]}")" \
   || die "could not mint an agent token (AWS credentials? see docs/secrets.md → Agent GitHub App). Not falling back to the owner's identity."

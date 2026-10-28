@@ -10,6 +10,12 @@
 #     signing/apple-asc-key signing/apple-asc-key-id signing/apple-asc-issuer-id -- \
 #     fastlane ios beta
 #
+#   ./scripts/secrets/exec-with.sh tools ai-harness/openrouter-api-key -- \
+#     node harness/src/cli.ts …
+#
+# `tools` (GoGo-Infra#294) is the pseudo-environment of the developer-tooling
+# keys under /gogo/tools/, which belong to no GoGo environment.
+#
 # Several parameters because a store lane needs a set of them and nothing less
 # (GoGo-Infra#231): nesting one invocation per value would ask for the prod
 # confirmation once per credential and leave each outer shell holding a value
@@ -37,10 +43,10 @@ case "$-" in
   *x*) die "refusing to run with shell tracing enabled — 'set +x', then re-run." ;;
 esac
 
-usage="usage: exec-with.sh <env> <path> [<path>...] -- <command> [args...]"
+usage="usage: exec-with.sh <env|tools> <path> [<path>...] -- <command> [args...]"
 
 ENVIRONMENT="${1:-}"
-require_env_arg "$ENVIRONMENT"
+require_env_arg "$ENVIRONMENT" allow-tools
 shift
 
 # Everything up to `--` is a parameter path. The separator is not optional:
@@ -122,14 +128,26 @@ for ((i = 0; i < ${#PARAM_PATHS[@]}; i++)); do
   # a store lane it would be an unsigned artifact or an upload under no identity.
   if ! value="$(aws ssm get-parameter --name "$full_path" --with-decryption \
     --query 'Parameter.Value' --output text 2>/dev/null)"; then
-    die "could not read ${full_path} (missing, or this session may not read it)"
+    # TRANSITIONAL (GoGo-Infra#294, removed in its step 5): a tool row not yet
+    # copied to /gogo/tools/ is read from where it lived before, and the path —
+    # never the value — goes to stderr, so the cutover can see who still reads
+    # the old tree. Environment rows never fall back.
+    [[ "${NAMESPACES[i]}" == "tools" ]] \
+      || die "could not read ${full_path} (missing, or this session may not read it)"
+    legacy_path="${LEGACY_TOOLS_PREFIX}/${PARAM_PATHS[i]}"
+    if ! value="$(aws ssm get-parameter --name "$legacy_path" --with-decryption \
+      --query 'Parameter.Value' --output text 2>/dev/null)"; then
+      die "could not read ${full_path} or ${legacy_path} (missing, or this session may not read it)"
+    fi
+    echo "exec-with.sh: ${PARAM_PATHS[i]} read from legacy path ${legacy_path}; copy it to ${full_path} (GoGo-Infra#294)" >&2
+    full_path="$legacy_path"
   fi
   [[ -n "$value" && "$value" != "None" ]] || die "${full_path} is empty"
 
   VALUES+=("$value")
   unset value
 done
-unset full_path
+unset full_path legacy_path
 
 for ((i = 0; i < ${#PARAM_PATHS[@]}; i++)); do
   export "${ENV_VARS[i]}=${VALUES[i]}"

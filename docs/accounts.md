@@ -100,7 +100,7 @@ and not a label:
 | --- | --- | --- | --- | --- |
 | `gogo_ai_anthropic_dev` (exists) · `gogo_ai_anthropic_staging` / `_prod` (to create) | GoGo AI assistant, Claude via Anthropic BYOK | `/gogo/<env>/backend/openrouter/assistant-api-key` | dev $20 · staging $20 · prod $150 per month, **monthly reset** | `openrouter.assistant` + `anthropic.assistant`, **once GoGo-BE files the family**. Until then `openrouter.other_keys`. |
 | `gogo_be_<env>` | BE intent POC (JEV decisions) | `openrouter/api-key` (`seed`) | set at creation | `openrouter.decisions` |
-| `gogo_ai_harness_dev` | AI harness (JEV) | `ci:ai-harness/openrouter-api-key` | $2 | `openrouter.dev_tooling` |
+| `gogo_ai_harness_dev` | AI harness (JEV) | `tools:ai-harness/openrouter-api-key` (`/gogo/tools/`, #294) | $2 | `openrouter.dev_tooling` |
 | management key | Cost collector, read-only use | `openrouter/management-key` (dev only) | none, since it does not run inference | none |
 
 Three stops on the assistant's spend (ADR-0014 D-4): the key's credit limit (if the key page

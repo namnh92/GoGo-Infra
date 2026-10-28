@@ -296,3 +296,13 @@ it the same day: the harness key is now `gogo_ai_harness_dev`; the backend POC g
 - (2026-10-28, #272) Each machine's install pins a Node the owner names with `--node`, ideally the
   harness-private runtime (`docs/ai-harness.md`, "Node for the install"). A change to
   `launcher.ts` reaches a machine only through a bootstrap upgrade, an owner act on a terminal.
+
+## Amendment 2026-10-28 — keys move to `/gogo/tools/` (GoGo-Infra#294)
+
+The owner ruled that developer-tooling keys belong to no GoGo environment. `ai-harness/*` (and the
+agent App rows of GoGo-Infra#250) leave `/gogo/ci/dev/` for the env-less namespace `tools`,
+`/gogo/tools/<path>`, read with `exec-with.sh tools …`. Where this ADR says `put.sh dev
+ai-harness/…` or "two more `ci` rows", read `put.sh tools ai-harness/…` and `tools` rows. The
+capability `ai_harness_live_decisions` leaves the dev profile (`validate.sh tools` checks the
+row instead). Cutover order and the transitional fallback: `docs/secrets.md` → *Namespace
+`tools`*.

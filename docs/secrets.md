@@ -39,14 +39,69 @@ caller that predates the field keeps exactly the scope it was written with.
 /gogo/ci/<env>/sentry/
 └── mobile-auth-token             Sentry org auth token: source maps + dSYMs for gogo-mobile
 
-/gogo/ci/<env>/ai-harness/
-├── openrouter-api-key            OpenRouter key for JEV decisions only (ADR-0013), credit-limited
-└── anthropic-api-key             Anthropic API key for headless automation only — never interactive
+/gogo/tools/                      developer tooling — belongs to no environment (#294)
+├── ai-harness/openrouter-api-key OpenRouter key for JEV decisions only (ADR-0013), credit-limited
+├── ai-harness/anthropic-api-key  Anthropic API key for headless automation only — never interactive
+├── github/agent-app-private-key  the agent GitHub App's signing key (#250)
+├── github/agent-app-id
+└── github/agent-app-installation-id
 ```
+
+### Namespace `tools` (GoGo-Infra#294)
+
+Developer-tooling keys — the agent GitHub App and the AI harness — belong to no GoGo environment
+(owner, 2026-10-28). They live under `/gogo/tools/<path>`, not `/gogo/ci/<env>/`, and are reached
+through the pseudo-environment `tools` only:
+
+```bash
+./scripts/secrets/exec-with.sh tools ai-harness/openrouter-api-key -- <command>
+./scripts/secrets/put.sh tools github/agent-app-id
+./scripts/secrets/validate.sh tools
+```
+
+`scripts/lib/manifest.py` enforces the split: a `tools` row reaches `tools` and nothing else, so
+`validate.sh dev|staging|prod`, `render-env.sh`, `mobile-env.py` and the parity of #293 never see
+one, and `exec-with.sh dev github/agent-app-id` refuses it as undeclared (`manifest.test.sh` pins
+both directions). No GoGo role reads `/gogo/tools`: the permissions boundary confines every
+capped role to `/gogo/<env>` and `/gogo/ci/<env>`, and no role policy names it. Only the owner's
+SSO session (`gogobootstrap`) does. Other scripts (`pull.sh`, `setup-env.sh`, …) refuse `tools`.
+
+**Cutover (#294), in this order — the old path stays until every reader has moved:**
+
+1. The PR that reads `/gogo/tools/…` merges. Until step 4, `exec-with.sh` falls back to
+   `/gogo/ci/dev/<path>` for a `tools` row it cannot read, and says so on stderr
+   (`… read from legacy path /gogo/ci/dev/<path>; copy it to /gogo/tools/<path>`) — the path,
+   never the value. `validate.sh dev` (owner session) reports the five old rows UNDECLARED
+   under `/gogo/ci/dev` meanwhile: expected, it is the step-4 measurement. `deploy-dev` is not
+   affected — its role cannot list `/gogo/ci/dev` and reports it SKIPPED.
+2. The owner copies the five values, on a `develop` checkout that contains that PR, from the
+   bootstrap SSO session. Each value goes from `aws` to `put.sh` through a pipe: never printed,
+   never on an argument list, type taken from the manifest row. `put.sh` strips the trailing
+   newline `--output text` adds, which is exactly what the original `put.sh dev … < file` stored.
+
+   ```bash
+   for p in ai-harness/openrouter-api-key ai-harness/anthropic-api-key \
+            github/agent-app-private-key github/agent-app-id github/agent-app-installation-id; do
+     aws ssm get-parameter --name "/gogo/ci/dev/${p}" --with-decryption \
+       --query 'Parameter.Value' --output text \
+       | ./scripts/secrets/put.sh tools "$p" || { echo "stopped at ${p}" >&2; break; }
+   done
+   ./scripts/secrets/validate.sh tools
+   ```
+
+   A row never provisioned at the old path (`ai-harness/anthropic-api-key` until ADR-0013's owner
+   action) stops the loop at `get-parameter`; skip it and re-run the rest.
+3. Check: `./scripts/secrets/as-agent.sh -- gh issue list` prints no legacy line; one `#jev`
+   turn; **every machine that wants to use the harness reinstalls it from `develop`**
+   (the installed hook carries its own `exec-with.sh` and keeps calling the old shape until
+   then; `install-verify` reports it stale after the merge).
+4. The owner deletes the five old parameters with `aws ssm delete-parameter --name
+   /gogo/ci/dev/<path>` (not `delete.sh`, which resolves paths through the manifest).
+5. A follow-up PR removes the fallback (`LEGACY_TOOLS_PREFIX` in `common.sh`).
 
 `ai-harness/*` (GoGo-Infra#241, [`adr/0013`](adr/0013-ai-harness-jev-decision-router.md)) follow the
 `sentry/mobile-auth-token` pattern: `consumer: pipeline`, handed to one command through
-`exec-with.sh`, never rendered into any env file. Two keys for two bills: the OpenRouter key is
+`exec-with.sh tools`, never rendered into any env file. Two keys for two bills: the OpenRouter key is
 never used as the Anthropic key, and the Anthropic key never reaches an interactive Claude Code
 session (that would move it from the Max subscription to API billing). Neither is set yet; both
 wait on the owner (ADR-0013 "Owner actions").
@@ -141,7 +196,7 @@ is the GoGo AI assistant's own OpenRouter inference key, named `gogo_ai_anthropi
 OpenRouter (DEV: `gogo_ai_anthropic_dev`; staging/prod are created by the owner with those
 environments). It is a `backend` **runtime** row, because the API serves the assistant. That is
 the opposite of `openrouter/api-key` (decisions POC, `consumer: seed`) and of
-`ci:ai-harness/openrouter-api-key` (harness, `pipeline`): three keys, three credit limits, three
+`tools:ai-harness/openrouter-api-key` (harness, `pipeline`): three keys, three credit limits, three
 spend lines, and `manifest.test.sh` pins that `OPENROUTER_ASSISTANT_API_KEY` belongs to exactly
 one row. Write it only after the manifest row is on `develop`, and only with
 `put.sh <env> openrouter/assistant-api-key` (stdin, never an argument). **Rotate:** create a new
@@ -756,12 +811,12 @@ GitHub → Settings → Developer settings → GitHub Apps → New GitHub App:
 
 ### Storing it
 
-Three rows under `ci` (`config/secrets.manifest.yml`):
+Three rows under `tools` (`config/secrets.manifest.yml`, [Namespace `tools`](#namespace-tools-gogo-infra294)):
 
 ```bash
-./scripts/secrets/put.sh dev github/agent-app-private-key < ~/Downloads/<app>.<date>.private-key.pem
-./scripts/secrets/put.sh dev github/agent-app-id String               # App page → About → App ID
-./scripts/secrets/put.sh dev github/agent-app-installation-id String  # …/settings/installations/<id>
+./scripts/secrets/put.sh tools github/agent-app-private-key < ~/Downloads/<app>.<date>.private-key.pem
+./scripts/secrets/put.sh tools github/agent-app-id               # App page → About → App ID
+./scripts/secrets/put.sh tools github/agent-app-installation-id  # …/settings/installations/<id>
 rm ~/Downloads/<app>.*.private-key.pem
 ```
 
@@ -910,7 +965,7 @@ host; the real-gh checks run when gh is installed and are required with `AS_AGEN
 The lower-level form, for anything else:
 
 ```bash
-GH_TOKEN="$(./scripts/secrets/exec-with.sh dev \
+GH_TOKEN="$(./scripts/secrets/exec-with.sh tools \
     github/agent-app-private-key github/agent-app-id github/agent-app-installation-id -- \
     ./scripts/secrets/github-app-token.sh --repo GoGo-Infra)" \
   gh api /installation/repositories -q '.repositories[].name'
