@@ -35,7 +35,9 @@ umask 077
 KEYS="${SANDBOX}/keys"
 mkdir -p "$KEYS"
 openssl ecparam -name prime256v1 -genkey -noout -out "${KEYS}/p256-sec1.pem" 2>/dev/null
-openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "${KEYS}/p256-pkcs8.pem" 2>/dev/null
+# LibreSSL (macOS /usr/bin/openssl) writes explicit curve parameters unless told otherwise; the
+# script rightly refuses those, since the SPKI then carries no prime256v1 OID (#260).
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -pkeyopt ec_param_enc:named_curve -out "${KEYS}/p256-pkcs8.pem" 2>/dev/null
 openssl ecparam -name secp384r1 -genkey -noout -out "${KEYS}/p384.pem" 2>/dev/null
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "${KEYS}/rsa.pem" 2>/dev/null
 openssl pkey -in "${KEYS}/p256-sec1.pem" -pubout -out "${KEYS}/public.pem" 2>/dev/null
