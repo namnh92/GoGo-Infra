@@ -319,7 +319,7 @@ export function classifyCommand(command: string): ActionKind {
 const NAMED_GATES: Array<[RegExp, ActionKind]> = [
   [/\bgh\s+pr\s+merge\b|\bgit\s+merge\b/, 'merge_pr'],
   [/deploy-production|\bdeploy-vps\.sh\s+prod\b|\bterraform-apply-prod\b/, 'deploy_production'],
-  [/\bdeploy-vps\.sh\s+staging\b/, 'deploy_staging'],
+  [/\bdeploy-vps\.sh\s+(?:stag|staging)\b/, 'deploy_staging'],
   [/\bterraform\s+(apply|destroy|import)\b|\bterraform\s+state\s+(rm|mv|push)\b|\bwrangler\s+(deploy|versions\s+deploy|r2\s+bucket\s+delete)\b/, 'infra_apply'],
   [/\b(DROP|TRUNCATE)\s+(TABLE|SCHEMA|DATABASE|INDEX)\b|\bDELETE\s+FROM\b(?![^;]*\bWHERE\b)|\bdrizzle-kit\s+(drop|push)\b/i, 'db_destructive'],
   [/scripts\/secrets\/(put|delete|generate-auth|put-identity-key|put-worker-secret)\.sh|\baws\s+ssm\s+(put|delete)-parameters?\b|\bwrangler\s+secret\s+(put|delete)\b|\bgh\s+secret\s+set\b/, 'secret_rotate'],

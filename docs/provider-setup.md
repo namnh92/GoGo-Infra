@@ -283,7 +283,7 @@ So each SDK key gets, and must keep, both restrictions:
   Without an application restriction the key is simply public and billable by anyone.
 
 **Scope decision, 02/09/2026: DEV only for this phase.** The keys that exist are restricted to
-`max.gogo.dev` alone, and `staging` / `prod` Maps keys are **intentionally deferred** — not
+`max.gogo.dev` alone, and `stag` / `prod` Maps keys are **intentionally deferred** — not
 missing, not an oversight, and not an acceptance criterion for INF-055 or INF-056.
 
 This is what a DEV-only probe looks like, and it is the expected result rather than a defect:
@@ -294,10 +294,10 @@ max.gogo.stag   API_KEY_IOS_APP_BLOCKED   ← deferred, by decision
 max.gogo.prod   API_KEY_IOS_APP_BLOCKED   ← deferred, by decision
 ```
 
-Do not read the last two lines as a broken restriction. Anyone triaging a staging or production
+Do not read the last two lines as a broken restriction. Anyone triaging a stag or production
 build against these keys is looking at deferred work, not a misconfiguration.
 
-**When staging and production come into scope**, the open question is one key across the three
+**When stag and production come into scope**, the open question is one key across the three
 bundle ids or one key each. One key per flavour can be revoked per flavour — a dev build leaking
 does not force a production rebuild — at the cost of three keys, three restrictions and three
 parameters to keep aligned. One shared key is less to maintain and makes any revocation a

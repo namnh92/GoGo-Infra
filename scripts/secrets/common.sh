@@ -35,14 +35,14 @@ require_env_arg() {
     esac
   done
   case "$env" in
-    dev | staging | prod) ;;
+    dev | stag | prod) ;;
     ci)
       [[ "$allow_ci" == "yes" ]] || die "'ci' is not a runtime environment"
       ;;
     tools)
       [[ "$allow_tools" == "yes" ]] || die "'tools' is not an environment; only exec-with.sh, put.sh and validate.sh take it"
       ;;
-    *) die "environment must be one of: dev, staging, prod (got '${env:-<empty>}')" ;;
+    *) die "environment must be one of: dev, stag, prod (got '${env:-<empty>}')" ;;
   esac
 }
 

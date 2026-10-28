@@ -62,7 +62,7 @@ if [[ "$FINGERPRINT" =~ ^([0-9A-F]{2}:){31}[0-9A-F]{2}$ ]]; then :; else
        ${FINGERPRINT}"
 fi
 
-# A shared signing key across dev and staging is fine: the two entries stay
+# A shared signing key across dev and stag is fine: the two entries stay
 # distinct because assetlinks matches on package name AND fingerprint, and the
 # package names differ. Sharing it with prod is not fine.
 if [[ "$ENVIRONMENT" != "prod" && "$BUNDLE_ID" == "$(env_get IOS_BUNDLE_ID_PROD)" && -n "$(env_get IOS_BUNDLE_ID_PROD)" ]]; then

@@ -1,7 +1,7 @@
-environment = "staging"
+environment = "stag"
 
 # Same zone as dev and prod. A zone-scoped token edits every record in it, so
-# dns_record_suffix is the fence that keeps a staging apply from naming a
+# dns_record_suffix is the fence that keeps a stag apply from naming a
 # production hostname — a guardrail here, not a provider permission. See
 # docs/environments.md.
 cloudflare_zone_id = "84bece58fc6f0065213f682cbd9741c2"

@@ -52,7 +52,7 @@ def main():
     args = parser.parse_args()
     try:
         existing = read_values(args.out)
-        if existing.get("EXPO_PUBLIC_ENV") != mobile.FLAVORS[args.environment] or existing.get("ONESIGNAL_CONFIG_ENV") != args.environment:
+        if existing.get("EXPO_PUBLIC_ENV") != args.environment or existing.get("ONESIGNAL_CONFIG_ENV") != args.environment:
             raise ValueError("Destination belongs to a different environment")
         if any("SECRET" in key or "REST_API_KEY" in key or "PRIVATE_KEY" in key for key in existing):
             raise ValueError("Destination contains server-only keys")

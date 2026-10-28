@@ -6,7 +6,7 @@
 #   ./scripts/secrets/validate.sh tools            the developer-tooling keys
 #                                                  under /gogo/tools/ (#294)
 #   ./scripts/secrets/validate.sh dev --strict     readiness for what runs today
-#   ./scripts/secrets/validate.sh staging --strict --include-planned
+#   ./scripts/secrets/validate.sh stag --strict --include-planned
 #                                                  readiness for what it is
 #                                                  intended to run — use this
 #                                                  before provisioning
@@ -245,7 +245,7 @@ fi
 #
 # A capability is only checked where the environment declares it — `enabled` for
 # what runs today, plus `planned` when asked. That is what removes the memory
-# step: bringing up staging is one command whose output is the list of
+# step: bringing up stag is one command whose output is the list of
 # credentials to create, not a diff against someone's recollection of which
 # `required:` lists to edit.
 #

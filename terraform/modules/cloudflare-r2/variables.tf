@@ -8,7 +8,7 @@ variable "bucket_name" {
   type        = string
 
   validation {
-    condition     = can(regex("^gogo-(dev|staging|prod)-[a-z0-9-]+$", var.bucket_name))
+    condition     = can(regex("^gogo-(dev|stag|prod)-[a-z0-9-]+$", var.bucket_name))
     error_message = "bucket_name must look like gogo-<env>-<purpose>, e.g. gogo-dev-assets."
   }
 }

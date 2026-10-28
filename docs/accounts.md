@@ -98,7 +98,7 @@ and not a label:
 
 | Key name | Purpose | SSM row | Credit limit (proposed, owner sets) | Cost Center service |
 | --- | --- | --- | --- | --- |
-| `gogo_ai_anthropic_dev` (exists) · `gogo_ai_anthropic_staging` / `_prod` (to create) | GoGo AI assistant, Claude via Anthropic BYOK | `/gogo/<env>/backend/openrouter/assistant-api-key` | dev $20 · staging $20 · prod $150 per month, **monthly reset** | `openrouter.assistant` + `anthropic.assistant`, **once GoGo-BE files the family**. Until then `openrouter.other_keys`. |
+| `gogo_ai_anthropic_dev` (exists) · `gogo_ai_anthropic_staging` / `_prod` (to create) | GoGo AI assistant, Claude via Anthropic BYOK | `/gogo/<env>/backend/openrouter/assistant-api-key` | dev $20 · stag $20 · prod $150 per month, **monthly reset** | `openrouter.assistant` + `anthropic.assistant`, **once GoGo-BE files the family**. Until then `openrouter.other_keys`. |
 | `gogo_be_<env>` | BE intent POC (JEV decisions) | `openrouter/api-key` (`seed`) | set at creation | `openrouter.decisions` |
 | `gogo_ai_harness_dev` | AI harness (JEV) | `tools:ai-harness/openrouter-api-key` (`/gogo/tools/`, #294) | $2 | `openrouter.dev_tooling` |
 | management key | Cost collector, read-only use | `openrouter/management-key` (dev only) | none, since it does not run inference | none |
@@ -165,7 +165,7 @@ Fill in as accounts are created. "Owner" is a person; "backup" must not be the s
 | Grafana Cloud | Free stack `prometheus-prod-37-prod-ap-southeast-1`, instance id `3553140` — dev and prod share it via an `env` label. Superseded for DEV by ADR-0007 on 04/09/2026; tokens revoked 05/09/2026 after cutover | GitHub OAuth | | **none** | | 01/09/2026 |
 | Sentry | org `gogo-vn` (region US; slug renamed from `gogo-fe` 2026-10-14 — DSN unchanged), team `gogo`. Plan: **Business + Seer AI** (owner stated 2026-10-14) — supersedes the Free plan ADR-0006 budgeted; Seer sends error payloads to an AI provider. **Seer** stays **on** (owner Q-1, 2026-10-14: Seer purchased); ADR-0011 D-7 gate = privacy review + Sentry DPA, both before the first real client event — **met 2026-10-14**: owner accepted the privacy review and signed the DPA (#208 comments 6164369716, 6164377573), subject to relay evidence per client. GitHub integration: see *Sentry — GitHub App and spend controls* below (ADR-0012a D-3, D-4). Org state read 2026-10-14: `hideAiFeatures` false, `genAIConsent` false, per-project `seerScannerAutomation` true, `autofixAutomationTuning` medium | GitHub OAuth | `namnh92` (owner stated 2026-10-05) | **none** | | 2026-10-05 |
 | Sentry · `gogo-be` | `node-nestjs`, id `4512201628254209` — api and worker, every environment; `environment` from `APP_ENV` since GoGo-BE#674 (DEV api/worker report `dev`, checked 2026-10-14). Settings 2026-10-14: dataScrubber + defaults on, `scrubIPAddresses` true since 2026-10-15 (Q-2 on #208, owner; comment 6184688951), `allowedDomains` `*`; Advanced Data Scrubbing `[Remove] [Anything] from [$user.geo.**]` since 2026-10-14 (GoGo-Infra#215, owner Q-A) | GitHub OAuth | `namnh92` | **none** | | 2026-10-05 |
-| Sentry · `gogo-mobile` | `react-native`, id `4512252504178688` — GoGo-MobileApp, every flavour; `environment` dev/staging/prod from the build flavour. Settings 2026-10-14 (ADR-0011 D-6, O-1 done): dataScrubber + defaults on, `scrubIPAddresses` true, `storeCrashReports` 0, `sensitiveFields` = inviteCode invite slug token refreshToken accessToken guestToken authorization cookie lat lng latitude longitude originLat originLng email, `allowedDomains` `*` (native), default alert rules. 2026-10-14 (GoGo-Infra#215, #208 comment 6168623279): `code` removed from `sensitiveFields` (it scrubbed `status_code` to null and `country_code` to `[Filtered]`); Advanced Data Scrubbing `[Remove] [Anything] from [$user.geo.**]` (Sentry derives geo from the connection IP even with `scrubIPAddresses` on) | GitHub OAuth | `namnh92` | **none** | | 2026-10-14 |
+| Sentry · `gogo-mobile` | `react-native`, id `4512252504178688` — GoGo-MobileApp, every flavour; `environment` dev/stag/prod from the build flavour. Settings 2026-10-14 (ADR-0011 D-6, O-1 done): dataScrubber + defaults on, `scrubIPAddresses` true, `storeCrashReports` 0, `sensitiveFields` = inviteCode invite slug token refreshToken accessToken guestToken authorization cookie lat lng latitude longitude originLat originLng email, `allowedDomains` `*` (native), default alert rules. 2026-10-14 (GoGo-Infra#215, #208 comment 6168623279): `code` removed from `sensitiveFields` (it scrubbed `status_code` to null and `country_code` to `[Filtered]`); Advanced Data Scrubbing `[Remove] [Anything] from [$user.geo.**]` (Sentry derives geo from the connection IP even with `scrubIPAddresses` on) | GitHub OAuth | `namnh92` | **none** | | 2026-10-14 |
 | Sentry · `gogo-cms` | `javascript-react`, id `4512252504178689` — GoGo-CMS browser bundle (not the Worker); `environment` from `VITE_APP_ENV`, `release` = deployed SHA. Settings 2026-10-14 (ADR-0011 D-6, O-1 done): as `gogo-mobile` (incl. the 2026-10-14 `$user.geo.**` rule and `code` removal), except `allowedDomains` = `cms-dev.gogo.id.vn` (add each CMS host when it exists); `scrapeJavaScript` on (stored frames carry bundle source context; off at ADR-0011 phase 2) | GitHub OAuth | `namnh92` | **none** | | 2026-10-14 |
 | AWS | account `477020169756` | IAM / SSO | | **none** | | |
 | OpenRouter | one account for every environment. Keys: see § OpenRouter keys above. BYOK Anthropic configured (owner, 2026-10-26) | not recorded | | **none** | | |
@@ -217,7 +217,7 @@ fewer Seer contributors or Seer off; a lower plan tier at renewal (ADR-0012a D-4
 
 Paired with the Fastlane lanes, GoGo-MobileApp#350 (iOS) and #351 (Android). The credentials live in
 SSM under `/gogo/ci/prod/signing/…` and `/gogo/ci/prod/store/…` (renamed from `store/` by #271 before
-any value existed; dev and staging carry their own `signing/` set — next section) and are read only by
+any value existed; dev and stag carry their own `signing/` set — next section) and are read only by
 `scripts/secrets/exec-with.sh` on the owner's workstation. The
 runbook, including what is unrecoverable, is in
 [secrets.md → Store signing material](secrets.md#store-signing-material-gogo-infra231).
@@ -253,19 +253,19 @@ assistant supplies the command, never the value. As of 2026-10-17 none of the ei
 yet: `validate.sh prod --strict --include-planned` reports `store_release_ios` and
 `store_release_android` as planned and names the missing rows.
 
-### Firebase App Distribution and dev/staging signing (GoGo-Infra#271)
+### Firebase App Distribution and dev/stag signing (GoGo-Infra#271)
 
 Owner decision 2026-10-28: `dev` and `stag` builds go to testers through Firebase App Distribution;
 only `prod` goes to the stores. One Firebase project per environment, one App Store Connect key and
 one Android keystore per environment. Runbook:
-[secrets.md → Firebase App Distribution and dev/staging signing](secrets.md#firebase-app-distribution-and-devstaging-signing-gogo-infra271).
+[secrets.md → Firebase App Distribution and dev/stag signing](secrets.md#firebase-app-distribution-and-devstag-signing-gogo-infra271).
 
 | What | Account | Created where | Kill switch | SSM row (per env) |
 | --- | --- | --- | --- | --- |
 | Firebase project `gogo-dev` / `gogo-stag` (one iOS + one Android app, `max.gogo.dev` / `max.gogo.stag`) | owner's Google account | Firebase console | Delete the service account key; remove testers | `firebase/app-id-ios` + `firebase/app-id-android` |
 | Service account `app-distribution`, role Firebase App Distribution Admin, in that project only | the Firebase project's Google Cloud project | Google Cloud → IAM → Service accounts | Delete the key in Google Cloud IAM (holder can upload releases, manage testers and read their emails, and read the project's metadata and app list) | `firebase/app-distribution-service-account` |
-| App Store Connect **Team** key `gogo-lane-dev` / `gogo-lane-staging` (role able to create certificates and profiles) | Apple Developer Program — owner's Apple account | App Store Connect → Users and Access → Integrations → Team Keys | Revoke the key there | `signing/apple-asc-key` + `-key-id` + `-issuer-id` |
-| Android keystore `gogo-dev` / `gogo-staging` (PKCS12, RSA-2048) — the signature testers install | GoGo's own — not an account | `keytool` on the owner's machine | none — rotate and have testers reinstall | `signing/android-keystore` + `…-keystore-password` + `…-key-alias` + `…-key-password` |
+| App Store Connect **Team** key `gogo-lane-dev` / `gogo-lane-stag` (role able to create certificates and profiles) | Apple Developer Program — owner's Apple account | App Store Connect → Users and Access → Integrations → Team Keys | Revoke the key there | `signing/apple-asc-key` + `-key-id` + `-issuer-id` |
+| Android keystore `gogo-dev` / `gogo-stag` (PKCS12, RSA-2048) — the signature testers install | GoGo's own — not an account | `keytool` on the owner's machine | none — rotate and have testers reinstall | `signing/android-keystore` + `…-keystore-password` + `…-key-alias` + `…-key-password` |
 | Apple Distribution certificate — **shared with prod** (Apple has one type for App Store and Ad Hoc) | Apple Developer Program | fastlane `cert` through the ASC key, on the owner's machine only | Revoke in Certificates, Identifiers & Profiles (breaks every profile naming it, prod included) | none — private key in the login keychain, `.p12` backup in the password manager |
 
 Where the lists live — none of them is a secret, none is in SSM:
@@ -343,9 +343,9 @@ answered; the second is still open.
 
 - The iOS key's bundle-id allowlist holds **`max.gogo.dev` only** — `max.gogo.stag` and
   `max.gogo.prod` are refused exactly as `com.example.attacker` is. **Resolved 02/09/2026: this
-  is intentional.** Scope for this phase is DEV only; staging and production Maps keys are
+  is intentional.** Scope for this phase is DEV only; stag and production Maps keys are
   deferred, and the one-key-per-flavour-or-shared question goes with them
-  (`provider-setup.md` §7). A staging or production build failing against these keys is deferred
+  (`provider-setup.md` §7). A stag or production build failing against these keys is deferred
   work, not a misconfiguration.
 - The Android **app** restriction (package + signing SHA-1) cannot be confirmed from outside,
   because the API restriction short-circuits every probe. Absence of evidence is not evidence:
@@ -361,7 +361,7 @@ exists:
 | Firebase project | Project number | Holds |
 | --- | --- | --- |
 | `gogo-dev` | _(owner, after creation)_ | `/gogo/ci/dev/firebase/app-distribution-service-account` |
-| `gogo-stag` | _(owner, after creation)_ | `/gogo/ci/staging/firebase/app-distribution-service-account` |
+| `gogo-stag` | _(owner, after creation)_ | `/gogo/ci/stag/firebase/app-distribution-service-account` |
 
 The three server keys were verified by calling each API with each key: every key answers `200` on its own
 API and `403 API_KEY_SERVICE_BLOCKED` on the other two. All three APIs are
@@ -486,11 +486,11 @@ generating each keystore (`docs/secrets.md` → Firebase App Distribution, step 
 | --- | --- | --- | --- |
 | dev | debug keystore (local builds) | _(registered for local builds; not recorded here)_ | `FA:C6:17:45:…:91:03:3B:9C` (in `config/well-known/dev`) |
 | dev | `signing/android-keystore` at dev (Firebase builds) | _(owner, after keytool)_ | _(owner, after keytool — add to `config/well-known/dev/assetlinks.json`)_ |
-| stag | `signing/android-keystore` at staging (Firebase builds) | _(owner, after keytool; no staging Maps key yet)_ | n/a — stag claims no links |
+| stag | `signing/android-keystore` at stag (Firebase builds) | _(owner, after keytool; no stag Maps key yet)_ | n/a — stag claims no links |
 | prod | Play app signing key (Google) | _(Play Console → App integrity, #351)_ | _(same)_ |
 
 Better than one identity, and deliberately so: three flavours install side by side, so a tester
-can run staging next to the store build. `bootstrap.env` therefore needs the suffixed form —
+can run stag next to the store build. `bootstrap.env` therefore needs the suffixed form —
 `IOS_BUNDLE_ID_DEV`, `IOS_BUNDLE_ID_PROD` — and the bare key is dev's.
 
 **Corrected 31/08/2026.** This section used to read "only production claims `https://` links".
@@ -514,7 +514,7 @@ receives push, each configured with that flavour's bundle id.
 ## Offboarding
 
 ```
-./scripts/ops/offboard-checklist.sh          # dev staging prod
+./scripts/ops/offboard-checklist.sh          # dev stag prod
 ```
 
 Prints the rotation list as tickable markdown, derived from

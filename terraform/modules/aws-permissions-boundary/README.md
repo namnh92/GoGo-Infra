@@ -102,7 +102,7 @@ environment's role, `ListRoles`, `GetAccountAuthorizationDetails`), and every ac
 resource type — requested against `*`, which matches no reachable pattern — is denied, among them
 `EnableOutboundWebIdentityFederation`, the account password policy and the account alias. Nothing
 Terraform or CI runs needs one: every resource this repository manages is read and written through
-actions on the role, policy or provider ARN, and the one `url` lookup of the provider (staging,
+actions on the role, policy or provider ARN, and the one `url` lookup of the provider (stag,
 prod) was `ListOpenIDConnectProviders` and now looks up by `arn`.
 
 The provider is reachable for reads only: `DenyOidcProviderMutation` denies everything on

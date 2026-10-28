@@ -204,20 +204,20 @@ One exception, `mobile/sentry/dsn` (GoGo-Infra#208, ADR-0011), is a `String`: a 
 with a restriction behind it but config whose only power is to submit events to one Sentry
 project — the same reason `backend/observability/sentry-dsn` is a `String`. It is the only
 `mobile` value JavaScript reads (`EXPO_PUBLIC_SENTRY_DSN`), rendered by `mobile-env.py`, which
-accepts a DSN or the literal `off` and refuses a staging/prod build without one.
+accepts a DSN or the literal `off` and refuses a stag/prod build without one.
 
 `mobile/adjust/*` (GoGo-Infra#237, GoGo-MobileApp#363) are the Adjust app tokens, one per
 platform. Config that ships in the binary, kept `SecureString` like the Maps keys. `mobile-env.py`
 renders them as `ADJUST_IOS_APP_TOKEN` / `ADJUST_ANDROID_APP_TOKEN` plus `ADJUST_CONFIG_ENV`, accepts
 8–32 letters and digits or the literal `off`, and — the same rule as the DSN — refuses a
-staging/prod build without one. Write them with `put.sh <env> adjust/ios-app-token` (stdin); the
+stag/prod build without one. Write them with `put.sh <env> adjust/ios-app-token` (stdin); the
 manifest puts them under `mobile/`. Event tokens are not SSM values (named constants in the app,
 per flavour, when events exist); the API/Report and S2S tokens are credentials nothing calls, so
 none is declared — if GoGo-BE ever needs one it goes under `backend/adjust/*`, never `mobile/`.
 
 `openrouter/assistant-api-key` (GoGo-Infra#257, [`adr/0014`](adr/0014-gogo-ai-assistant-model-keys-budget.md))
 is the GoGo AI assistant's own OpenRouter inference key, named `gogo_ai_anthropic_<env>` in
-OpenRouter (DEV: `gogo_ai_anthropic_dev`; staging/prod are created by the owner with those
+OpenRouter (DEV: `gogo_ai_anthropic_dev`; stag/prod are created by the owner with those
 environments). It is a `backend` **runtime** row, because the API serves the assistant. That is
 the opposite of `openrouter/api-key` (decisions POC, `consumer: seed`) and of
 `tools:ai-harness/openrouter-api-key` (harness, `pipeline`): three keys, three credit limits, three
@@ -306,7 +306,7 @@ Per environment:
 
 ```bash
 ./scripts/secrets/validate.sh dev     --strict                     # what runs today
-./scripts/secrets/validate.sh staging --strict --include-planned   # what it is meant to run
+./scripts/secrets/validate.sh stag --strict --include-planned   # what it is meant to run
 ./scripts/secrets/validate.sh prod    --strict --include-planned
 ```
 
@@ -314,7 +314,7 @@ Each prints exactly what is missing, by path. Provision with `put.sh` (value on 
 an argument):
 
 ```bash
-./scripts/secrets/put.sh <env> <path>     # e.g. put.sh staging r2/public-access-key-id
+./scripts/secrets/put.sh <env> <path>     # e.g. put.sh stag r2/public-access-key-id
 ```
 
 ### What validation proves, and what it does not
@@ -360,12 +360,12 @@ not startup requirements, and what enforces them is the pipeline that names them
 An environment that appears in no capability cannot be reported ready. Omitting the profile is
 not a way to pass — that is the same failure as a namespace nobody could read.
 
-### Bringing up staging or production
+### Bringing up stag or production
 
 ```bash
 export AWS_PROFILE=gogo-bootstrap
 
-./scripts/secrets/validate.sh staging --strict --include-planned
+./scripts/secrets/validate.sh stag --strict --include-planned
 ```
 
 Expect it to fail, and read the output — that list is the work. It covers, by name:
@@ -385,7 +385,7 @@ Expect it to fail, and read the output — that list is the work. It covers, by 
 Then, for each path:
 
 ```bash
-./scripts/secrets/put.sh staging <path>      # value on stdin, never an argument
+./scripts/secrets/put.sh stag <path>      # value on stdin, never an argument
 ```
 
 Re-run until it prints `METADATA READY`. Read the row in `config/secrets.manifest.yml` before
@@ -459,11 +459,11 @@ verifies the round trip by fingerprint — see [onesignal-identity-key.md](onesi
 ## Store signing material (GoGo-Infra#231)
 
 The app's signing and publishing credentials live under `ci`, in two prefixes (renamed by #271
-before any value existed — see the next section for dev and staging):
+before any value existed — see the next section for dev and stag):
 
 - `signing/*` — the identity a build is signed with: the App Store Connect key and the Android
   keystore. **One SSM set per environment**: `/gogo/ci/prod/signing/…` is the shipped app's,
-  `/gogo/ci/dev/signing/…` and `/gogo/ci/staging/signing/…` sign the Firebase tester builds.
+  `/gogo/ci/dev/signing/…` and `/gogo/ci/stag/signing/…` sign the Firebase tester builds.
 - `store/*` — what publishes to a store: `store/play-service-account`, **`prod` only**.
 
 This section is the `prod` side. `ci` keeps every one of them out of every runtime environment —
@@ -637,17 +637,18 @@ ceiling to name `/gogo/ci/<env>/…`, but no role names `signing/*`, `store/*` o
 workstation, not in CI. When a release job does arrive, give it a role whose ceiling names exactly
 the rows that lane needs, never the `ci` tree.
 
-## Firebase App Distribution and dev/staging signing (GoGo-Infra#271)
+## Firebase App Distribution and dev/stag signing (GoGo-Infra#271)
 
 Owner decision 2026-10-28: the `dev` and `stag` flavours (`max.gogo.dev`, `max.gogo.stag`) reach
 testers through **Firebase App Distribution**, iOS and Android; only `prod` goes to TestFlight and
 Play. Shape: `dev/handoffs/sa-shape-infra-271-firebase-distribution.fable.md` (workspace). The lane
 is GoGo-MobileApp#391.
 
-Environment names: the manifest, SSM and `exec-with.sh` say **`staging`**; the lane maps it to the
-flavour `stag`, exactly as `mobile-env.py` does. There is no `stag` environment here.
+Environment names: one word everywhere (GoGo-Infra#286, `docs/environments.md` → *Names*). The
+manifest, SSM, `exec-with.sh` and the mobile flavour all say `dev`, `stag`, `prod`; no lane maps one
+to another.
 
-| Rows | dev | staging | prod |
+| Rows | dev | stag | prod |
 | --- | --- | --- | --- |
 | `signing/apple-asc-key` + `-key-id` + `-issuer-id` | own Team key | own Team key | own key (#231) |
 | `signing/android-keystore` + `-keystore-password` + `-key-alias` + `-key-password` | own keystore | own keystore | upload keystore (#231) |
@@ -658,7 +659,7 @@ The same row is a different parameter in each environment, and exports the same 
 lane signs any flavour and the environment argument chooses the set:
 
 ```bash
-# iOS — Ad Hoc build to Firebase (GoGo-MobileApp#391); staging → flavour stag
+# iOS — Ad Hoc build to Firebase (GoGo-MobileApp#391); same lane for stag
 ./scripts/secrets/exec-with.sh dev \
   signing/apple-asc-key signing/apple-asc-key-id signing/apple-asc-issuer-id \
   firebase/app-distribution-service-account firebase/app-id-ios -- \
@@ -672,13 +673,13 @@ lane signs any flavour and the environment argument chooses the set:
   fastlane android firebase
 ```
 
-(Lane names are #391's to choose; the row sets are the contract.) `dev` and `staging` ask for **no
+(Lane names are #391's to choose; the row sets are the contract.) `dev` and `stag` ask for **no
 typed confirmation** — `confirm_prod` is prod-only, and these keys sign a tester build and upload it to
 Firebase, not to a store. Everything in *What the wrapper buys, exactly* above applies unchanged:
 the lane keeps the variables out of its log and deletes whatever it decodes to disk.
 
 Readiness: `validate.sh <env> --strict --include-planned` reports `firebase_distribution_ios` and
-`firebase_distribution_android` (planned dev and staging) and names the missing rows. Every row is
+`firebase_distribution_android` (planned dev and stag) and names the missing rows. Every row is
 `required: []` until its values exist; flip `required` per environment in a small PR once
 `validate.sh <env>` is green.
 
@@ -686,8 +687,8 @@ Readiness: `validate.sh <env> --strict --include-planned` reports `firebase_dist
 
 | | Lost | Leaked |
 | --- | --- | --- |
-| `signing/android-keystore` at dev/staging | Not recoverable as a signature — nothing re-signs a Firebase build. Generate a new one; testers uninstall before the next install; re-register SHA-1 (Maps) and, for dev, SHA-256 (assetlinks). | Someone can sign builds testers' devices accept as updates of the dev/staging app. Rotate, have testers reinstall. Prod is untouched. |
-| `signing/apple-asc-key` at dev/staging | Create another key. | **Reaches prod.** An App Store Connect key is team-wide, not per app or per environment: with Admin it can create and revoke certificates and profiles — **including the Apple Distribution certificate prod signs with** — upload builds for any of the team's apps, prod included, and change app metadata, users and TestFlight testers. Revoke the key at once, then inspect: App Store Connect → each app → TestFlight builds and App Store versions not shipped by the owner, Users and Access changes, Certificates, Identifiers & Profiles for certificates or profiles not created by the lane. Expire unknown builds; revoke unknown certificates (and regenerate every profile that named one). |
+| `signing/android-keystore` at dev/stag | Not recoverable as a signature — nothing re-signs a Firebase build. Generate a new one; testers uninstall before the next install; re-register SHA-1 (Maps) and, for dev, SHA-256 (assetlinks). | Someone can sign builds testers' devices accept as updates of the dev/stag app. Rotate, have testers reinstall. Prod is untouched. |
+| `signing/apple-asc-key` at dev/stag | Create another key. | **Reaches prod.** An App Store Connect key is team-wide, not per app or per environment: with Admin it can create and revoke certificates and profiles — **including the Apple Distribution certificate prod signs with** — upload builds for any of the team's apps, prod included, and change app metadata, users and TestFlight testers. Revoke the key at once, then inspect: App Store Connect → each app → TestFlight builds and App Store versions not shipped by the owner, Users and Access changes, Certificates, Identifiers & Profiles for certificates or profiles not created by the lane. Expire unknown builds; revoke unknown certificates (and regenerate every profile that named one). |
 | `firebase/app-distribution-service-account` | Create another key. | Firebase App Distribution Admin is full read/write on that project's App Distribution: upload releases, add or remove testers and groups, and read tester emails (personal data), until the key is deleted in Google Cloud IAM. It also reads project metadata — the Firebase project, its registered apps, Resource Manager project get/list — but writes nothing outside App Distribution and reaches no other project ([role definition](https://cloud.google.com/iam/docs/roles-permissions/firebaseappdistro)). |
 
 ### iOS: Ad Hoc certificate and profile — fastlane `cert` / `sigh`, no `match`
@@ -698,7 +699,7 @@ parameter, and `match` would add a storage backend and an encryption passphrase 
 credentials — for a lane that runs on one workstation (owner 2026-10-28).
 
 - **One certificate for every environment.** Apple has a single "Apple Distribution" certificate type
-  for App Store and Ad Hoc, so the prod build and the dev/staging builds are signed by the same
+  for App Store and Ad Hoc, so the prod build and the dev/stag builds are signed by the same
   certificate. The per-environment split is the ASC key (one per environment) and the profile (one Ad
   Hoc profile per bundle id). This is the one place "one set per environment" cannot hold.
 - **The certificate's private key lives in the owner's login keychain**, on the build machine. Back it
@@ -719,11 +720,11 @@ Distribution → Testers & Groups) and are passed to the lane as arguments, not 
 ### Creating and storing them (owner)
 
 The owner creates every value; the assistant supplies the commands, never sees a value. Repeat per
-environment (`dev`, then `staging`). `put.sh` for these environments asks no confirmation.
+environment (`dev`, then `stag`). `put.sh` for these environments asks no confirmation.
 
-1. **Firebase project** — Firebase console → add project `gogo-dev` (staging: `gogo-stag`). In it,
+1. **Firebase project** — Firebase console → add project `gogo-dev` (stag: `gogo-stag`). In it,
    add an iOS app with bundle id `max.gogo.dev` and an Android app with package `max.gogo.dev`
-   (`max.gogo.stag` for staging). A Firebase project is a Google Cloud project: record it in
+   (`max.gogo.stag` for stag). A Firebase project is a Google Cloud project: record it in
    `docs/accounts.md` → *Which Google Cloud project owns a DEV credential*. It is **not** the project
    that owns the Maps keys.
 
@@ -741,7 +742,7 @@ environment (`dev`, then `staging`). `put.sh` for these environments asks no con
    The app ids are on Project settings → General → Your apps.
 
 3. **App Store Connect key** — App Store Connect → Users and Access → Integrations → App Store
-   Connect API → **Team Keys** → generate `gogo-lane-dev` (staging: `gogo-lane-staging`). Role: the
+   Connect API → **Team Keys** → generate `gogo-lane-dev` (stag: `gogo-lane-stag`). Role: the
    one that may create certificates and profiles — **Admin** per fastlane's documentation (individual
    keys cannot use provisioning endpoints); check Apple's role table on that page first and take
    *App Manager* if it suffices. The `.p8` downloads **once**:
@@ -771,7 +772,7 @@ environment (`dev`, then `staging`). `put.sh` for these environments asks no con
 
    Verify the round trip as in step 2 of the prod section (`get.sh dev signing/android-keystore --show
    | base64 -d` into a `mktemp` file, compare digests) and back the `.p12` up to the password manager —
-   at dev/staging it *is* the signature. **Keep the local file until step 5 has read the fingerprints.**
+   at dev/stag it *is* the signature. **Keep the local file until step 5 has read the fingerprints.**
 
 5. **Fingerprints** — public values, not secrets. Read them from the local `.p12`, then delete it:
 
@@ -781,19 +782,19 @@ environment (`dev`, then `staging`). `put.sh` for these environments asks no con
    ```
 
    - **SHA-1 → Maps.** Google Cloud console → the project owning `google/maps-android-api-key` →
-     Credentials → that key → Android apps → add `max.gogo.dev` + this SHA-1 (staging: `max.gogo.stag`).
+     Credentials → that key → Android apps → add `max.gogo.dev` + this SHA-1 (stag: `max.gogo.stag`).
      Record it in `docs/accounts.md` → *App identity* → signing table. Without it, the Firebase build
-     shows a grey map and `Authorization failure` in logcat. (Staging has no Maps key value yet —
+     shows a grey map and `Authorization failure` in logcat. (Stag has no Maps key value yet —
      a separate issue; the restriction can be added when it exists.)
    - **SHA-256 → App Links (dev only).** Add it to `config/well-known/dev/assetlinks.json` next to the
      debug fingerprint, in a PR; the merge to `develop` triggers `terraform-apply-dev.yml`, which
      serves the file from the share-link Worker, so the Firebase dev build verifies `go-dev.gogo.id.vn`. `stag` claims no
-     links, so staging has no file.
+     links, so stag has no file.
 
 6. **Check:** `./scripts/secrets/validate.sh dev --strict --include-planned` — both
    `firebase_distribution_*` capabilities complete.
 
-### Rotating and revoking (dev/staging)
+### Rotating and revoking (dev/stag)
 
 - **ASC key:** create the new key, store it, build once with it, revoke the old one. Revoking is the
   kill switch and leaves the other environments' keys working.
@@ -812,7 +813,7 @@ environment (`dev`, then `staging`). `put.sh` for these environments asks no con
   the old key; confirm by fetching `https://go-dev.gogo.id.vn/.well-known/assetlinks.json` — and record the rotation on GoGo-Infra#271. Testers who
   keep a build signed with the old key lose Maps and verified links on it — that is the point.
 - **Distribution certificate:** shared with prod — revoke only to replace a compromised one, and
-  regenerate every profile (prod App Store and dev/staging Ad Hoc) afterwards.
+  regenerate every profile (prod App Store and dev/stag Ad Hoc) afterwards.
 
 ## Agent GitHub App (GoGo-Infra#250)
 
@@ -1094,7 +1095,7 @@ F-09). So:
 
    must print `[]` (let a running one finish; never cancel an apply midway). The same command
    with `terraform-apply-prod.yml` when prod is in scope.
-2. **Apply the boundary** for dev (commands below). Staging and prod: the same step when those
+2. **Apply the boundary** for dev (commands below). Stag and prod: the same step when those
    environments are applied — `terraform-apply-prod` would otherwise fail on the boundary the first
    time it runs with this change.
 3. **Confirm.** A fresh `plan (dev)` on this PR shows no change to `module.boundary`; otherwise the
@@ -1182,7 +1183,7 @@ rotated at the provider — removing it from the latest revision changes nothing
 | --- | --- | --- | --- | --- |
 | 2026-09-05 | Grafana Cloud access-policy tokens — `metrics:write` (collector) and `metrics:read` (admin API), Free stack `prometheus-prod-37-prod-ap-southeast-1`, instance `3553140` | ADR-0007: DEV samples moved to the self-hosted Prometheus at `192.168.68.168`; the Cloud store is retired, so its credentials must not stay valid (§E7: revoked last, after the shared end-to-end gate passed) | platform owner (revoked at Grafana Cloud); this change (SSM + manifest) | Revoked at the provider **first**. Then `observability/grafana-prom-url`, `-prom-user`, `-write-token`, `-read-token`, `-retention-days` deleted from SSM and removed from the manifest **together**, because `validate.sh` fails on MISSING and UNDECLARED alike. `check-quotas.sh` Grafana probe retired (§E6). `grafana-url` is unrelated (self-hosted Grafana link) and stays. |
 | 2026-09-05 | `redis/url` (dev) — Upstash database recreated: `gogo-dev` @ `secure-rattler-216851.upstash.io`; the previous `trusting-cougar-204025` no longer exists in the account | Owner recreated the DEV Redis while adding the INF-060 rows (reason: owner to record) | platform owner | The DEV host kept the old URL from the 05:20Z deploy; `.env.dev` `REDIS_URL` was swapped by hand (backup `.env.dev.pre-redis-20260905T063905Z`) and api + worker recreated — readiness answers `redis: ok`. The next deploy-dev renders the same value; it is blocked by `validate.sh` (UNDECLARED) until this manifest lands. |
-| 2026-09-06 | CMS `super_admin` password on DEV — the literal that was in GoGo-BE `libs/database/src/seed.ts` and remains in that repository's history | INF-069 moved credentials to SSM but rotated nothing. The DEV account still authenticated with the committed literal, verified against the running environment on 2026-09-06 (INF-070 / #149) | this change (INF-070) | Rotated through CMS account management (`POST /v1/cms/auth/change-password`), then `put.sh dev cms/seed-admin-password` — that order. Verified: the rotating session survived, the second session was revoked with `revoke_reason = password_changed`, an `admin.password_changed` audit row exists, the committed literal now answers 401, and a login using only what SSM holds answers 201. SSM parameter now at Version 2. **Staging and prod were never exposed** — neither has such an account, and both hold freshly generated values. |
+| 2026-09-06 | CMS `super_admin` password on DEV — the literal that was in GoGo-BE `libs/database/src/seed.ts` and remains in that repository's history | INF-069 moved credentials to SSM but rotated nothing. The DEV account still authenticated with the committed literal, verified against the running environment on 2026-09-06 (INF-070 / #149) | this change (INF-070) | Rotated through CMS account management (`POST /v1/cms/auth/change-password`), then `put.sh dev cms/seed-admin-password` — that order. Verified: the rotating session survived, the second session was revoked with `revoke_reason = password_changed`, an `admin.password_changed` audit row exists, the committed literal now answers 401, and a login using only what SSM holds answers 201. SSM parameter now at Version 2. **Stag and prod were never exposed** — neither has such an account, and both hold freshly generated values. |
 | _(pending INF-021)_ | APNs auth key `AuthKey_*.p8` | Key file present in the workspace next to the repos | | Upload to OneSignal, delete the local copy, confirm it never entered Git; if it did, revoke on Apple Developer and issue a new key |
 
 ## The permissions boundary is not editable from CI
@@ -1217,9 +1218,9 @@ the **Cloudflare** method (sign in as a member of the Cloudflare account), in ev
 No one-time PIN is configured. That is why `cms/access-staff-emails` is normally `[]`: a staff
 mailbox on the list cannot pass the Access page unless it is also an account member, and staff do
 not need SSO (owner decision 2026-10-08, `execution-policy.md` §8). The super admin's mailbox must
-be an account member. Staging and production must set `cms_require_mfa = true` (the module refuses
+be an account member. Stag and production must set `cms_require_mfa = true` (the module refuses
 otherwise); whether the account-member method satisfies Cloudflare's `mfa` rule has not been
-verified — confirm it, or add an MFA-capable identity provider, before the first staging apply.
+verified — confirm it, or add an MFA-capable identity provider, before the first stag apply.
 There is no organisation-membership policy any more: a second `include` that
 ignores the list is a way in the list does not control (GoGo-BE#687 D-8; the GitHub identity
 provider was declined in GoGo-Infra#67). When an identity provider is added, it becomes a

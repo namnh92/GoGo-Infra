@@ -1,8 +1,8 @@
 # OneSignal environment contract (INF-013)
 
-DEV, STAGING and PROD use the same SDK/runtime path. DEV is mini-production.
+DEV, STAG and PROD use the same SDK/runtime path. DEV is mini-production.
 Supply separate App IDs, send keys and identity signing keys under
-`/gogo/<dev|staging|prod>/backend/onesignal/` using the existing manifest/put tooling.
+`/gogo/<dev|stag|prod>/backend/onesignal/` using the existing manifest/put tooling.
 Never copy DEV credentials to another environment.
 
 GoGo-BE reads three values (GoGo-BE#193/#199, rendered by `render-env.sh`):
@@ -27,8 +27,8 @@ python3 scripts/secrets/mobile-env.py dev --profile gogo-bootstrap \
 This replaces the destination; use a dedicated generated file/checkout if it
 contains other local configuration. The command requests only the App ID and
 never fetches REST/signing secrets. Missing input fails before replacing output.
-For staging/prod change environment, URLs and values in SSM; the code is identical.
-`staging` maps to the established mobile flavor `stag`.
+For stag/prod change environment, URLs and values in SSM; the code is identical.
+The environment name is the mobile flavour (`dev`, `stag`, `prod`; GoGo-Infra#286).
 
 APNs mode describes signing: a development-signed build uses `development`;
 TestFlight/store/ad-hoc distribution uses `production`, even for the DEV app.

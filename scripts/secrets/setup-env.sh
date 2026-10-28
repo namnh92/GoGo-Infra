@@ -68,7 +68,7 @@ key_pattern() {
     ROOT_DOMAIN|API_DOMAIN|CMS_DOMAIN|SHARE_DOMAIN)
                                  echo '^[a-z0-9.-]+\.[a-z]{2,}$' ;;
     R2_ENDPOINT)                 echo '^https://[0-9a-f]{32}\.r2\.cloudflarestorage\.com$' ;;
-    R2_BUCKET)                   echo '^gogo-(dev|staging|prod)-[a-z0-9-]+$' ;;
+    R2_BUCKET)                   echo '^gogo-(dev|stag|prod)-[a-z0-9-]+$' ;;
     ONESIGNAL_APP_ID)            echo '^[0-9a-f-]{36}$' ;;
     APPLE_TEAM_ID)               echo '^[A-Z0-9]{10}$' ;;
     APNS_KEY_ID)                 echo '^[A-Z0-9]{10}$' ;;
@@ -165,8 +165,17 @@ load_env_file() {
     value="${value#\"}"
 
     base_key="${key%_DEV}"
-    base_key="${base_key%_STAGING}"
+    base_key="${base_key%_STAG}"
     base_key="${base_key%_PROD}"
+
+    # GoGo-Infra#286: the environment is `stag`, so its suffix is _STAG. A
+    # leftover _STAGING key would otherwise fall through to "not allowed" and
+    # read like a secret check; say what it is instead.
+    if [[ "$key" == *_STAGING ]]; then
+      echo "error: ${key} uses the retired _STAGING suffix — rename it to ${key%_STAGING}_STAG (GoGo-Infra#286)" >&2
+      rejected=$((rejected + 1))
+      continue
+    fi
 
     if [[ " ${ALLOWED_KEYS//$'\n'/ } " != *" ${base_key} "* ]]; then
       echo "error: ${key} is not an allowed key in config/bootstrap.env" >&2

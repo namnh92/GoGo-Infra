@@ -11,7 +11,7 @@ name: terraform-apply-prod
 # Requiring a human to start the run is weaker than an approval, and it is what
 # is available. Restore the push trigger once required reviewers are enabled;
 # the environment reference stays either way, because the OIDC subject
-# repo:...:environment:production is what pins the trust policy.
+# repo:...:environment:prod is what pins the trust policy.
 on:
   workflow_dispatch:
 
@@ -29,9 +29,9 @@ jobs:
     runs-on: ubuntu-latest
 
     # The production environment supplies the approval gate, and the apply role's
-    # trust policy is pinned to environment:production — so this role cannot be
+    # trust policy is pinned to environment:prod — so this role cannot be
     # assumed from a branch or a pull request even if a workflow tries.
-    environment: production
+    environment: prod
 
     steps:
       - uses: actions/checkout@v4

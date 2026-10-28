@@ -4,7 +4,7 @@ The alerts provisioned by [ADR-0009](adr/0009-grafana-alerting-for-administrativ
 (INF-156). Eighteen rules in the Grafana folder **`GoGo Administrative Data`**,
 evaluated by Grafana Unified Alerting on `192.168.68.168`, delivered to Telegram.
 
-Everything here is **DEV**. Nothing in this file applies to staging or
+Everything here is **DEV**. Nothing in this file applies to stag or
 production, neither of which has an administrative dataset.
 
 | | |

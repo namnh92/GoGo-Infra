@@ -326,7 +326,7 @@ jobs:
       - name: manifest parses, and namespaces stay separated
         run: |
           ./scripts/lib/manifest.test.sh
-          for env in dev staging prod; do
+          for env in dev stag prod; do
             python3 scripts/lib/manifest.py "$env" >/dev/null
             echo "${env}: $(python3 scripts/lib/manifest.py "$env" --required | wc -l) required parameters"
           done

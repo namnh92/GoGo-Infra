@@ -158,7 +158,7 @@ not for the end of bootstrap.
 
 Then enable, and treat as part of the security model rather than as process hygiene:
 branch protection on `master` and `develop`, CODEOWNER review on `.github/workflows/**`, and the
-`production` GitHub Environment with required reviewers.
+`prod` GitHub Environment with required reviewers (named `production` before GoGo-Infra#286).
 
 ## Credential readiness, per environment
 
@@ -169,7 +169,7 @@ manifest what is missing rather than reading workflows to find out.
 export AWS_PROFILE=gogo-bootstrap
 
 ./scripts/secrets/validate.sh dev     --strict                    # what runs today
-./scripts/secrets/validate.sh staging --strict --include-planned  # what it is meant to run
+./scripts/secrets/validate.sh stag --strict --include-planned  # what it is meant to run
 ./scripts/secrets/validate.sh prod    --strict --include-planned
 ```
 

@@ -11,13 +11,13 @@
 #
 # Reads no values. Safe to run and to paste into a ticket.
 #
-#   ./scripts/ops/offboard-checklist.sh [env ...]     default: dev staging prod
+#   ./scripts/ops/offboard-checklist.sh [env ...]     default: dev stag prod
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ENVS=("$@")
-[[ "${#ENVS[@]}" -eq 0 ]] && ENVS=(dev staging prod)
+[[ "${#ENVS[@]}" -eq 0 ]] && ENVS=(dev stag prod)
 
 echo "# Offboarding rotation checklist"
 echo
@@ -62,7 +62,7 @@ for env in "${ENVS[@]}"; do
   done < <(python3 "${REPO_ROOT}/scripts/lib/manifest.py" "$env" --consumer all)
 done
 
-# CI parameters exist only under dev/ and prod/ — staging plans run against the
+# CI parameters exist only under dev/ and prod/ — stag plans run against the
 # dev credentials by design (see docs/bootstrap.md), so this list ignores the
 # arguments above.
 for env in dev prod; do
