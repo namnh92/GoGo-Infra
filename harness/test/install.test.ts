@@ -13,7 +13,7 @@
  */
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { appendFileSync, chmodSync, cpSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, cpSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1063,6 +1063,11 @@ env -i PATH=/usr/bin:/bin HOME="$HOME" "$node" "$root/bin/harness.mts" activate 
 '
 `;
 
+  const UPGRADE_MOVE = `root="<root>"
+mkdir -p "$root/quarantine"
+mv "$root/bin/harness.mts" "$root/quarantine/bin-harness.mts.$(date -u +%Y%m%dT%H%M%SZ)"
+`;
+
   it('docs/ai-harness.md holds exactly this block', () => {
     const docs = readFileSync(join(REPO, 'docs/ai-harness.md'), 'utf8');
     assert.ok(docs.includes(`\`\`\`sh\n${BLOCK}\`\`\`\n`), 'the first-install block in docs/ai-harness.md differs from the one this test runs');
@@ -1127,8 +1132,13 @@ env -i PATH=/usr/bin:/bin HOME="$HOME" "$node" "$root/bin/harness.mts" activate 
     r = owner(['/bin/bash', '-c', fill(b.sha)], { cwd: w.work });
     assert.notEqual(r.status, 0, r.out);
     assert.equal(readActive(open(w)).sha, a.sha);
-    mkdirSync(join(w.install, 'quarantine'), { recursive: true });
-    renameSync(join(w.install, 'bin/harness.mts'), join(w.install, 'quarantine/bin-harness.mts.test'));
+    // The documented bootstrap move, verbatim, on an install that has no quarantine/ yet (PR #275 Sol r1 F-01).
+    assert.ok(readFileSync(join(REPO, 'docs/ai-harness.md'), 'utf8').includes(`\`\`\`sh\n${UPGRADE_MOVE}\`\`\`\n`), 'the bootstrap-upgrade block in docs/ai-harness.md differs from the one this test runs');
+    assert.equal(existsSync(join(w.install, 'quarantine')), false);
+    const mv = spawnSync('/bin/sh', ['-euc', UPGRADE_MOVE.replace('<root>', w.install)], { encoding: 'utf8' });
+    assert.equal(mv.status, 0, mv.stderr);
+    assert.equal(existsSync(join(w.install, 'bin/harness.mts')), false);
+    assert.equal(readdirSync(join(w.install, 'quarantine')).filter((f) => f.startsWith('bin-harness.mts.')).length, 1);
     r = owner(['/bin/bash', '-c', fill(b.sha)], { cwd: w.work });
     assert.equal(r.status, 0, r.out);
     assert.match(r.out, /bin\/harness kept/);

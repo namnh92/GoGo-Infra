@@ -276,10 +276,17 @@ Without `--node`, an existing `bin/harness` is never touched.
 
 **Bootstrap upgrade.** `bin/harness.mts` is placed once, and `activate` is its own code: activating a
 newer version does not change how activation itself works. When `harness/src/install/launcher.ts`
-changed (e.g. #272), the owner on a terminal prepares the new SHA (below), moves the bootstrap aside,
-`mv <root>/bin/harness.mts <root>/quarantine/bin-harness.mts.$(date -u +%Y%m%dT%H%M%SZ)`, and pastes
-the first-install block again with the new `<sha>` and the same `<root>` and `<node>`. `bin/harness`
-is kept, or rewritten when the new template differs, and the plan says which.
+changed (e.g. #272), the owner on a terminal prepares the new SHA (below), moves the bootstrap aside
+with this block (`<root>` as in the first install; `harness/test/install.test.ts` runs it):
+
+```sh
+root="<root>"
+mkdir -p "$root/quarantine"
+mv "$root/bin/harness.mts" "$root/quarantine/bin-harness.mts.$(date -u +%Y%m%dT%H%M%SZ)"
+```
+
+then pastes the first-install block again with the new `<sha>` and the same `<root>` and `<node>`.
+`bin/harness` is kept, or rewritten when the new template differs, and the plan says which.
 
 This first download is the trust anchor (trust on first use over HTTPS to GitHub): nothing the
 block fetches can vouch for itself. To check it out of band, compare
