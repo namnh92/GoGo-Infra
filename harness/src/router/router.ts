@@ -71,7 +71,7 @@ export const THRESHOLDS = {
    * serious tasks 0.56–1.00, low-risk tasks 0.00–0.20.
    */
   riskApprovalMinP: 0.5,
-  /** P(an authorized reversible default exists) needed to proceed on a product question. Wrong-high: a reversible choice made without asking. */
+  /** P(the task or rules name a reversible default), as the model estimates it, needed to proceed on a product question. Wrong-high: a reversible choice made without asking. */
   reversibleDefaultMin: 0.8,
   /** Below this `missing_context` confidence, never AUTO_EXECUTE. Wrong: one research step too many. */
   missingContextConfidenceFloor: 0.5,
@@ -379,7 +379,7 @@ export function mapAnswers(input: RouterInput, answers: Record<string, Answer>, 
   }
   if (missing.choice === 'product_decision') {
     if (reversible.noul >= THRESHOLDS.reversibleDefaultMin) {
-      return { outcome: 'RESEARCH_AND_CONTINUE', reasons: [`JEV: authorized reversible default (P=${reversible.noul}); record the assumption in the handoff`] };
+      return { outcome: 'RESEARCH_AND_CONTINUE', reasons: [`JEV: task or rules appear to name a reversible default (model estimate P=${reversible.noul}); check its scope and owner authorization before relying on it, and record the assumption in the handoff`] };
     }
     return searched
       ? { outcome: 'HUMAN_APPROVAL', reasons: ['JEV: owner decision needed and sources already searched'] }

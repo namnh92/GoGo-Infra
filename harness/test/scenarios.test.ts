@@ -64,13 +64,24 @@ describe('3. ambiguous product requirement', () => {
 });
 
 describe('4. safe reversible default', () => {
-  it('continues on the authorized default instead of asking', async () => {
+  it('continues on the default the task appears to name instead of asking', async () => {
     const { provider } = countingMock(() => ({ answers: intakeAnswers({ missing: 'product_decision', reversible: 0.92, clarity: 2 }) }));
     const d = await harness(provider).router.decide(
       input({ summary: summary({ openQuestions: ['Default sort order?'], searchedSources: ['docs/search-relevance.md'], rules: ['Default to the existing sort'] }) }),
     );
     assert.equal(d.outcome, 'RESEARCH_AND_CONTINUE');
     assert.match(d.reasons.join(' '), /reversible default/);
+  });
+
+  it('#260: the reason states an estimate, never an authorization', async () => {
+    const { provider } = countingMock(() => ({ answers: intakeAnswers({ missing: 'product_decision', reversible: 0.92, clarity: 2 }) }));
+    const d = await harness(provider).router.decide(
+      input({ summary: summary({ openQuestions: ['Default sort order?'], searchedSources: ['docs/search-relevance.md'], rules: ['Default to the existing sort'] }) }),
+    );
+    const reason = d.reasons.join(' ');
+    assert.equal(/authori[sz]ed/i.test(reason), false, reason);
+    assert.match(reason, /check .*scope and owner authorization/);
+    assert.match(reason, /record the assumption in the handoff/);
   });
 });
 
