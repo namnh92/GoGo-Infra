@@ -21,12 +21,26 @@ die() {
 # 'ci' is a namespace, not an environment: it holds pipeline-control credentials
 # under /gogo/ci/* rather than application runtime values. Scripts that render
 # env files reject it; put/list/delete accept it.
+#
+# 'tools' (GoGo-Infra#294) is a pseudo-environment: developer-tooling keys that
+# belong to no GoGo environment, under /gogo/tools/*. Opt-in per script, like
+# 'ci': only exec-with.sh, put.sh and validate.sh take it. Everything else
+# renders, seeds or diagnoses an environment, and has nothing to do there.
 require_env_arg() {
-  local env="${1:-}" allow_ci="${2:-no}"
+  local env="${1:-}" allow_ci=no allow_tools=no flag
+  for flag in "${@:2}"; do
+    case "$flag" in
+      allow-ci) allow_ci=yes ;;
+      allow-tools) allow_tools=yes ;;
+    esac
+  done
   case "$env" in
     dev | staging | prod) ;;
     ci)
-      [[ "$allow_ci" == "allow-ci" ]] || die "'ci' is not a runtime environment"
+      [[ "$allow_ci" == "yes" ]] || die "'ci' is not a runtime environment"
+      ;;
+    tools)
+      [[ "$allow_tools" == "yes" ]] || die "'tools' is not an environment; only exec-with.sh, put.sh and validate.sh take it"
       ;;
     *) die "environment must be one of: dev, staging, prod (got '${env:-<empty>}')" ;;
   esac
@@ -69,8 +83,16 @@ require_aws() {
 # The second form is what the `ci` namespace in the manifest resolves to. The
 # tree is /gogo/ci/<env>/… rather than /gogo/<env>/ci/… because the IAM policies
 # and the plan/apply role split are written against that prefix (INF-171).
+#
+# `tools` has no environment level at all (GoGo-Infra#294):
+#   ssm_prefix tools [namespace] -> /gogo/tools
+#   ssm_prefix <env> tools       -> /gogo/tools
+# The manifest reader never hands a real environment a tools row, so the second
+# form only occurs through a caller's mistake, and still lands in the one tree.
 ssm_prefix() {
-  if [[ "$1" == "ci" ]]; then
+  if [[ "$1" == "tools" || "${2:-}" == "tools" ]]; then
+    printf '/gogo/tools'
+  elif [[ "$1" == "ci" ]]; then
     printf '/gogo/ci'
   elif [[ "${2:-backend}" == "ci" ]]; then
     printf '/gogo/ci/%s' "$1"
@@ -78,6 +100,14 @@ ssm_prefix() {
     printf '/gogo/%s/%s' "$1" "${2:-backend}"
   fi
 }
+
+# Where the tool rows lived before GoGo-Infra#294 moved them to /gogo/tools/.
+# TRANSITIONAL: exec-with.sh falls back to it, once per path and saying so,
+# until the owner has copied the values and reinstalled every harness (#294
+# steps 2-3). Removed with the fallback in #294 step 5 — after the owner
+# deletes the old parameters, nothing should read here.
+# shellcheck disable=SC2034
+LEGACY_TOOLS_PREFIX=/gogo/ci/dev
 
 # Which namespace the manifest declares a path in. Callers do not pass it: the
 # manifest already knows, and a second place to state it is a second place for

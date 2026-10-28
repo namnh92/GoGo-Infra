@@ -47,7 +47,7 @@ check it, and refuses live mode without it.
 
 ```bash
 JEV_MODE=live JEV_LIVE_AUTHORIZED=yes JEV_PRIVACY_REVIEWED=yes \
-  ./scripts/secrets/exec-with.sh dev ai-harness/openrouter-api-key -- \
+  ./scripts/secrets/exec-with.sh tools ai-harness/openrouter-api-key -- \
   node harness/src/cli.ts decide --input task.json
 ```
 
@@ -150,7 +150,7 @@ an allowlist, and of this table only `passed` rows reach it from the owner's she
 | `HARNESS_ANTHROPIC_MONTHLY_USD` / `_RESERVE_USD` | `100` / `10` | local Anthropic API target | not passed (unused by the child) |
 | `HARNESS_CONCURRENCY` | `1` | checkpoint serialization only; only `1` is accepted — `decide` holds `HARNESS_STATE_DIR/harness.lock` across load, limits, inference and save, so overlapping `decide` calls queue instead of losing counters or charges. The lock ends when `decide` returns: it does not limit how many Claude sessions or automation jobs run (not enforced here) | not passed (the child is one call) |
 | `JEV_PRIVACY_REVIEWED` | — | must be `yes` for `live`: the privacy review + DPA for the outbound data contract are recorded | set by the hook (the opt-in) |
-| `OPENROUTER_API_KEY` | — | from `exec-with.sh dev ai-harness/openrouter-api-key` | from the installed `exec-with.sh` only |
+| `OPENROUTER_API_KEY` | — | from `exec-with.sh tools ai-harness/openrouter-api-key` (`/gogo/tools/`, GoGo-Infra#294) | from the installed `exec-with.sh` only |
 
 ## Cost controls and monitoring
 
@@ -491,8 +491,9 @@ privacy review + DPA for real prompts (#244) is not done, and the confirmation s
   (overwritten by every run).
 - **One JEV call, the key in one child.** The hook process loads no config and builds no provider.
   When sending, it starts `prompt-hook --live-child` through `scripts/secrets/exec-with.sh` of the
-  installed version it runs from (`<version>/scripts/secrets/exec-with.sh dev
-  ai-harness/openrouter-api-key -- node <launcher> …`) with the payload on the child's stdin, never
+  installed version it runs from (`<version>/scripts/secrets/exec-with.sh tools
+  ai-harness/openrouter-api-key -- node <launcher> …`; an install made before GoGo-Infra#294
+  still calls it with `dev` and reads `/gogo/ci/dev/` — reinstall from `develop`) with the payload on the child's stdin, never
   in a file, and a 12 s limit. The child asks the `intake` questions as a
   prompt observation: the "criteria stated, no question → AUTO" shortcut does not apply, the only
   action is `read`, no scope or authorization comes from the text. Cost goes to the shared
