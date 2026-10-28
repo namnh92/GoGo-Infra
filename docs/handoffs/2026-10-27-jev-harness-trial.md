@@ -5,6 +5,15 @@
 - Written: 2026-10-27
 - GitHub handoff: namnh92/GoGo-Infra#241 issuecomment-6439771047
 
+> **Status 2026-10-28 (added before merge; the rest of this file is the 2026-10-27 snapshot).**
+> The three follow-ups below are done on `develop`: 1 → #266 (`00dc70b`), 2 → #267 (`6008308`,
+> hook code `jev_aws_unavailable`), 3 → #268 (`3a0225d`). Since then the harness and agent keys
+> moved out of `/gogo/ci/dev/` to the env-less namespace `/gogo/tools/` (#294, `68efdbd`): the
+> wrapper is now `exec-with.sh tools ai-harness/openrouter-api-key -- …`, and every harness
+> install must be redone from `develop` before the old parameters are deleted
+> (`docs/secrets.md` → *Namespace `tools`*). The prompt template at the end of this file is
+> historical — do not run it as written.
+
 ## Done
 - Merged: #253 (`3925472`, install outside the checkout), #254 (`187c3a4`, prompt hook + JEV
   opt-in), #256 (`50fd459`, `as-agent.sh` constructed environment), #261 (`6acedfc`,
