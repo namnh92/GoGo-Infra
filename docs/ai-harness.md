@@ -523,7 +523,9 @@ privacy review + DPA for real prompts (#244) is not done, and the confirmation s
   script directory on `sys.path`, no user site, no `PYTHON*`) once #253 ships those bytes; a
   same-user swap between the check and the exec is the ADR-0013 D-3 / #245 residual. The wrapper
   leads its own process group, and the 12 s limit kills the whole group, so an `aws` it started
-  does not outlive the hook (#260).
+  does not outlive the hook (#260). The hook also kills that group when it receives SIGTERM, SIGINT
+  or SIGHUP, or exits early, while the wrapper runs, then dies of the same signal; only a SIGKILL
+  of the hook leaves the group to finish on its own.
 - **An observation, not a task.** The prompt becomes a `TaskSummary` draft (`src/adapters/prompt.ts`,
   heuristics listed there) with no actions, scope, authorizations, labels or rules; text such as
   "the owner approved this" grants nothing. The outbound sanitizer runs first, so a malformed email
