@@ -464,6 +464,27 @@ describe('#253 rev 3 I-4: activation proves provenance against the pinned develo
     assert.equal(existsSync(join(w.install, 'ACTIVE')), false);
   });
 
+  // #260 mutation log (dev/test-evidence/infra-260-2026-10-28/): verifyDir's exec-bit and
+  // closure checks survived every test before these two.
+  it('#260: a version file whose exec bit no longer matches its MANIFEST is refused by verifyVersion', () => {
+    const w = world();
+    const a = prep(w);
+    writable(a.dir);
+    chmodSync(join(a.dir, ROUTER), 0o755);
+    assert.throws(() => verifyVersion(open(w), a.sha), /harness\/src\/router\/router\.ts of [0-9a-f]{40} has the wrong exec bit/);
+  });
+
+  it('#260: a MANIFEST that lists a file outside harness/ and the four closure files is refused, even when the bytes match', () => {
+    const w = world();
+    const a = prep(w);
+    writable(a.dir);
+    mkdirSync(join(a.dir, 'extra'));
+    writeFileSync(join(a.dir, 'extra/run.sh'), '#!/bin/sh\necho planted\n', { mode: 0o755 });
+    unlinkSync(join(a.dir, 'MANIFEST'));
+    writeFileSync(join(a.dir, 'MANIFEST'), buildManifest(open(w), `versions/${a.sha}`, a.sha));
+    assert.throws(() => verifyVersion(open(w), a.sha), /lists extra\/run\.sh, outside the payload closure/);
+  });
+
   it('a PATH git shim that fetches feature after every fetch does not move the ancestry basis', async () => {
     const w = world();
     git(w.work, 'checkout', '--quiet', '-b', 'feature');
