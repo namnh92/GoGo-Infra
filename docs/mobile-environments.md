@@ -18,7 +18,8 @@ chỉ `prod` → TestFlight + Play internal. Lane fastlane thuộc GoGo-MobileAp
 - **Giá trị riêng mỗi môi trường.** Không copy giá trị dev sang stag hay prod; chỉ clone cấu trúc. Ngoại lệ có chủ đích:
   `mobile/apple/team-id` (một team Apple), cert Apple Distribution (Apple chỉ có một loại cho App Store và Ad Hoc),
   APNs `.p8` (team-wide, chỉ nằm trong OneSignal). Sentry giữ **một project** `gogo-mobile`, phân biệt bằng tag
-  `environment` (ADR-0011); mỗi môi trường một client key để tắt riêng được.
+  `environment` (ADR-0011, owner 2026-10-28). Client key riêng mỗi môi trường để tắt riêng được là **khuyến nghị
+  của agent, owner chưa chốt**; hôm nay một key dùng chung (environments.md, hàng Sentry).
 - `put.sh prod …` hỏi xác nhận gõ tay **từ terminal**, nên `< file` vẫn giao đúng nội dung file. Đó là cách duy nhất
   để ghi một key nhiều dòng (`.p8`, JSON).
 
@@ -68,7 +69,7 @@ Không thuộc môi trường nào, không clone: `ai-harness/*`, `github/agent-
 
 ## 1. dev
 
-Đã có (đo 2026-10-28, `validate.sh dev --strict`): toàn bộ `mobile:` (Maps ×2, Sentry DSN, Adjust ×2) và
+Đã có (đo 2026-10-28, `validate.sh dev --strict --include-planned`): toàn bộ `mobile:` (Maps ×2, Sentry DSN, Adjust ×2) và
 `backend:onesignal/app-id`. Còn thiếu 10 hàng `ci:` của Firebase + ký.
 
 1. **Firebase `gogo-dev` + 10 hàng ci** — làm đúng [secrets.md](secrets.md#creating-and-storing-them-owner) bước 1–4
@@ -114,7 +115,7 @@ Hôm nay `/gogo/prod/` trống. Thứ tự theo phụ thuộc: app trên store p
    ./scripts/secrets/put.sh prod onesignal/app-id          # UUID, client config
    ./scripts/secrets/put.sh prod onesignal/rest-api-key    # BE dùng; mobile không đọc
    ```
-8. **Sentry** — project `gogo-mobile` → Settings → Client Keys → tạo key `prod`, lấy DSN của key đó; token upload là
+8. **Sentry** — project `gogo-mobile` → Settings → Client Keys → DSN (key riêng `prod` nếu owner chốt khuyến nghị ở mục Luật); token upload là
    organization auth token mới cho prod (không dùng lại token dev):
    ```bash
    ./scripts/secrets/put.sh prod sentry/dsn                  # DSN, hoặc literal off
@@ -142,9 +143,11 @@ Mọi lệnh dưới đây dùng `stag` và **chạy được khi #286 PR-1 đã
    `put.sh stag google/maps-ios-api-key`, `put.sh stag google/maps-android-api-key`.
 4. **OneSignal `GoGo Staging` (app mới)** — APNs `.p8` (§0.2) cho `max.gogo.stag`; FCM V1 từ project `gogo-stag`
    như dev bước 3. Rồi `put.sh stag onesignal/app-id`, `put.sh stag onesignal/rest-api-key`.
-5. **Sentry** — client key `stag` trong `gogo-mobile`; `put.sh stag sentry/dsn`, `put.sh stag sentry/mobile-auth-token` (token mới cho stag).
+5. **Sentry** — DSN của `gogo-mobile` (key riêng `stag` nếu owner chốt); `put.sh stag sentry/dsn`, `put.sh stag sentry/mobile-auth-token` (token mới cho stag).
 6. **Adjust, Tenjin** — app stag riêng; `put.sh stag adjust/ios-app-token`, `put.sh stag adjust/android-app-token`;
-   Tenjin như prod bước 10 với hậu tố/môi trường stag.
+   Tenjin: trước #291 theo [tenjin-environments.md](tenjin-environments.md) (hậu tố mà `tenjin-mobile-env.py` đọc
+   cho môi trường đó); sau #291 `put.sh stag tenjin/ios-sdk-key`, `put.sh stag tenjin/android-sdk-key`,
+   `put.sh stag apple/team-id`.
 7. **Kiểm tra** — mục [Validate](#validate-theo-môi-trường).
 
 ## Validate theo môi trường
