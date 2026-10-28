@@ -199,7 +199,7 @@ VALUE="$declared_value"
 
 # 7. The prod confirmation (GoGo-Infra#231, Sol F-02). put.sh reads the value
 # from stdin, so the confirmation has to come from the controlling terminal —
-# `put.sh prod store/apple-asc-key < AuthKey.p8` is the documented shape — and
+# `put.sh prod signing/apple-asc-key < AuthKey.p8` is the documented shape — and
 # a session with no terminal is refused with a message, before any `aws` call.
 # Through scripts/lib/tty-harness.py, so the result does not depend on the
 # terminal this suite happened to be started from (see exec-with.test.sh).

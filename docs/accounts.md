@@ -216,15 +216,16 @@ fewer Seer contributors or Seer off; a lower plan tier at renewal (ADR-0012a D-4
 ### Store accounts and signing material (GoGo-Infra#231)
 
 Paired with the Fastlane lanes, GoGo-MobileApp#350 (iOS) and #351 (Android). The credentials live in
-SSM under `/gogo/ci/prod/store/…` — `prod` only, because there is one signing identity for the app
-that ships — and are read only by `scripts/secrets/exec-with.sh` on the owner's workstation. The
+SSM under `/gogo/ci/prod/signing/…` and `/gogo/ci/prod/store/…` (renamed from `store/` by #271 before
+any value existed; dev and staging carry their own `signing/` set — next section) and are read only by
+`scripts/secrets/exec-with.sh` on the owner's workstation. The
 runbook, including what is unrecoverable, is in
 [secrets.md → Store signing material](secrets.md#store-signing-material-gogo-infra231).
 
 | What | Account | Created where | Kill switch | SSM row |
 | --- | --- | --- | --- | --- |
-| App Store Connect API key (role App Manager) | Apple Developer Program — owner's Apple account | App Store Connect → Users and Access → Integrations → App Store Connect API | Revoke the key there; uploads stop, the published app is untouched | `store/apple-asc-key` + `store/apple-asc-key-id` + `store/apple-asc-issuer-id` |
-| Android **upload** keystore | GoGo's own — not an account | `keytool` on the owner's machine (PKCS12, RSA-2048), once | Play Console → App integrity → request an upload key reset | `store/android-keystore` + `…-keystore-password` + `…-key-alias` + `…-key-password` |
+| App Store Connect API key (role App Manager) | Apple Developer Program — owner's Apple account | App Store Connect → Users and Access → Integrations → App Store Connect API | Revoke the key there; uploads stop, the published app is untouched | `signing/apple-asc-key` + `signing/apple-asc-key-id` + `signing/apple-asc-issuer-id` |
+| Android **upload** keystore | GoGo's own — not an account | `keytool` on the owner's machine (PKCS12, RSA-2048), once | Play Console → App integrity → request an upload key reset | `signing/android-keystore` + `…-keystore-password` + `…-key-alias` + `…-key-password` |
 | Play Developer API service account (release management on the GoGo app only) | Google Cloud project + Play Console, owner's account | Google Cloud IAM, then invited in Play Console → Users and permissions | Delete the key in Google Cloud IAM, or remove the account's Play permission | `store/play-service-account` |
 
 All three are replaceable. The Android keystore is the **upload key**: Play App Signing — mandatory for
@@ -251,6 +252,32 @@ Values are written by the owner (`put.sh prod store/…`), as with every other c
 assistant supplies the command, never the value. As of 2026-10-17 none of the eight rows has a value
 yet: `validate.sh prod --strict --include-planned` reports `store_release_ios` and
 `store_release_android` as planned and names the missing rows.
+
+### Firebase App Distribution and dev/staging signing (GoGo-Infra#271)
+
+Owner decision 2026-10-28: `dev` and `stag` builds go to testers through Firebase App Distribution;
+only `prod` goes to the stores. One Firebase project per environment, one App Store Connect key and
+one Android keystore per environment. Runbook:
+[secrets.md → Firebase App Distribution and dev/staging signing](secrets.md#firebase-app-distribution-and-devstaging-signing-gogo-infra271).
+
+| What | Account | Created where | Kill switch | SSM row (per env) |
+| --- | --- | --- | --- | --- |
+| Firebase project `gogo-dev` / `gogo-stag` (one iOS + one Android app, `max.gogo.dev` / `max.gogo.stag`) | owner's Google account | Firebase console | Delete the service account key; remove testers | `firebase/app-id-ios` + `firebase/app-id-android` |
+| Service account `app-distribution`, role Firebase App Distribution Admin, in that project only | the Firebase project's Google Cloud project | Google Cloud → IAM → Service accounts | Delete the key in Google Cloud IAM (holder can upload releases, manage testers and read their emails, and read the project's metadata and app list) | `firebase/app-distribution-service-account` |
+| App Store Connect **Team** key `gogo-lane-dev` / `gogo-lane-staging` (role able to create certificates and profiles) | Apple Developer Program — owner's Apple account | App Store Connect → Users and Access → Integrations → Team Keys | Revoke the key there | `signing/apple-asc-key` + `-key-id` + `-issuer-id` |
+| Android keystore `gogo-dev` / `gogo-staging` (PKCS12, RSA-2048) — the signature testers install | GoGo's own — not an account | `keytool` on the owner's machine | none — rotate and have testers reinstall | `signing/android-keystore` + `…-keystore-password` + `…-key-alias` + `…-key-password` |
+| Apple Distribution certificate — **shared with prod** (Apple has one type for App Store and Ad Hoc) | Apple Developer Program | fastlane `cert` through the ASC key, on the owner's machine only | Revoke in Certificates, Identifiers & Profiles (breaks every profile naming it, prod included) | none — private key in the login keychain, `.p12` backup in the password manager |
+
+Where the lists live — none of them is a secret, none is in SSM:
+
+- **Tester devices (UDIDs):** Apple Developer → Certificates, Identifiers & Profiles → **Devices**.
+  Adding one means regenerating the Ad Hoc profile (`sigh --adhoc --force`) before the next build.
+- **Testers and groups:** Firebase console → App Distribution → Testers & Groups, per project.
+- **Project ids:** `gogo-dev` and `gogo-stag` are the names the owner chose on 2026-10-28; if the
+  created projects get different ids, correct them here and in the runbook.
+
+As of the merge of #271 none of these exists yet; the owner creates them and writes the values with
+`put.sh` (assistant supplies the command, never the value).
 
 ### Sentry — alert notifications go to Discord (GoGo-Infra#219)
 
@@ -325,6 +352,16 @@ answered; the second is still open.
   that restriction is the only thing stopping an extracted key from being used by any app, so it
   is checked in the console, not here. **Still unverified** — it is the one DEV acceptance item
   on GoGo-Infra#102 that no automated check can close.
+
+**Firebase projects are separate Google Cloud projects (GoGo-Infra#271).** `gogo-dev` and `gogo-stag`
+each hold their own App Distribution service account; neither holds a Maps or server key, and project
+`186055730568` holds no Firebase service account. Record each Firebase project's number here once it
+exists:
+
+| Firebase project | Project number | Holds |
+| --- | --- | --- |
+| `gogo-dev` | _(owner, after creation)_ | `/gogo/ci/dev/firebase/app-distribution-service-account` |
+| `gogo-stag` | _(owner, after creation)_ | `/gogo/ci/staging/firebase/app-distribution-service-account` |
 
 The three server keys were verified by calling each API with each key: every key answers `200` on its own
 API and `403 API_KEY_SERVICE_BLOCKED` on the other two. All three APIs are
@@ -439,6 +476,18 @@ three flavours from `max.gogo.{flavor}`.
 | dev | `max.gogo.dev` | `gogo-dev://` | yes — `go-dev.gogo.id.vn` |
 | stag | `max.gogo.stag` | `gogo-stag://` | no |
 | prod | `max.gogo.prod` | `gogo://` | yes |
+
+**Signing certificates per flavour (GoGo-Infra#271).** Every certificate that signs a build of a
+flavour has to be registered on that flavour's Maps Android key (SHA-1) and, where the flavour claims
+links, in its `assetlinks.json` (SHA-256). Fingerprints are public; the owner fills them in after
+generating each keystore (`docs/secrets.md` → Firebase App Distribution, step 5).
+
+| Flavour | Signed by | SHA-1 (Maps restriction) | SHA-256 (assetlinks) |
+| --- | --- | --- | --- |
+| dev | debug keystore (local builds) | _(registered for local builds; not recorded here)_ | `FA:C6:17:45:…:91:03:3B:9C` (in `config/well-known/dev`) |
+| dev | `signing/android-keystore` at dev (Firebase builds) | _(owner, after keytool)_ | _(owner, after keytool — add to `config/well-known/dev/assetlinks.json`)_ |
+| stag | `signing/android-keystore` at staging (Firebase builds) | _(owner, after keytool; no staging Maps key yet)_ | n/a — stag claims no links |
+| prod | Play app signing key (Google) | _(Play Console → App integrity, #351)_ | _(same)_ |
 
 Better than one identity, and deliberately so: three flavours install side by side, so a tester
 can run staging next to the store build. `bootstrap.env` therefore needs the suffixed form —

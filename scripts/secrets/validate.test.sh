@@ -242,9 +242,12 @@ done
 # Omitting a profile must not be a way to pass. This is the same failure as an
 # unreadable namespace: nothing was checked, so nothing can be claimed.
 probe="$(mktemp -d)"
-# `planned: [dev]` too: a capability planned for dev only (ai_harness_live_decisions,
-# GoGo-Infra#241) still names the environment, and the probe is "names nothing".
-sed 's/^    enabled: \[dev\]/    enabled: []/; s/^    planned: \[staging, prod\]/    planned: []/; s/^    planned: \[dev\]/    planned: []/' \
+# Every list, whatever it holds: a capability planned for dev only
+# (ai_harness_live_decisions, GoGo-Infra#241) or for dev and staging
+# (firebase_distribution_*, GoGo-Infra#271) still names the environment, and the
+# probe is "names nothing". Matching each known combination broke the probe
+# every time a new one was added, so it now empties them all.
+sed 's/^    enabled: \[[^]]*\]/    enabled: []/; s/^    planned: \[[^]]*\]/    planned: []/' \
   "${ROOT}/config/secrets.manifest.yml" > "${probe}/secrets.manifest.yml"
 mkdir -p "${probe}/scripts/lib" "${probe}/config"
 mv "${probe}/secrets.manifest.yml" "${probe}/config/secrets.manifest.yml"

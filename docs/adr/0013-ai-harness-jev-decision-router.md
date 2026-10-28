@@ -127,13 +127,21 @@ into a private repository with a sanitized git, and every installed file must be
 blob (PR #253 shape rev 3, owner decision D1). Without network, only a rollback to a version the
 journal records as activated with the same `MANIFEST` digest is allowed (D2). Hooks start the
 harness through the installed `bin/harness`, which clears Node's preload variables and runs the
-Node path fixed at the first activation (D3); a preload that reaches Node any other way has run
+Node path fixed at activation (D3; amended 2026-10-28 by #272, below); a preload that reaches Node any other way has run
 before any check. The first install is the trust anchor: a documented owner procedure takes the
 bootstrap from a sanitized HTTPS clone of `develop` (trust on first use). Activation and rollback
 are an owner act on a terminal, bound to old → new SHA and digest, with an approval reference in
 the journal. The same OS user can still rewrite an install, its metadata and journal together —
 that remains the sandbox's boundary (D-1). `harness/src/cli.ts` in a checkout is the development
 and CI entry point.
+
+*D3 amended 2026-10-28 (GoGo-Infra#272, owner decision 2026-10-28):* the Node path is fixed by an
+activation that names `--node`; a later activation naming a different `--node`, or a newer wrapper
+template, replaces `bin/harness` inside the same confirmed owner act, the old file quarantined and
+the change journaled. Without `--node` the wrapper is never touched, and no Node path is ever taken
+from `process.execPath` (Node resolves links there, so it is always the versioned file). When the
+pinned Node is gone, `bin/harness` itself prints a fixed warning for the prompt hook
+(`harness_node_missing`) and exits 0, instead of failing silently.
 
 **D-3a Shell commands are classified fail-closed** — *superseded by D-3b the same day; kept as the record of what was tried.* (owner decision 2026-10-22, after Sol rounds 1–3 on
 PR #242 found six P1 bypasses in the regex classifier — every one a shell form nobody anticipated, every one
@@ -285,3 +293,6 @@ it the same day: the harness key is now `gogo_ai_harness_dev`; the backend POC g
 - Two more `ci` rows to rotate (`ai-harness/*`), declared in the manifest.
 - `harness/` is TypeScript run by Node's type stripping, no runtime dependencies; the compiler
   is a dev dependency for CI typecheck only.
+- (2026-10-28, #272) Each machine's install pins a Node the owner names with `--node`, ideally the
+  harness-private runtime (`docs/ai-harness.md`, "Node for the install"). A change to
+  `launcher.ts` reaches a machine only through a bootstrap upgrade, an owner act on a terminal.
