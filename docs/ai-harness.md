@@ -204,13 +204,13 @@ worktree never changes the verdicts the session receives (ADR-0013 D-3, GoGo-Inf
   ACTIVE                          { sha, manifestDigest } of the running version
   history.jsonl                   journal: an `intent` and an `activated` record per activation
   bin/harness.mts                 bootstrap: launcher.ts of the first installed commit, placed once by the owner
-  bin/harness                     launch boundary (POSIX sh), written by the first activation, never rewritten
+  bin/harness                     launch boundary (POSIX sh), written by an activation that names --node; replaced only by another such activation
   quarantine/                     a broken ACTIVE or a damaged journal, kept as found
 ```
 
 **First install** (owner, once per machine, on a terminal). Fill the four slots — `<sha>` the full
 SHA of a `develop` commit, `<node>` the absolute path of the Node to run the harness with (22.18
-or later; it is written into `bin/harness` and stays, D3), `<root>` e.g.
+or later; see "Node for the install" below), `<root>` e.g.
 `$HOME/.gogo-harness/install`, `<approval>` the link to the owner approval — and paste the block.
 Every step runs with an empty environment: git without system or global config, only `https`, no
 redirects, no credential helper; Node without `NODE_OPTIONS`. It clones `develop` from GitHub,
@@ -238,9 +238,48 @@ g --git-dir="$tmp/src.git" cat-file blob "$sha:harness/src/install/launcher.ts" 
 chmod 555 "$new"
 mv "$new" "$root/bin/harness.mts"
 rm -rf "$tmp"
-env -i PATH=/usr/bin:/bin HOME="$HOME" "$node" "$root/bin/harness.mts" activate "$sha" --approval "$approval"
+env -i PATH=/usr/bin:/bin HOME="$HOME" "$node" "$root/bin/harness.mts" activate "$sha" --approval "$approval" --node "$node"
 '
 ```
+
+**Node for the install** (GoGo-Infra#272). `<node>` is written into `bin/harness` and runs every hook
+call, so it must be a path no package manager rewrites: the harness-private runtime below
+(recommended), or a stable link the owner maintains. Never a versioned Homebrew
+`Cellar/node/<ver>/…`, an nvm/fnm/volta/asdf shim or version directory — those vanish on the next
+upgrade. `activate` writes `bin/harness` only from an explicit `--node`; there is no default, because
+Node resolves symbolic links in its own `process.execPath`, so any default would be the versioned
+file behind the link. `--node` must be an absolute path to an existing regular file this user can
+execute; a symbolic link is written as given, never resolved. The harness-private runtime, on a
+terminal (current LTS, 22.18 or later; `<ver>` and `<arch>` from https://nodejs.org/dist/):
+
+```bash
+cd "$(mktemp -d)"
+curl -fsSLO https://nodejs.org/dist/<ver>/node-<ver>-darwin-<arch>.tar.gz
+curl -fsSLO https://nodejs.org/dist/<ver>/SHASUMS256.txt
+curl -fsSLO https://nodejs.org/dist/<ver>/SHASUMS256.txt.sig
+# import the release keys listed at https://github.com/nodejs/release-keys, then:
+gpg --verify SHASUMS256.txt.sig SHASUMS256.txt
+grep " node-<ver>-darwin-<arch>.tar.gz\$" SHASUMS256.txt | shasum -a 256 -c -
+mkdir -p ~/.gogo-harness/runtime
+tar -xzf node-<ver>-darwin-<arch>.tar.gz
+mv node-<ver>-darwin-<arch> ~/.gogo-harness/runtime/node
+chmod -R a-w ~/.gogo-harness/runtime/node
+```
+
+`<node>` is then `$HOME/.gogo-harness/runtime/node/bin/node` (absolute). To move an existing install
+to another Node, run `bin/harness activate <sha> --approval <ref> --node <new>` on a terminal: when
+the text it would write differs from the current `bin/harness` (another Node, or a newer wrapper
+template), the plan shows `bin/harness rewrite: node <old> → <new>`, the confirmation gains a fourth
+token (the first 12 hex of the new wrapper's sha256), and after confirmation the old file goes to
+`quarantine/harness.<time>` unchanged, the new one is written and the `intent` record names both.
+Without `--node`, an existing `bin/harness` is never touched.
+
+**Bootstrap upgrade.** `bin/harness.mts` is placed once, and `activate` is its own code: activating a
+newer version does not change how activation itself works. When `harness/src/install/launcher.ts`
+changed (e.g. #272), the owner on a terminal prepares the new SHA (below), moves the bootstrap aside,
+`mv <root>/bin/harness.mts <root>/quarantine/bin-harness.mts.$(date -u +%Y%m%dT%H%M%SZ)`, and pastes
+the first-install block again with the new `<sha>` and the same `<root>` and `<node>`. `bin/harness`
+is kept, or rewritten when the new template differs, and the plan says which.
 
 This first download is the trust anchor (trust on first use over HTTPS to GitHub): nothing the
 block fetches can vouch for itself. To check it out of band, compare
@@ -278,8 +317,9 @@ records as `activated` with the same `MANIFEST` digest; the plan shows `provenan
 that has an `intent` but no `activated` record (interrupted after the switch) needs the network.
 
 **ACTIVE is the only switch.** Activation takes `activate.lock` (a link there is refused), and
-after confirmation: quarantines a damaged journal and starts a new one, writes `bin/harness` if
-absent, quarantines a broken `ACTIVE`, appends `intent`, replaces `ACTIVE` by rename, appends
+after confirmation: quarantines a damaged journal and starts a new one, writes `bin/harness` from
+`--node` if absent (or replaces it when `--node` gives a different text, the old file to
+`quarantine/`), quarantines a broken `ACTIVE`, appends `intent`, replaces `ACTIVE` by rename, appends
 `activated`, and releases the lock (a lock replaced meanwhile is left, with a warning). An
 interruption leaves the previous `ACTIVE`; running the same `activate` again completes it, and
 `node <root>/bin/harness.mts activate …` under `env -i` (the block's last line) works even
@@ -304,10 +344,15 @@ remove it, then activate.
 
 **Launch boundary.** Hooks call `bin/harness`, never `node …/harness.mts`: it clears
 `NODE_OPTIONS`, `NODE_PATH`, `NODE_COMPILE_CACHE` and `NODE_REPL_EXTERNAL_MODULE` before Node
-starts (a `--import` or `--require` there runs before any check), runs the Node path written at
-the first activation, finds `harness.mts` beside itself, and keeps the caller's working
+starts (a `--import` or `--require` there runs before any check), runs the Node path an activation
+wrote from `--node`, finds `harness.mts` beside itself, and keeps the caller's working
 directory. The bootstrap also exits 2 when it sees a preload flag, but that is a diagnostic: the
-preloaded code has already run by then.
+preloaded code has already run by then. Before `exec` it checks that Node is still executable;
+when it is not (#272, `harness_node_missing`), `prompt-hook` prints one fixed JSON warning on stdout
+— JEV could not be enabled, the prompt was not sent, Claude must tell the owner and ask for
+confirmation before going on without JEV — and exits 0, so a prompt is never blocked; every other
+command prints the path on stderr and exits 2. The warning comes on every prompt until the owner
+re-activates with `--node` ("Node for the install").
 
 **Limits.** This stops checkout edits from taking effect, the harness from approving its own
 change, and an unmerged commit from being activated. It does not stop the same OS user from
@@ -316,7 +361,8 @@ directory or file between verification and import; the journal is not tamper evi
 that user. `git`, `bash`, `python3` and `aws` as found on `PATH` (the closure scripts run
 `python3 -I`), and the Node in `bin/harness`, are trusted like the rest of the machine. Provenance
 fetches need direct HTTPS to GitHub: the environment is wiped, so a proxy or a private CA is not
-supported. Changing Node, or a bootstrap fix, is a new first install. That boundary is Claude
+supported. Changing Node is `activate … --node <new>`; a bootstrap fix is a bootstrap upgrade (both
+above). That boundary is Claude
 Code's sandbox and permissions on writes outside the workspace. A declared write to the install
 is a hard gate anyway: it is outside the checkout, so the policy engine classifies it `unknown`.
 
@@ -412,8 +458,10 @@ privacy review + DPA for real prompts (#244) is not done, and the confirmation s
   (GoGo-Infra#254 S4-02). The codes are `NOTE_CODES` in `prompt-observation.ts`: a child error is
   `jev_child_<code>`, a fallback `jev_fallback_<category>`, anything unrecognised `jev_bad_output`
   or `jev_fallback`; a wrapper that stopped with `common.sh`'s "not authenticated to AWS" is
-  `jev_aws_unavailable`, any other wrapper failure `jev_wrapper_failed`. A failure while `on`
-  stays in the log. The command runs the approved
+  `jev_aws_unavailable`, any other wrapper failure `jev_wrapper_failed`. One more code is not in
+  that list because the TS hook never runs to print it: `harness_node_missing`, which `bin/harness`
+  itself prints, as a warning on every prompt, when its Node is gone (§Launch boundary). A failure
+  while `on` stays in the log. The command runs the approved
   install (#245), never a checkout; a missing launcher or a failed integrity check still exits 0
   with empty stdout, and the launcher's message is kept in `~/.gogo-harness/prompt-hook.last-error`
   (overwritten by every run).

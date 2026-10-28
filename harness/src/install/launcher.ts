@@ -12,12 +12,12 @@
  *     ACTIVE                              { sha, manifestDigest } — the running version
  *     history.jsonl                       journal: intent and activated records
  *     bin/harness.mts                     this file, placed once by the owner's first install
- *     bin/harness                         launch boundary (POSIX sh), written by the first activation
+ *     bin/harness                         launch boundary (POSIX sh), written by an activation that names --node (#272)
  *     quarantine/                         a broken ACTIVE or a damaged journal, kept as found
  *
  *   ~/.gogo-harness/install/bin/harness decide --input task.json
  *   ~/.gogo-harness/install/bin/harness install-verify
- *   ~/.gogo-harness/install/bin/harness activate <full-sha> --approval <ref>   # owner, on a terminal
+ *   ~/.gogo-harness/install/bin/harness activate <full-sha> --approval <ref> [--node <abs path>]   # owner, on a terminal
  *
  * Only `<root>/bin/harness.mts` runs; anywhere else it exits 2. It owns the
  * install's metadata: `activate` and `install-verify` are this file's code
@@ -406,6 +406,27 @@ export class Install {
   }
 }
 
+/**
+ * A path outside the install (the `--node` an activation names, #272 D-2): what it resolves to
+ * and whether this user may execute it. lstat first, so a dangling link reports its own error.
+ * Nothing is opened or executed.
+ */
+export function probeExecutable(path: string): { st: Stats; executable: boolean } | { error: string } {
+  try {
+    fs.lstatSync(path);
+    const st = fs.statSync(path);
+    let executable = true;
+    try {
+      fs.accessSync(path, fs.constants.X_OK);
+    } catch {
+      executable = false;
+    }
+    return { st, executable };
+  } catch (e) {
+    return { error: (e as NodeJS.ErrnoException).code ?? (e as Error).message };
+  }
+}
+
 // ── end of Install ─────────────────────────────────────────────────────────
 
 /**
@@ -676,28 +697,88 @@ export type ActivationPlan = {
   actor: string;
   provenance: Provenance;
   journal: 'ok' | { damaged: number };
+  /**
+   * What happens to bin/harness (#272, ADR-0013 D-3 as amended): kept byte for byte, written
+   * from `--node` when absent, or rewritten when `--node` gives a different text (the old file
+   * quarantined; `quarantined` is filled in after the move).
+   */
+  wrapper: WrapperPlan;
 };
 
-/** What the owner types: `<old-sha12|none|broken> <new-sha12> <digest12>`. */
+export type WrapperPlan =
+  | 'kept'
+  | { action: 'write'; node: string; sha256: string }
+  | { action: 'rewrite'; node: string; sha256: string; from: string; fromNode: string | null; quarantined?: string };
+
+/**
+ * What the owner types: `<old-sha12|none|broken> <new-sha12> <digest12>`, plus
+ * `<wrapper12>` (sha256 of the new bin/harness text) when the plan writes or rewrites it.
+ */
 export function confirmation(plan: ActivationPlan): string {
   const old = plan.from ? plan.from.sha.slice(0, 12) : plan.active === 'none' ? 'none' : 'broken';
-  return `${old} ${plan.to.sha.slice(0, 12)} ${plan.to.manifestDigest.slice(0, 12)}`;
+  const base = `${old} ${plan.to.sha.slice(0, 12)} ${plan.to.manifestDigest.slice(0, 12)}`;
+  return plan.wrapper === 'kept' ? base : `${base} ${plan.wrapper.sha256.slice(0, 12)}`;
 }
 
-/** bin/harness: the launch boundary hooks call (I-6). `node` is fixed here, once (D3). */
+/**
+ * `--node` (#272 D-2): an absolute path to an existing regular file this user may execute.
+ * A symbolic link is allowed and written as given, never resolved: a stable link the owner
+ * maintains survives a package-manager upgrade, the versioned target behind it does not.
+ * Nothing is executed here.
+ */
+export function checkNode(node: string): void {
+  if (!node.startsWith('/') || /['\n]/.test(node)) throw new UsageError(`--node ${JSON.stringify(node)} must be an absolute path without ' or a newline`);
+  const p = probeExecutable(node);
+  if ('error' in p) throw new UsageError(`--node ${node}: ${p.error}; name the Node to pin into bin/harness (docs/ai-harness.md, "Node for the install")`);
+  if (!p.st.isFile()) throw new UsageError(`--node ${node} is a ${kindOf(p.st)}, not a Node executable`);
+  if (!p.executable) throw new UsageError(`--node ${node} is not executable by this user`);
+}
+
+/** The Node literal an existing bin/harness names, current or pre-#272 template; null if none. */
+function wrapperNode(text: string): string | null {
+  return text.match(/^node='([^'\n]*)'$/m)?.[1] ?? text.match(/^exec '([^'\n]*)' -- /m)?.[1] ?? null;
+}
+
+/**
+ * Fixed text of the note bin/harness prints for `prompt-hook` when its Node is gone (#272 D-4,
+ * owner 2026-10-28): a warning that tells Claude to ask the owner before going on without JEV.
+ * The same key path as every note the TS hook writes (prompt-observation.ts hookOutput).
+ */
+export const NODE_MISSING_NOTE = JSON.stringify({
+  hookSpecificOutput: {
+    hookEventName: 'UserPromptSubmit',
+    additionalContext:
+      'GoGo harness · CẢNH BÁO (harness_node_missing): không bật được JEV — Node ghim trong ~/.gogo-harness/install/bin/harness không còn, prompt này không được gửi cho JEV. Claude: báo owner cảnh báo này và hỏi owner xác nhận có làm tiếp không có JEV hay không, trước khi làm bất cứ việc gì khác. Sửa (owner, trên terminal): ~/.gogo-harness/install/bin/harness activate <sha> --approval <ref> --node <đường dẫn Node tuyệt đối> (docs/ai-harness.md, Node for the install). Chi tiết: ~/.gogo-harness/prompt-hook.last-error.',
+  },
+});
+
+/**
+ * bin/harness: the launch boundary hooks call (I-6). `node` is the path an activation named
+ * with `--node` (ADR-0013 D-3 as amended by #272). A missing interpreter is reported before
+ * `exec`: for `prompt-hook` one fixed JSON line on stdout and exit 0 (the hook never blocks a
+ * prompt), for anything else a message on stderr and exit 2.
+ */
 export function wrapperText(node: string): string {
   if (!node.startsWith('/') || /['\n]/.test(node)) throw new UsageError(`node path ${JSON.stringify(node)} cannot be written into bin/harness`);
   return `#!/bin/sh
-# GoGo AI harness launch boundary (ADR-0013 D-3, GoGo-Infra#245). Written once,
-# by the first activation; later activations keep it. Node starts without any
-# preload a caller's environment names, from the path fixed at that activation.
+# GoGo AI harness launch boundary (ADR-0013 D-3, GoGo-Infra#245, #272). Written by an
+# activation that names --node; a later activation with --node may replace it. Node starts
+# without any preload a caller's environment names, from the path fixed here.
 case $0 in
 */*) ;;
 *) echo "harness: run bin/harness by its path, not by name" >&2; exit 2 ;;
 esac
 unset CDPATH NODE_OPTIONS NODE_PATH NODE_COMPILE_CACHE NODE_REPL_EXTERNAL_MODULE
 here=$(cd -P -- "\${0%/*}" && pwd -P) || exit 2
-exec '${node}' -- "$here/harness.mts" "$@"
+node='${node}'
+if [ ! -x "$node" ]; then
+  echo "harness: node interpreter $node is missing or not executable (harness_node_missing); re-activate with --node <absolute path> on a terminal (docs/ai-harness.md, \\"Node for the install\\")" >&2
+  case $1 in
+  prompt-hook) printf '%s\\n' '${NODE_MISSING_NOTE}'; exit 0 ;;
+  esac
+  exit 2
+fi
+exec "$node" -- "$here/harness.mts" "$@"
 `;
 }
 
@@ -741,6 +822,19 @@ export async function activate(
     // to a checkout file would let the checkout edit startup code (PR #253 Sol r4, S4-01).
     if (wrapper && wrapper.uid !== uid()) throw new UsageError(`bin/harness in ${install.root} is not owned by this user; remove it by hand, then activate`);
     if (wrapper && wrapper.nlink !== 1) throw new UsageError(`bin/harness in ${install.root} has ${wrapper.nlink} hard links; remove it by hand, then activate`);
+    // #272 D-1/D-3: the wrapper is written only from an explicit --node, never from execPath
+    // (Node resolves links in execPath, so a default would always be a versioned path).
+    let wrapperPlan: WrapperPlan = 'kept';
+    if (o.node !== undefined) checkNode(o.node);
+    if (!wrapper) {
+      if (o.node === undefined) throw new UsageError(`--node <absolute path of the Node to pin into bin/harness> is required when bin/harness is written (docs/ai-harness.md, "Node for the install")`);
+      const text = wrapperText(o.node);
+      wrapperPlan = { action: 'write', node: o.node, sha256: sha256(text) };
+    } else if (o.node !== undefined) {
+      const old = install.read('bin/harness');
+      const text = wrapperText(o.node);
+      if (!old.equals(Buffer.from(text))) wrapperPlan = { action: 'rewrite', node: o.node, sha256: sha256(text), from: sha256(old), fromNode: wrapperNode(old.toString('utf8')) };
+    }
     const { digest } = verifyVersion(install, sha);
     const from = active.kind === 'ok' ? active.version : null;
     const prov = provenance(install, sha, digest, journal, o.source ?? TRUSTED_SOURCE);
@@ -753,6 +847,7 @@ export async function activate(
       actor: o.actor ?? `${userInfo().username}@${hostname()}`,
       provenance: prov,
       journal: journal.state === 'ok' ? 'ok' : { damaged: journal.line },
+      wrapper: wrapperPlan,
     };
     if (!(await confirm(plan))) throw new UsageError('activation not confirmed; nothing changed');
 
@@ -760,14 +855,20 @@ export async function activate(
       const path = install.quarantine('history.jsonl', now());
       install.appendLine('history.jsonl', JSON.stringify({ record: 'history_quarantined', path, digest: journal.digest, parsedLines: journal.parsedLines, at: now().toISOString() }));
     }
-    if (!wrapper) {
+    let wrapperRecord: 'kept' | 'written' | { rewritten: string; node: string; quarantined: string } = 'kept';
+    if (wrapperPlan !== 'kept' && wrapperPlan.action === 'write') {
       install.mkdirBelow('bin');
-      install.publish('bin/harness', wrapperText(o.node ?? realpath(process.execPath)), 0o555);
+      install.publish('bin/harness', wrapperText(wrapperPlan.node), 0o555);
+      wrapperRecord = 'written';
+    } else if (wrapperPlan !== 'kept') {
+      wrapperPlan.quarantined = install.quarantine('bin/harness', now());
+      install.publish('bin/harness', wrapperText(wrapperPlan.node), 0o555);
+      wrapperRecord = { rewritten: wrapperPlan.from, node: wrapperPlan.node, quarantined: wrapperPlan.quarantined };
     }
     let quarantined: string | undefined;
     if (active.kind === 'broken-file' || active.kind === 'broken-link') quarantined = install.quarantine('ACTIVE', now());
     install.appendLine('history.jsonl', JSON.stringify({
-      record: 'intent', kind: plan.action, from, to: plan.to, approval, actor: plan.actor, source: prov, at: now().toISOString(),
+      record: 'intent', kind: plan.action, from, to: plan.to, approval, actor: plan.actor, source: prov, wrapper: wrapperRecord, at: now().toISOString(),
       ...(quarantined ? { active: plan.active, quarantined } : {}),
     }));
     install.publish('ACTIVE', `${JSON.stringify({ schema: 1, ...plan.to }, null, 2)}\n`, 0o644);
@@ -791,11 +892,18 @@ async function askOnTerminal(plan: ActivationPlan): Promise<boolean> {
   lines.push(`  to          ${plan.to.sha} (MANIFEST ${plan.to.manifestDigest})`);
   lines.push('recorded' in plan.provenance ? `  provenance  recorded ${plan.provenance.recorded}` : `  provenance  ancestor of develop ${plan.provenance.tip} at ${plan.provenance.source}`);
   lines.push(`  approval    ${plan.approval}`, `  actor       ${plan.actor}`);
+  const w = plan.wrapper;
+  lines.push(w === 'kept'
+    ? '  bin/harness kept'
+    : w.action === 'write'
+      ? `  bin/harness write: node ${w.node} (sha256 ${w.sha256})`
+      : `  bin/harness rewrite: node ${w.fromNode ?? 'unreadable'} → ${w.node} (sha256 ${w.from} → ${w.sha256}; old file to quarantine/)`);
   process.stderr.write(`${lines.join('\n')}\n`);
   const expected = confirmation(plan);
   const rl = createInterface({ input: process.stdin, output: process.stderr });
   try {
-    return (await rl.question(`Type "${expected}" (old sha or none/broken, new sha, new MANIFEST digest) to confirm: `)).trim() === expected;
+    const what = plan.wrapper === 'kept' ? 'old sha or none/broken, new sha, new MANIFEST digest' : 'old sha or none/broken, new sha, new MANIFEST digest, new bin/harness sha256';
+    return (await rl.question(`Type "${expected}" (${what}) to confirm: `)).trim() === expected;
   } finally {
     rl.close();
   }
@@ -824,10 +932,10 @@ export async function entry(argv: string[]): Promise<number> {
   const install = Install.open(dirname(dirname(self)), { bootstrap: true });
   const [command, ...rest] = argv;
   if (command === 'activate') {
-    const { values, positionals } = parseArgs({ args: rest, options: { approval: { type: 'string' } }, allowPositionals: true });
-    if (positionals.length !== 1) throw new UsageError('activate <full-sha> --approval <ref>');
+    const { values, positionals } = parseArgs({ args: rest, options: { approval: { type: 'string' }, node: { type: 'string' } }, allowPositionals: true });
+    if (positionals.length !== 1) throw new UsageError('activate <full-sha> --approval <ref> [--node <absolute path>]');
     if (!process.stdin.isTTY) throw new UsageError('activate asks the owner on a terminal; stdin is not one');
-    const plan = await activate({ install, sha: positionals[0]!, approval: values.approval ?? '' }, askOnTerminal);
+    const plan = await activate({ install, sha: positionals[0]!, approval: values.approval ?? '', ...(values.node !== undefined ? { node: values.node } : {}) }, askOnTerminal);
     process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
     return 0;
   }
