@@ -972,7 +972,11 @@ export async function entry(argv: string[]): Promise<number> {
   const active = readActive(install);
   verifyVersion(install, active.sha, active.manifestDigest);
   if (command === 'install-verify') {
-    process.stdout.write(`${JSON.stringify(active)}\n`);
+    // #260: activate and install-verify are this file's code, so a version whose launcher.ts
+    // differs runs none of its activation changes until the bootstrap is upgraded. Said, not acted on.
+    const same = sha256(install.read('bin/harness.mts')) === sha256(install.read(`versions/${active.sha}/harness/src/install/launcher.ts`));
+    if (!same) process.stderr.write(`harness install: bin/harness.mts is not launcher.ts of ${active.sha}; activate and install-verify still run the bootstrap's code (docs/ai-harness.md, "Bootstrap upgrade")\n`);
+    process.stdout.write(`${JSON.stringify({ ...active, bootstrap: same ? 'matches-active' : 'differs-from-active' })}\n`);
     return 0;
   }
   const cli = (await import(pathToFileURL(install.path(`versions/${active.sha}/harness/src/cli.ts`)).href)) as { run(argv: string[]): Promise<number> };

@@ -688,7 +688,20 @@ describe('#245 activation: an owner act, recorded, reversible', () => {
     const a = await installed(w);
     const r = launch(w, ['install-verify']);
     assert.equal(r.status, 0, r.stderr);
-    assert.deepEqual(JSON.parse(r.stdout), { sha: a.sha, manifestDigest: a.manifestDigest });
+    assert.deepEqual(JSON.parse(r.stdout), { sha: a.sha, manifestDigest: a.manifestDigest, bootstrap: 'matches-active' });
+    assert.equal(r.stderr, '');
+  });
+
+  // #260: activate and install-verify are the bootstrap's code, so a newer version's launcher.ts
+  // does not run until the bootstrap is upgraded. install-verify says when they differ.
+  it('#260: verify says when the bootstrap is not the active version\'s launcher.ts, and points to the upgrade', async () => {
+    const w = world();
+    const { b } = await withB(w, (x) => appendFileSync(join(x.work, 'harness/src/install/launcher.ts'), '\n// launcher B\n'));
+    await activateAs(w, b.sha);
+    const r = launch(w, ['install-verify']);
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(JSON.parse(r.stdout), { sha: b.sha, manifestDigest: b.manifestDigest, bootstrap: 'differs-from-active' });
+    assert.match(r.stderr, new RegExp(`bin/harness\\.mts is not launcher\\.ts of ${b.sha}.*"Bootstrap upgrade"`));
   });
 
   it('on a terminal: a wrong answer changes nothing, the right one activates', async () => {
