@@ -27,9 +27,11 @@
 #      HOME, GH_CONFIG_DIR and core.hooksPath point there, GIT_CONFIG_GLOBAL=/dev/null and
 #      GIT_CONFIG_NOSYSTEM=1. The owner's ~/.gitconfig, ~/.config/git, ~/.netrc, ~/.ssh, gh
 #      hosts.yml/config.yml/aliases and global safe.directory are not loaded (owner decision D7:
-#      proxy and CA come from the environment only). Nothing secret is written there. This process
-#      waits for the command and removes the directory when it ends, or when HUP, INT or TERM
-#      stops it (#260); only a SIGKILL leaves one behind.
+#      proxy and CA come from the environment only). Nothing secret is written there. A watcher
+#      forked before the mint (so it never holds the token) removes the directory once this
+#      process — which becomes the command — has exited, however it ended, reaped or not (#260,
+#      #281 retro-review, #304). A signal before the exec is handled when the step then running
+#      (a git check, or the mint) ends: the command is never started and the directory goes.
 #  I3  One credential. Process-only git configuration (GIT_CONFIG_*, read last): an empty
 #      credential.helper resets every helper collected from any file, then one helper for
 #      https://github.com answers with GH_TOKEN, and only when asked for protocol=https,
@@ -333,12 +335,14 @@ if [[ "$cmd" == gh ]]; then
 fi
 
 # --- The sealed world (I2) and the constructed environment (I1–I7). ---
-W="$(mktemp -d "${TMPDIR:-/tmp}/as-agent.XXXXXX")" || die "cannot create the sealed home under ${TMPDIR:-/tmp}"
-# Removed when this process exits: a refusal below, the command's end, or a signal (#260).
-trap 'rm -rf "$W"' EXIT
+# Until the exec below, removed when this process exits (a refusal, a signal). The traps are set
+# before the directory exists, so no signal leaves it untracked (#281 retro-review F-03).
+W=""
+trap '[[ -n "$W" ]] && rm -rf "$W"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+W="$(mktemp -d "${TMPDIR:-/tmp}/as-agent.XXXXXX")" || die "cannot create the sealed home under ${TMPDIR:-/tmp}"
 chmod 700 "$W"
 mkdir "${W}/home" "${W}/gh" "${W}/hooks"
 
@@ -477,6 +481,27 @@ if [[ "$cmd" == git ]]; then
   fi
 fi
 
+# --- After the exec, a watcher removes the sealed home (#260). ---
+# Forked here, before the mint, so it never holds the token; this process then execs into the
+# command as before, so a signal to it is a signal to the command (#281 retro-review F-01, F-02).
+# Its stdio is /dev/null: it must not hold open a pipe a caller reads to EOF.
+watched=$$
+(
+  trap '' HUP INT TERM
+  # Running = the pid exists, is not a zombie, and is still the process this watcher was forked
+  # from (same start time, not a reuse of its number). `kill -0` alone is true of a process that
+  # has exited but whose parent has not reaped it, which would hold the directory for as long as
+  # the caller holds the zombie (#304 Sol r2, F-04).
+  born="$(ps -o lstart= -p "$watched" 2>/dev/null)"
+  running() {
+    local state
+    state="$(ps -o stat= -p "$watched" 2>/dev/null | tr -d ' ')"
+    [[ -n "$state" && "$state" != Z* && "$(ps -o lstart= -p "$watched" 2>/dev/null)" == "$born" ]]
+  }
+  while running; do sleep 1; done
+  rm -rf "$W"
+) </dev/null >/dev/null 2>&1 &
+
 # --- I12: the mint, in this process's own environment, with the API endpoint pinned (S-04). ---
 export GITHUB_API_URL=https://api.github.com
 token="$("${DIR}/exec-with.sh" tools \
@@ -485,10 +510,6 @@ token="$("${DIR}/exec-with.sh" tools \
   || die "could not mint an agent token (AWS credentials? see docs/secrets.md → Agent GitHub App). Not falling back to the owner's identity."
 [[ -n "$token" ]] || die "could not mint an agent token. Not falling back to the owner's identity."
 
-# --- I11: seal and run. The pairs leave through a pipe, written by a builtin; stage 2 imports them. ---
-# Stage 2 runs in a subshell that execs it, not in place of this process, so the EXIT trap above
-# removes the sealed home once the command ends (#260). The command's exit status is this one's.
+# --- I11: seal and exec. The pairs leave through a pipe, written by a builtin; stage 2 imports them. ---
 emit() { printf '%s\0' "${child_env[@]}" "GH_TOKEN=${token}"; }
-rc=0
-(exec -c "$BASH" "${DIR}/as-agent.sh" --child -- "$prog" "${@:2}" 3< <(emit)) || rc=$?
-exit "$rc"
+exec -c "$BASH" "${DIR}/as-agent.sh" --child -- "$prog" "${@:2}" 3< <(emit)

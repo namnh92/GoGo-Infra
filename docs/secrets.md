@@ -872,9 +872,15 @@ command can use, because the command does not inherit your environment (shape re
   `GIT_CONFIG_NOSYSTEM=1`. Owner decision D7: your global and system git config, `~/.netrc`,
   `~/.ssh`, gh's `hosts.yml`/`config.yml`/aliases are **not loaded** — `insteadOf`, credential
   helpers, `safe.directory`, file-based proxy and CA settings included. Proxy and CA come from
-  the environment only. Nothing secret is written there. The wrapper waits for the command and
-  removes the directory when it ends, when a check refuses, or when `HUP`/`INT`/`TERM` stops it;
-  the command's exit status is the wrapper's (#260). Only a `SIGKILL` leaves one behind.
+  the environment only. Nothing secret is written there. The wrapper still execs into the command
+  (its pid is the command's, so a signal to it reaches the command), and a watcher it forks before
+  the mint — so the watcher never holds the token — removes the directory within about a second
+  of the command's exit, however it ended and whether or not the caller has reaped it yet. A
+  refusal removes it at once. A `HUP`/`INT`/`TERM` before the exec is handled when the step then
+  running ends (one of the wrapper's own git checks, or the mint, which the signal does not
+  interrupt): the command is never started, the wrapper exits with the signal's status, the
+  directory goes (#260, #281 retro-review, #304). Only a `SIGKILL` of the watcher itself leaves
+  one behind.
   Directories left by versions before #260 can be removed by hand once no `as-agent.sh` runs:
   `find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'as-agent.*' -type d -user "$(id -u)" -mmin +60 -exec rm -rf {} +`.
 - **One credential.** Process-only git configuration (`GIT_CONFIG_*`, read after every file):
