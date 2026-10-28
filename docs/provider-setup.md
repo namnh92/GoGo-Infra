@@ -134,7 +134,11 @@ Take the TCP `rediss://` URL, not the REST URL — BullMQ cannot use REST.
 
 ## 5. OneSignal (INF-013)
 
-Two applications: `GoGo Development` and `GoGo Production`. Never one shared app.
+Three applications, one per environment: `GoGo Development`, `GoGo Staging`, `GoGo Production`
+(owner 2026-10-28, GoGo-Infra#299 — replaces the earlier two). Never one shared app. Android FCM V1
+comes from that environment's Firebase project: `gogo-dev` / `gogo-stag` (the App Distribution
+projects, with a separate service account) and `gogo-prod`, created for FCM only. Order per
+environment: [mobile-environments.md](mobile-environments.md).
 
 iOS needs, from the Apple Developer account:
 

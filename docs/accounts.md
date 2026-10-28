@@ -158,7 +158,9 @@ Fill in as accounts are created. "Owner" is a person; "backup" must not be the s
 | Upstash | `gogo-dev` — endpoint `secure-rattler-216851.upstash.io`, Free plan; recreated 2026-09-05 (the earlier `gogo-dev-redis` / `trusting-cougar-204025` no longer exists in the account) | GitHub OAuth | | **none** | | 2026-09-05 |
 | Cloudflare | account `0c279927…e570b7b`, zone `gogo.id.vn` | GitHub OAuth | | **none** | | |
 | OneSignal | `GoGo Development` | GitHub OAuth | | **none** | | |
+| OneSignal | `GoGo Staging` — not created yet (owner 2026-10-28, GoGo-Infra#299) | GitHub OAuth | | **none** | | |
 | OneSignal | `GoGo Production` | GitHub OAuth | | **none** | | |
+| Firebase | `gogo-dev`, `gogo-stag` (App Distribution + FCM V1), `gogo-prod` (FCM V1 only, no SSM row) — not created yet; GoGo-Infra#271, #299 | Google | | **none** | | |
 | Tenjin | | GitHub OAuth | | **none** | | |
 | Adjust | plan **Base** (owner registered; welcome email: 1,500 monthly attributions in the first year — not verified against Adjust's terms). Second MMP beside Tenjin, owner 2026-10-19 (GoGo-MobileApp#363). DPA: not recorded yet — gate before the first real-token device run | not recorded | | **none** | | |
 | Google Cloud | project number `186055730568` — every DEV server key | Google | | **none** | | |
