@@ -59,55 +59,130 @@ else
 fi
 
 # The default output must stay backend-only now that a third namespace exists.
-# --- store signing material (GoGo-Infra#231) --------------------------------
+# --- signing and store material (GoGo-Infra#231, #271) -----------------------
 #
 # Both upload as us: the App Store Connect key to TestFlight, the Android
 # keystore to Play (an *upload* key — Play App Signing re-signs releases with
 # the key Google holds, so neither is the signature an installed copy verifies,
 # and both are replaceable). A leak is still someone shipping builds as GoGo.
+# At dev and staging (#271) the keystore *is* the signature a Firebase build
+# installs with, and the Firebase service account distributes to testers.
 # They are `ci` rows for the same reason as the Sentry upload token, and this
-# pins that the reason holds — nothing renders them anywhere.
+# pins that the reason holds — nothing renders them anywhere, in any environment.
+#
+# #271 split the eight #231 rows: seven `signing/` (one set per environment)
+# and one `store/` (publishing, prod only), plus three `firebase/` rows.
 
-store_rows="$(python3 "$READER" prod --namespace ci --consumer pipeline | awk -F'\t' '$1 ~ /^store\// { print $1 }')"
-if [[ "$(echo "$store_rows" | grep -c .)" == 8 ]]; then
-  ok "the eight store signing rows are declared under ci"
-else
-  bad "store signing rows missing or extra" "$store_rows"
-fi
+for env in dev staging prod; do
+  ci_pipeline="$(python3 "$READER" "$env" --namespace ci --consumer pipeline | cut -f1)"
+  signing_rows="$(grep -E '^signing/' <<< "$ci_pipeline")"
+  store_rows="$(grep -E '^store/' <<< "$ci_pipeline")"
+  firebase_rows="$(grep -E '^firebase/' <<< "$ci_pipeline")"
 
-store_runtime="$(comm -12 \
-  <(echo "$store_rows" | sort) \
-  <(python3 "$READER" prod --namespace backend --consumer runtime | cut -f1 | sort))"
-if [[ -z "$store_runtime" ]]; then
-  ok "no store signing row is rendered into a runtime environment"
-else
-  bad "store signing material would be rendered into the API environment" "$store_runtime"
-fi
+  if [[ "$(grep -c . <<< "$signing_rows")" == 7 && "$store_rows" == "store/play-service-account" \
+    && "$(grep -c . <<< "$firebase_rows")" == 3 ]]; then
+    ok "${env}: seven signing, one store and three firebase rows are declared under ci"
+  else
+    bad "${env}: signing/store/firebase rows missing or extra" "$(printf '%s\n' "$signing_rows" "$store_rows" "$firebase_rows")"
+  fi
 
-store_mobile="$(comm -12 \
-  <(echo "$store_rows" | sort) \
-  <(python3 "$READER" prod --namespace mobile --consumer all | cut -f1 | sort))"
-if [[ -z "$store_mobile" ]]; then
-  ok "no store signing row reaches the mobile build set"
-else
-  bad "store signing material would be baked into a mobile binary" "$store_mobile"
-fi
+  release_rows="$(printf '%s\n' "$signing_rows" "$store_rows" "$firebase_rows" | sort)"
+  release_runtime="$(comm -12 <(echo "$release_rows") \
+    <(python3 "$READER" "$env" --namespace backend --consumer runtime | cut -f1 | sort))"
+  if [[ -z "$release_runtime" ]]; then
+    ok "${env}: no signing, store or firebase row is rendered into a runtime environment"
+  else
+    bad "${env}: release material would be rendered into the API environment" "$release_runtime"
+  fi
+
+  release_mobile="$(comm -12 <(echo "$release_rows") \
+    <(python3 "$READER" "$env" --namespace mobile --consumer all | cut -f1 | sort))"
+  if [[ -z "$release_mobile" ]]; then
+    ok "${env}: no signing, store or firebase row reaches the mobile build set"
+  else
+    bad "${env}: release material would be baked into a mobile binary" "$release_mobile"
+  fi
+done
 
 # Readiness has to be able to say they are missing, which is what `planned`
 # buys: a capability nobody declared cannot be reported as not ready.
-store_caps="$(python3 "$READER" prod --capabilities --include-planned | awk -F'\t' '$1 ~ /^store_release_/ { print $1 "\t" $3 }')"
+# store_release_* serve prod only; firebase_distribution_* serve dev and
+# staging only (owner 2026-10-28: dev/stag → Firebase, prod → stores).
+caps_in() {
+  python3 "$READER" "$1" --capabilities --include-planned | awk -F'\t' -v p="$2" 'index($1, p) == 1 { print $1 "\t" $3 }'
+}
+
+store_caps="$(caps_in prod store_release_)"
 if [[ "$(echo "$store_caps" | grep -c 'planned')" == 2 ]]; then
   ok "both store release capabilities are planned for prod"
 else
   bad "store release capabilities are not planned for prod" "$store_caps"
 fi
 
-store_caps_dev="$(python3 "$READER" dev --capabilities --include-planned | awk -F'\t' '$1 ~ /^store_release_/ { print }')"
-if [[ -z "$store_caps_dev" ]]; then
-  ok "neither store release capability claims dev — one signing identity, prod only"
+for env in dev staging; do
+  store_caps_env="$(caps_in "$env" store_release_)"
+  if [[ -z "$store_caps_env" ]]; then
+    ok "neither store release capability claims ${env} — stores are prod only"
+  else
+    bad "a store release capability appears in ${env}" "$store_caps_env"
+  fi
+
+  fb_caps="$(caps_in "$env" firebase_distribution_)"
+  if [[ "$(echo "$fb_caps" | grep -c 'planned')" == 2 ]]; then
+    ok "both firebase distribution capabilities are planned for ${env}"
+  else
+    bad "firebase distribution capabilities are not planned for ${env}" "$fb_caps"
+  fi
+done
+
+fb_caps_prod="$(caps_in prod firebase_distribution_)"
+if [[ -z "$fb_caps_prod" ]]; then
+  ok "neither firebase distribution capability claims prod — prod goes to the stores"
 else
-  bad "a store release capability appears in dev" "$store_caps_dev"
+  bad "a firebase distribution capability appears in prod" "$fb_caps_prod"
 fi
+
+# The Firebase capabilities require exactly the set their lane is handed. The
+# dangling check below only sees requirements that are listed, so a removed or
+# truncated list would pass it and let readiness report a lane complete that
+# exec-with.sh would refuse (#276 Sol F-04). Pinned per environment.
+expect_requires() {
+  local env="$1" cap="$2" want="$3" got
+  got="$(python3 "$READER" "$env" --capability-requires --include-planned \
+    | awk -F'\t' -v c="$cap" '$1 == c { print $2 ":" $3 }' | sort)"
+  if [[ "$got" == "$(tr ' ' '\n' <<< "$want" | sort)" ]]; then
+    ok "${env}: ${cap} requires exactly its lane's rows"
+  else
+    bad "${env}: ${cap} requires a different set than its lane" "got: $(tr '\n' ' ' <<< "$got")"
+  fi
+}
+for env in dev staging; do
+  expect_requires "$env" firebase_distribution_ios \
+    "ci:signing/apple-asc-key ci:signing/apple-asc-key-id ci:signing/apple-asc-issuer-id ci:firebase/app-distribution-service-account ci:firebase/app-id-ios"
+  expect_requires "$env" firebase_distribution_android \
+    "ci:signing/android-keystore ci:signing/android-keystore-password ci:signing/android-key-alias ci:signing/android-key-password ci:firebase/app-distribution-service-account ci:firebase/app-id-android"
+done
+expect_requires prod store_release_ios \
+  "ci:signing/apple-asc-key ci:signing/apple-asc-key-id ci:signing/apple-asc-issuer-id"
+expect_requires prod store_release_android \
+  "ci:signing/android-keystore ci:signing/android-keystore-password ci:signing/android-key-alias ci:signing/android-key-password ci:store/play-service-account"
+
+# Every requirement names a declared row. Nothing else resolves `requires`
+# against the parameter list, so a typo — or a rename like #271's store/ →
+# signing/ that missed one list — would leave a capability waiting forever on a
+# parameter nobody can create, and readiness would report it missing as if the
+# owner had forgotten a value.
+for env in dev staging prod; do
+  declared="$(python3 "$READER" "$env" --namespace all --consumer all | awk -F'\t' '{ print $5 ":" $1 }' | sort -u)"
+  dangling="$(python3 "$READER" "$env" --capability-requires --include-planned \
+    | awk -F'\t' '{ print $2 ":" $3 "\t(" $1 ")" }' | sort -u \
+    | while IFS=$'\t' read -r req cap; do grep -qxF "$req" <<< "$declared" || echo "${req} ${cap}"; done)"
+  if [[ -z "$dangling" ]]; then
+    ok "${env}: every capability requirement names a declared row"
+  else
+    bad "${env}: capability requirements name undeclared rows" "$dangling"
+  fi
+done
 
 ci_in_default="$(python3 "$READER" dev | awk -F'\t' '$5 == "ci" { print $1 }')"
 if [[ -z "$ci_in_default" ]]; then

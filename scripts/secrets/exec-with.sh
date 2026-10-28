@@ -7,7 +7,7 @@
 #     ../GoGo-MobileApp/scripts/release-build.sh ios --device <udid>
 #
 #   ./scripts/secrets/exec-with.sh prod \
-#     store/apple-asc-key store/apple-asc-key-id store/apple-asc-issuer-id -- \
+#     signing/apple-asc-key signing/apple-asc-key-id signing/apple-asc-issuer-id -- \
 #     fastlane ios beta
 #
 # Several parameters because a store lane needs a set of them and nothing less

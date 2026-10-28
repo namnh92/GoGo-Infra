@@ -379,30 +379,37 @@ verifies the round trip by fingerprint — see [onesignal-identity-key.md](onesi
 
 ## Store signing material (GoGo-Infra#231)
 
-The app's signing credentials live under `ci`, in **`prod` only**: there is one signing identity
-for the app that ships, and a dev or staging build is not signed for the store. `ci` keeps them out
-of every runtime environment — `render-env.sh` renders `backend`/`runtime` rows, `mobile-env.py`
-renders `mobile` rows, and `manifest.test.sh` pins that no `store/*` row appears in either set.
-Nothing reads them but the lane the owner runs:
+The app's signing and publishing credentials live under `ci`, in two prefixes (renamed by #271
+before any value existed — see the next section for dev and staging):
+
+- `signing/*` — the identity a build is signed with: the App Store Connect key and the Android
+  keystore. **One SSM set per environment**: `/gogo/ci/prod/signing/…` is the shipped app's,
+  `/gogo/ci/dev/signing/…` and `/gogo/ci/staging/signing/…` sign the Firebase tester builds.
+- `store/*` — what publishes to a store: `store/play-service-account`, **`prod` only**.
+
+This section is the `prod` side. `ci` keeps every one of them out of every runtime environment —
+`render-env.sh` renders `backend`/`runtime` rows, `mobile-env.py` renders `mobile` rows, and
+`manifest.test.sh` pins that no `signing/`, `store/` or `firebase/` row appears in either set, in any
+environment. Nothing reads them but the lane the owner runs:
 
 ```bash
 # iOS — TestFlight (GoGo-MobileApp#350)
 ./scripts/secrets/exec-with.sh prod \
-  store/apple-asc-key store/apple-asc-key-id store/apple-asc-issuer-id -- \
+  signing/apple-asc-key signing/apple-asc-key-id signing/apple-asc-issuer-id -- \
   fastlane ios beta
 
 # Android — Play internal track (GoGo-MobileApp#351)
 ./scripts/secrets/exec-with.sh prod \
-  store/android-keystore store/android-keystore-password \
-  store/android-key-alias store/android-key-password store/play-service-account -- \
+  signing/android-keystore signing/android-keystore-password \
+  signing/android-key-alias signing/android-key-password store/play-service-account -- \
   fastlane android internal
 
 # Android — sign without uploading: name the four signing rows and leave the
 # service account out, because the upload step is the only thing that reads it.
 # Naming it while it has no value stops the wrapper before the build instead.
 ./scripts/secrets/exec-with.sh prod \
-  store/android-keystore store/android-keystore-password \
-  store/android-key-alias store/android-key-password -- \
+  signing/android-keystore signing/android-keystore-password \
+  signing/android-key-alias signing/android-key-password -- \
   fastlane android build
 ```
 
@@ -429,8 +436,8 @@ credentials is invoked with fewer — the signing-only form above.
 
 | | Lost | Leaked |
 | --- | --- | --- |
-| `store/android-keystore` (+ its passwords) — the **upload key** | Recoverable: Play Console → request an upload key reset, then sign with the new one. Updates to installed copies are not affected, because Play re-signs every release with the **app signing key** it holds. | Someone who also reaches the Play account can upload builds as us. Reset the upload key; nothing already installed is at risk. |
-| `store/apple-asc-key` | Create another key in App Store Connect; nothing is lost. | Anyone can upload builds as us until the key is revoked. |
+| `signing/android-keystore` (+ its passwords) — the **upload key** | Recoverable: Play Console → request an upload key reset, then sign with the new one. Updates to installed copies are not affected, because Play re-signs every release with the **app signing key** it holds. | Someone who also reaches the Play account can upload builds as us. Reset the upload key; nothing already installed is at risk. |
+| `signing/apple-asc-key` | Create another key in App Store Connect; nothing is lost. | Anyone can upload builds as us until the key is revoked. |
 | `store/play-service-account` | Create another key for the same service account. | Anyone can publish to our Play tracks until the key is deleted in Google Cloud IAM. |
 
 **The keystore here is the upload key, not the signature installed copies verify.** Play App Signing
@@ -468,20 +475,25 @@ interactive branch reads a single line and cannot take a multi-line key at all).
    file contents on stdin:
 
    ```bash
-   ./scripts/secrets/put.sh prod store/apple-asc-key < AuthKey_XXXXXXXXXX.p8
-   ./scripts/secrets/put.sh prod store/apple-asc-key-id      # prompts: the 10-character key id
-   ./scripts/secrets/put.sh prod store/apple-asc-issuer-id   # prompts: the issuer UUID
+   ./scripts/secrets/put.sh prod signing/apple-asc-key < AuthKey_XXXXXXXXXX.p8
+   ./scripts/secrets/put.sh prod signing/apple-asc-key-id      # prompts: the 10-character key id
+   ./scripts/secrets/put.sh prod signing/apple-asc-issuer-id   # prompts: the issuer UUID
    ```
+
+   Then move the `.p8` off disk: Apple will not issue it again, so put a copy in the owner's password
+   manager (attachment), confirm the row with `./scripts/secrets/validate.sh prod`, and delete every
+   local copy — the download folder included — with `rm -P AuthKey_XXXXXXXXXX.p8`. A `.p8` left in
+   Downloads is the key, usable by anything that can read the folder, until it is revoked.
 
 2. **Android upload keystore** — generated once:
 
    ```bash
    keytool -genkeypair -v -keystore gogo-upload.p12 -storetype PKCS12 -alias gogo \
      -keyalg RSA -keysize 2048 -validity 10000
-   base64 -i gogo-upload.p12 | ./scripts/secrets/put.sh prod store/android-keystore
-   ./scripts/secrets/put.sh prod store/android-keystore-password
-   ./scripts/secrets/put.sh prod store/android-key-alias        # `gogo` above
-   ./scripts/secrets/put.sh prod store/android-key-password     # same value as the store password
+   base64 -i gogo-upload.p12 | ./scripts/secrets/put.sh prod signing/android-keystore
+   ./scripts/secrets/put.sh prod signing/android-keystore-password
+   ./scripts/secrets/put.sh prod signing/android-key-alias        # `gogo` above
+   ./scripts/secrets/put.sh prod signing/android-key-password     # same value as the store password
    ```
 
    Two details that the obvious command gets wrong:
@@ -505,7 +517,7 @@ interactive branch reads a single line and cannot take a multi-line key at all).
 
    ```bash
    rt="$(mktemp)" && chmod 600 "$rt"
-   ./scripts/secrets/get.sh prod store/android-keystore --show | base64 -d > "$rt"
+   ./scripts/secrets/get.sh prod signing/android-keystore --show | base64 -d > "$rt"
    shasum -a 256 gogo-upload.p12 "$rt"               # the two digests must be identical
    keytool -list -keystore "$rt" -storetype PKCS12    # and it still opens: same certificate SHA-256 as the source
    rm -f "$rt"
@@ -542,9 +554,186 @@ Readiness reports them as a group: `validate.sh prod --strict --include-planned`
 
 No GoGo role is granted these paths. They are read by the owner's own session (`gogo-bootstrap`
 through SSO), which is the identity that wrote them; the permissions boundary allows a role's read
-ceiling to name `/gogo/ci/<env>/…`, but no role names `store/*` and none should — the lanes run on a
+ceiling to name `/gogo/ci/<env>/…`, but no role names `signing/*`, `store/*` or `firebase/*` and none should — the lanes run on a
 workstation, not in CI. When a release job does arrive, give it a role whose ceiling names exactly
 the rows that lane needs, never the `ci` tree.
+
+## Firebase App Distribution and dev/staging signing (GoGo-Infra#271)
+
+Owner decision 2026-10-28: the `dev` and `stag` flavours (`max.gogo.dev`, `max.gogo.stag`) reach
+testers through **Firebase App Distribution**, iOS and Android; only `prod` goes to TestFlight and
+Play. Shape: `dev/handoffs/sa-shape-infra-271-firebase-distribution.fable.md` (workspace). The lane
+is GoGo-MobileApp#391.
+
+Environment names: the manifest, SSM and `exec-with.sh` say **`staging`**; the lane maps it to the
+flavour `stag`, exactly as `mobile-env.py` does. There is no `stag` environment here.
+
+| Rows | dev | staging | prod |
+| --- | --- | --- | --- |
+| `signing/apple-asc-key` + `-key-id` + `-issuer-id` | own Team key | own Team key | own key (#231) |
+| `signing/android-keystore` + `-keystore-password` + `-key-alias` + `-key-password` | own keystore | own keystore | upload keystore (#231) |
+| `firebase/app-distribution-service-account` + `firebase/app-id-ios` + `firebase/app-id-android` | project `gogo-dev` | project `gogo-stag` | — |
+| `store/play-service-account` | — | — | #231 |
+
+The same row is a different parameter in each environment, and exports the same variable, so one
+lane signs any flavour and the environment argument chooses the set:
+
+```bash
+# iOS — Ad Hoc build to Firebase (GoGo-MobileApp#391); staging → flavour stag
+./scripts/secrets/exec-with.sh dev \
+  signing/apple-asc-key signing/apple-asc-key-id signing/apple-asc-issuer-id \
+  firebase/app-distribution-service-account firebase/app-id-ios -- \
+  fastlane ios firebase
+
+# Android — APK to Firebase
+./scripts/secrets/exec-with.sh dev \
+  signing/android-keystore signing/android-keystore-password \
+  signing/android-key-alias signing/android-key-password \
+  firebase/app-distribution-service-account firebase/app-id-android -- \
+  fastlane android firebase
+```
+
+(Lane names are #391's to choose; the row sets are the contract.) `dev` and `staging` ask for **no
+typed confirmation** — `confirm_prod` is prod-only, and these keys sign a tester build and upload it to
+Firebase, not to a store. Everything in *What the wrapper buys, exactly* above applies unchanged:
+the lane keeps the variables out of its log and deletes whatever it decodes to disk.
+
+Readiness: `validate.sh <env> --strict --include-planned` reports `firebase_distribution_ios` and
+`firebase_distribution_android` (planned dev and staging) and names the missing rows. Every row is
+`required: []` until its values exist; flip `required` per environment in a small PR once
+`validate.sh <env>` is green.
+
+**What each one costs if it is lost or leaked:**
+
+| | Lost | Leaked |
+| --- | --- | --- |
+| `signing/android-keystore` at dev/staging | Not recoverable as a signature — nothing re-signs a Firebase build. Generate a new one; testers uninstall before the next install; re-register SHA-1 (Maps) and, for dev, SHA-256 (assetlinks). | Someone can sign builds testers' devices accept as updates of the dev/staging app. Rotate, have testers reinstall. Prod is untouched. |
+| `signing/apple-asc-key` at dev/staging | Create another key. | **Reaches prod.** An App Store Connect key is team-wide, not per app or per environment: with Admin it can create and revoke certificates and profiles — **including the Apple Distribution certificate prod signs with** — upload builds for any of the team's apps, prod included, and change app metadata, users and TestFlight testers. Revoke the key at once, then inspect: App Store Connect → each app → TestFlight builds and App Store versions not shipped by the owner, Users and Access changes, Certificates, Identifiers & Profiles for certificates or profiles not created by the lane. Expire unknown builds; revoke unknown certificates (and regenerate every profile that named one). |
+| `firebase/app-distribution-service-account` | Create another key. | Firebase App Distribution Admin is full read/write on that project's App Distribution: upload releases, add or remove testers and groups, and read tester emails (personal data), until the key is deleted in Google Cloud IAM. It also reads project metadata — the Firebase project, its registered apps, Resource Manager project get/list — but writes nothing outside App Distribution and reaches no other project ([role definition](https://cloud.google.com/iam/docs/roles-permissions/firebaseappdistro)). |
+
+### iOS: Ad Hoc certificate and profile — fastlane `cert` / `sigh`, no `match`
+
+The lane creates and fetches signing assets through the App Store Connect key; nothing about them is
+stored in SSM. An Ad Hoc profile grows with every registered UDID and outgrows a 4 KB Standard
+parameter, and `match` would add a storage backend and an encryption passphrase — two more
+credentials — for a lane that runs on one workstation (owner 2026-10-28).
+
+- **One certificate for every environment.** Apple has a single "Apple Distribution" certificate type
+  for App Store and Ad Hoc, so the prod build and the dev/staging builds are signed by the same
+  certificate. The per-environment split is the ASC key (one per environment) and the profile (one Ad
+  Hoc profile per bundle id). This is the one place "one set per environment" cannot hold.
+- **The certificate's private key lives in the owner's login keychain**, on the build machine. Back it
+  up once: Keychain Access → export the identity as `.p12` → the owner's password manager. **Not SSM.**
+- **Never run `cert` on a second machine.** Apple caps active distribution certificates per team; a
+  second machine would mint another and, if one is revoked to make room, every profile naming it
+  stops working. A second build machine or a CI job is the trigger to move to `match` on an R2
+  bucket — a new issue, not a lane tweak.
+- **Profiles** go to a gitignored output directory in GoGo-MobileApp (#391 adds the ignore), never a
+  committed path.
+
+**Testers' devices (UDIDs).** The registry is Apple Developer → Certificates, Identifiers & Profiles
+→ Devices. Add the device there, then regenerate the profile so it includes it — `sigh --adhoc
+--force` (the lane's option) — and build again. A device not in the profile cannot install the build,
+whatever Firebase says. Firebase tester groups are a separate list (Firebase console → App
+Distribution → Testers & Groups) and are passed to the lane as arguments, not stored.
+
+### Creating and storing them (owner)
+
+The owner creates every value; the assistant supplies the commands, never sees a value. Repeat per
+environment (`dev`, then `staging`). `put.sh` for these environments asks no confirmation.
+
+1. **Firebase project** — Firebase console → add project `gogo-dev` (staging: `gogo-stag`). In it,
+   add an iOS app with bundle id `max.gogo.dev` and an Android app with package `max.gogo.dev`
+   (`max.gogo.stag` for staging). A Firebase project is a Google Cloud project: record it in
+   `docs/accounts.md` → *Which Google Cloud project owns a DEV credential*. It is **not** the project
+   that owns the Maps keys.
+
+2. **Service account** — Google Cloud console, *in that project* → IAM → Service accounts → create
+   `app-distribution`, grant role **Firebase App Distribution Admin** and nothing else → Keys → add
+   key (JSON). Then:
+
+   ```bash
+   ./scripts/secrets/put.sh dev firebase/app-distribution-service-account < app-distribution.json
+   ./scripts/secrets/put.sh dev firebase/app-id-ios        # prompts: 1:<number>:ios:<hash>
+   ./scripts/secrets/put.sh dev firebase/app-id-android    # prompts: 1:<number>:android:<hash>
+   rm -P app-distribution.json
+   ```
+
+   The app ids are on Project settings → General → Your apps.
+
+3. **App Store Connect key** — App Store Connect → Users and Access → Integrations → App Store
+   Connect API → **Team Keys** → generate `gogo-lane-dev` (staging: `gogo-lane-staging`). Role: the
+   one that may create certificates and profiles — **Admin** per fastlane's documentation (individual
+   keys cannot use provisioning endpoints); check Apple's role table on that page first and take
+   *App Manager* if it suffices. The `.p8` downloads **once**:
+
+   ```bash
+   ./scripts/secrets/put.sh dev signing/apple-asc-key < AuthKey_XXXXXXXXXX.p8
+   ./scripts/secrets/put.sh dev signing/apple-asc-key-id      # prompts: the 10-character key id
+   ./scripts/secrets/put.sh dev signing/apple-asc-issuer-id   # prompts: the issuer UUID
+   ```
+
+   Then move the `.p8` off disk: Apple will not issue it again, so put a copy in the owner's password
+   manager (attachment), confirm the row with `./scripts/secrets/validate.sh dev`, and delete every
+   local copy — the download folder included — with `rm -P AuthKey_XXXXXXXXXX.p8`. A `.p8` left in
+   Downloads is the key, usable by anything that can read the folder, until it is revoked.
+
+4. **Android keystore** — one per environment, never the prod upload keystore, never the debug
+   keystore (owner 2026-10-28). Same rules as prod: PKCS12, RSA-2048, one password for store and key.
+
+   ```bash
+   keytool -genkeypair -v -keystore gogo-dev.p12 -storetype PKCS12 -alias gogo-dev \
+     -keyalg RSA -keysize 2048 -validity 10000
+   base64 -i gogo-dev.p12 | ./scripts/secrets/put.sh dev signing/android-keystore
+   ./scripts/secrets/put.sh dev signing/android-keystore-password
+   ./scripts/secrets/put.sh dev signing/android-key-alias        # gogo-dev
+   ./scripts/secrets/put.sh dev signing/android-key-password     # same value as the store password
+   ```
+
+   Verify the round trip as in step 2 of the prod section (`get.sh dev signing/android-keystore --show
+   | base64 -d` into a `mktemp` file, compare digests) and back the `.p12` up to the password manager —
+   at dev/staging it *is* the signature. **Keep the local file until step 5 has read the fingerprints.**
+
+5. **Fingerprints** — public values, not secrets. Read them from the local `.p12`, then delete it:
+
+   ```bash
+   keytool -list -v -keystore gogo-dev.p12 -storetype PKCS12 -alias gogo-dev | grep -E 'SHA1|SHA256'
+   rm -P gogo-dev.p12      # only after the backup in step 4 and the fingerprints above are recorded
+   ```
+
+   - **SHA-1 → Maps.** Google Cloud console → the project owning `google/maps-android-api-key` →
+     Credentials → that key → Android apps → add `max.gogo.dev` + this SHA-1 (staging: `max.gogo.stag`).
+     Record it in `docs/accounts.md` → *App identity* → signing table. Without it, the Firebase build
+     shows a grey map and `Authorization failure` in logcat. (Staging has no Maps key value yet —
+     a separate issue; the restriction can be added when it exists.)
+   - **SHA-256 → App Links (dev only).** Add it to `config/well-known/dev/assetlinks.json` next to the
+     debug fingerprint, in a PR; the merge to `develop` triggers `terraform-apply-dev.yml`, which
+     serves the file from the share-link Worker, so the Firebase dev build verifies `go-dev.gogo.id.vn`. `stag` claims no
+     links, so staging has no file.
+
+6. **Check:** `./scripts/secrets/validate.sh dev --strict --include-planned` — both
+   `firebase_distribution_*` capabilities complete.
+
+### Rotating and revoking (dev/staging)
+
+- **ASC key:** create the new key, store it, build once with it, revoke the old one. Revoking is the
+  kill switch and leaves the other environments' keys working.
+- **Service account key:** add a new key, store it, distribute once, delete the old key in Google Cloud
+  IAM (kill switch). Removing the role also stops it.
+- **Keystore, routine rollover** (expiry, a new machine): a new keystore is a new signature. Store the
+  four rows, add the new SHA-1 to the Maps restriction (and the new SHA-256 to
+  `config/well-known/dev/assetlinks.json` for dev), tell testers to uninstall and reinstall. The old
+  fingerprints may stay until no tester still runs a build signed with the old key, then remove them.
+- **Keystore, compromised** (the file and its password may be in someone else's hands): everything
+  above, and **remove the old fingerprints at once** — they are the trust an attacker-signed app
+  would inherit. Delete the old SHA-1 from the Maps key's Android-app restriction, delete the old
+  SHA-256 from `config/well-known/dev/assetlinks.json` in a PR — once it merges to `develop`,
+  `terraform-apply-dev.yml` applies `config/well-known/**` into the share-link Worker
+  (`modules/cloudflare-worker` reads it with `file()`), and `go-dev.gogo.id.vn` stops vouching for
+  the old key; confirm by fetching `https://go-dev.gogo.id.vn/.well-known/assetlinks.json` — and record the rotation on GoGo-Infra#271. Testers who
+  keep a build signed with the old key lose Maps and verified links on it — that is the point.
+- **Distribution certificate:** shared with prod — revoke only to replace a compromised one, and
+  regenerate every profile (prod App Store and dev/staging Ad Hoc) afterwards.
 
 ## Agent GitHub App (GoGo-Infra#250)
 
