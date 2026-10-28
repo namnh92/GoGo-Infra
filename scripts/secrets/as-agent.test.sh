@@ -95,6 +95,7 @@ echo "exec-with $*" >>"$CALLS"
 p=$PPID; a=""; for _ in 1 2 3; do a="$a $p"; p=$(ps -o ppid= -p "$p" | tr -d ' '); done
 echo "mint-ancestors$a" >>"$CALLS"
 [[ -n "${STUB_MINT_FAIL:-}" ]] && { echo "stub: no credentials" >&2; exit 1; }
+[[ -n "${STUB_MINT_SLEEP:-}" ]] && sleep "$STUB_MINT_SLEEP"
 while [[ "$1" != "--" ]]; do shift; done; shift
 exec "$@"
 STUB
@@ -1096,6 +1097,41 @@ cmdpid="$(sed -n 's/^gh-child: pid=//p' "${SANDBOX}/8g.out")"
 ancestors="$(sed -n 's/^mint-ancestors//p' "$CALLS")"
 [[ -n "$cmdpid" && " $ancestors " == *" $cmdpid "* ]] \
   && ok "T8g: the token is minted under the process that becomes the command, never under a process that outlives it" || bad "T8g mint topology" "cmd=$cmdpid stage1=$stage1 mint-ancestors=$ancestors"
+
+# 8h. #304 Sol r2. F-04: the sealed home goes when the command has exited, even while its parent
+# has not reaped it (a zombie passes `kill -0`). F-05: a signal during the mint is handled when the
+# mint ends — the command never starts, the wrapper exits with the signal, the home goes.
+left="$(sealed_left)"; [[ -z "$left" ]] || bad "T8h setup" "sealed homes left by an earlier check: $left"
+out="$(python3 -I - "$AS" "$REPO" "$TMPDIR" <<'PY'
+import glob, os, subprocess, sys, time
+AS, repo, tmp = sys.argv[1:]
+p = subprocess.Popen([AS, '--', 'gh', 'pr', 'list'], cwd=repo, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def state():
+    return subprocess.run(['ps', '-o', 'stat=', '-p', str(p.pid)], capture_output=True, text=True).stdout.strip()
+for _ in range(100):
+    if state().startswith('Z'): break
+    time.sleep(0.1)
+z = state()
+t0 = time.time(); left = glob.glob(os.path.join(tmp, 'as-agent.*'))
+while left and time.time() - t0 < 4:
+    time.sleep(0.1); left = glob.glob(os.path.join(tmp, 'as-agent.*'))
+print(f"state={z[:1]} left={len(left)} secs={time.time() - t0:.1f}")
+p.wait()
+PY
+)"
+[[ "$out" == "state=Z left=0 "* ]] \
+  && ok "T8h: the sealed home is removed while the exited command is still a zombie ($out)" || bad "T8h zombie" "$out"
+: >"$CALLS"
+(cd "$REPO" && STUB_MINT_SLEEP=3 exec "$AS" -- gh pr list >"${SANDBOX}/8h.out" 2>&1) &
+stage1=$!
+for _ in $(seq 50); do grep -q '^exec-with ' "$CALLS" 2>/dev/null && break; sleep 0.1; done
+t0=$SECONDS
+kill -TERM "$stage1" 2>/dev/null
+wait "$stage1"; rc=$?
+took=$((SECONDS - t0))
+left="$(sealed_left)"
+[[ "$rc" == 143 && "$took" -le 4 && -z "$left" ]] && ! grep -q 'gh-child:' "${SANDBOX}/8h.out" \
+  && ok "T8h: TERM during the mint: the command never starts, exit 143 once the mint ends (${took}s), sealed home gone" || bad "T8h TERM during mint" "rc=$rc took=${took}s left=$left out=$(cat "${SANDBOX}/8h.out")"
 
 # 8e. A partial clone's lazy fetch under gh is a git fetch too: no transport.
 PARTIAL="${SANDBOX}/GoGo-Partial"

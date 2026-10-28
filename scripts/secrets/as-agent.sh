@@ -29,7 +29,9 @@
 #      hosts.yml/config.yml/aliases and global safe.directory are not loaded (owner decision D7:
 #      proxy and CA come from the environment only). Nothing secret is written there. A watcher
 #      forked before the mint (so it never holds the token) removes the directory once this
-#      process — which becomes the command — has exited, however it ended (#260, #281 retro-review).
+#      process — which becomes the command — has exited, however it ended, reaped or not (#260,
+#      #281 retro-review, #304). A signal before the exec is handled when the step then running
+#      (a git check, or the mint) ends: the command is never started and the directory goes.
 #  I3  One credential. Process-only git configuration (GIT_CONFIG_*, read last): an empty
 #      credential.helper resets every helper collected from any file, then one helper for
 #      https://github.com answers with GH_TOKEN, and only when asked for protocol=https,
@@ -486,7 +488,17 @@ fi
 watched=$$
 (
   trap '' HUP INT TERM
-  while kill -0 "$watched" 2>/dev/null; do sleep 1; done
+  # Running = the pid exists, is not a zombie, and is still the process this watcher was forked
+  # from (same start time, not a reuse of its number). `kill -0` alone is true of a process that
+  # has exited but whose parent has not reaped it, which would hold the directory for as long as
+  # the caller holds the zombie (#304 Sol r2, F-04).
+  born="$(ps -o lstart= -p "$watched" 2>/dev/null)"
+  running() {
+    local state
+    state="$(ps -o stat= -p "$watched" 2>/dev/null | tr -d ' ')"
+    [[ -n "$state" && "$state" != Z* && "$(ps -o lstart= -p "$watched" 2>/dev/null)" == "$born" ]]
+  }
+  while running; do sleep 1; done
   rm -rf "$W"
 ) </dev/null >/dev/null 2>&1 &
 
