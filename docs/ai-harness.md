@@ -287,6 +287,10 @@ mv "$root/bin/harness.mts" "$root/quarantine/bin-harness.mts.$(date -u +%Y%m%dT%
 
 then pastes the first-install block again with the new `<sha>` and the same `<root>` and `<node>`.
 `bin/harness` is kept, or rewritten when the new template differs, and the plan says which.
+`install-verify` tells when this is due (GoGo-Infra#260): its `bootstrap` field is `matches-active`
+when `bin/harness.mts` is byte-for-byte the active version's `launcher.ts`, else
+`differs-from-active`, with one line on stderr naming this section. It only reports; nothing is
+upgraded for you. A bootstrap placed before #260 prints neither until it is upgraded once.
 
 This first download is the trust anchor (trust on first use over HTTPS to GitHub): nothing the
 block fetches can vouch for itself. To check it out of band, compare
@@ -306,7 +310,7 @@ node harness/src/install/prepare.ts <commit> [--repo DIR] [--install-dir DIR]
 
 # 3. Use. Same commands and exit codes as cli.ts:
 ~/.gogo-harness/install/bin/harness decide --input task.json
-~/.gogo-harness/install/bin/harness install-verify     # { sha, manifestDigest } or exit 2
+~/.gogo-harness/install/bin/harness install-verify     # { sha, manifestDigest, bootstrap } or exit 2
 ```
 
 **Activation proves provenance.** Before the owner is asked, `activate` fetches `develop` from
