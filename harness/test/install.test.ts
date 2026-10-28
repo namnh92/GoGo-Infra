@@ -399,6 +399,28 @@ describe('#245 prepare: from Git objects, closure included, proves nothing', () 
     assert.deepEqual(readdirSync(join(w.install, 'staging')), []);
   });
 
+  // #253 S4-02 (#260): a reused staging/<sha>.<pid> is made writable before removal; a leaf that
+  // is not an owned regular single-link file is refused, and the inode outside keeps its mode.
+  for (const [name, plant, refused] of [
+    ['a hard link to a file outside the install', (leaf: string, outside: string) => linkSync(outside, leaf), /hard link/],
+    ['a FIFO', (leaf: string) => execFileSync('mkfifo', [leaf]), /not a regular file/],
+  ] as const) {
+    it(`a reused staging tree holding ${name} is refused, nothing outside is chmod-ed`, () => {
+      const w = world();
+      prep(w);
+      writeFileSync(join(w.work, 'harness/src/b.ts'), 'export {};\n');
+      const sha = commit(w.work, 'B');
+      const outside = join(w.root, 'outside.txt');
+      writeFileSync(outside, 'owner file\n', { mode: 0o600 });
+      const staging = join(w.install, 'staging', `${sha}.${process.pid}`);
+      mkdirSync(join(staging, 'harness'), { recursive: true });
+      plant(join(staging, 'harness/leaf'), outside);
+      assert.throws(() => prep(w, sha), refused);
+      assert.equal(lstatSync(outside).mode & 0o777, 0o600);
+      assert.equal(existsSync(join(w.install, 'versions', sha)), false);
+    });
+  }
+
   it('refuses a payload with a symbolic link', () => {
     const w = world();
     symlinkSync('../package.json', join(w.work, 'harness/src/link.json'));
