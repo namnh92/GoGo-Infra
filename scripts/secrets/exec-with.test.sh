@@ -40,7 +40,9 @@ cat >"${SANDBOX}/aws" <<'STUB'
 [[ -n "${CALLS:-}" ]] || { echo "stub: CALLS unset" >&2; exit 97; }
 echo "aws $*" >>"$CALLS"
 # GoGo-Infra#231, Sol F-01: a later fetch must not inherit an earlier secret.
-for v in SENTRY_AUTH_TOKEN ASC_KEY_CONTENT ASC_KEY_ID ASC_ISSUER_ID; do
+for v in SENTRY_AUTH_TOKEN ASC_KEY_CONTENT ASC_KEY_ID ASC_ISSUER_ID \
+  ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD \
+  FIREBASE_SERVICE_CREDENTIALS_JSON FIREBASE_APP_ID_IOS FIREBASE_APP_ID_ANDROID; do
   [[ -n "${!v:-}" ]] && echo "aws-inherited $v" >>"$CALLS"
 done
 case "$1 $2" in
@@ -72,6 +74,17 @@ done
 exit "${CHILD_EXIT:-0}"
 LANE
 chmod +x "${SANDBOX}/lane"
+
+# The Firebase Android lane's set (GoGo-Infra#271): six variables, same rule.
+cat >"${SANDBOX}/fblane" <<'LANE'
+#!/usr/bin/env bash
+for v in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD \
+  FIREBASE_SERVICE_CREDENTIALS_JSON FIREBASE_APP_ID_ANDROID; do
+  if [[ "${!v:-}" == "$STUB_VALUE" ]]; then echo "lane: $v present"; else echo "lane: $v absent"; fi
+done
+exit "${CHILD_EXIT:-0}"
+LANE
+chmod +x "${SANDBOX}/fblane"
 
 run() {
   : >"$CALLS"
@@ -129,7 +142,7 @@ refuses() {
 # 3b. A set of parameters (GoGo-Infra#231): a store lane needs all of them, and
 # nesting one invocation per value would confirm prod once per credential.
 : >"$CALLS"
-GOGO_ASSUME_YES=1 run prod store/apple-asc-key store/apple-asc-key-id store/apple-asc-issuer-id -- lane
+GOGO_ASSUME_YES=1 run prod signing/apple-asc-key signing/apple-asc-key-id signing/apple-asc-issuer-id -- lane
 status=$?
 if [[ $status -eq 0 ]] && [[ "$(grep -c 'present$' "${SANDBOX}/out")" == 3 ]]; then
   ok "a set of parameters all reach the command under their own env_var"
@@ -137,8 +150,8 @@ else
   bad "a set of parameters all reach the command under their own env_var" "status=${status}: $(cat "${SANDBOX}/out")"
 fi
 if [[ "$(grep -c 'get-parameter' "$CALLS")" == 3 ]] \
-  && grep -q "/gogo/ci/prod/store/apple-asc-key\b" "$CALLS" \
-  && grep -q "/gogo/ci/prod/store/apple-asc-issuer-id" "$CALLS"; then
+  && grep -q "/gogo/ci/prod/signing/apple-asc-key\b" "$CALLS" \
+  && grep -q "/gogo/ci/prod/signing/apple-asc-issuer-id" "$CALLS"; then
   ok "each path in the set is read once, under its own namespace"
 else
   bad "each path in the set is read once, under its own namespace" "$(cat "$CALLS")"
@@ -154,13 +167,47 @@ else
   ok "no fetch inherits a credential already fetched"
 fi
 
+# 3c. The Firebase sets (GoGo-Infra#271): the same signing/ rows plus the
+# firebase/ rows, read from each environment's own tree, with no terminal and no
+# GOGO_ASSUME_YES — dev and staging carry no typed confirmation by design.
+FB_ANDROID=(signing/android-keystore signing/android-keystore-password signing/android-key-alias
+  signing/android-key-password firebase/app-distribution-service-account firebase/app-id-android)
+for env in dev staging; do
+  : >"$CALLS"
+  run "$env" "${FB_ANDROID[@]}" -- fblane
+  status=$?
+  if [[ $status -eq 0 ]] && [[ "$(grep -c 'present$' "${SANDBOX}/out")" == 6 ]]; then
+    ok "${env}: the Firebase Android set reaches the lane without a terminal"
+  else
+    bad "${env}: the Firebase Android set reaches the lane without a terminal" "status=${status}: $(cat "${SANDBOX}/out")"
+  fi
+  if [[ "$(grep -c 'get-parameter' "$CALLS")" == 6 ]] \
+    && [[ "$(grep -c "/gogo/ci/${env}/" "$CALLS")" == 6 ]] \
+    && grep -q "/gogo/ci/${env}/signing/android-keystore\b" "$CALLS" \
+    && grep -q "/gogo/ci/${env}/firebase/app-distribution-service-account" "$CALLS"; then
+    ok "${env}: each path of the Firebase set is read once, from /gogo/ci/${env}"
+  else
+    bad "${env}: each path of the Firebase set is read once, from /gogo/ci/${env}" "$(cat "$CALLS")"
+  fi
+  if grep -qF "$VALUE" "${SANDBOX}/out" || grep -qF "$VALUE" "$CALLS"; then
+    bad "${env}: no value of the Firebase set is printed or passed as an argument" "found in output or aws argv"
+  else
+    ok "${env}: no value of the Firebase set is printed or passed as an argument"
+  fi
+  if grep -q "^aws-inherited" "$CALLS"; then
+    bad "${env}: no fetch of the Firebase set inherits a credential already fetched" "$(grep '^aws-inherited' "$CALLS")"
+  else
+    ok "${env}: no fetch of the Firebase set inherits a credential already fetched"
+  fi
+done
+
 refuses "no -- separator" "usage: exec-with.sh" dev sentry/mobile-auth-token child extra
 refuses "no command after --" "usage: exec-with.sh" dev sentry/mobile-auth-token --
 refuses "an undeclared path" "is not declared" dev sentry/not-declared -- child
 refuses "a row with no env_var" "declares no env_var" dev terraform/read/r2-state-secret-access-key -- child
 refuses "the ci pseudo-environment" "'ci' is not a runtime environment" ci sentry/mobile-auth-token -- child
-GOGO_ASSUME_YES=1 refuses "the same path twice" "is named twice" prod store/apple-asc-key store/apple-asc-key -- lane
-GOGO_ASSUME_YES=1 refuses "a set with one undeclared path" "is not declared" prod store/apple-asc-key store/not-declared -- lane
+GOGO_ASSUME_YES=1 refuses "the same path twice" "is named twice" prod signing/apple-asc-key signing/apple-asc-key -- lane
+GOGO_ASSUME_YES=1 refuses "a set with one undeclared path" "is not declared" prod signing/apple-asc-key store/not-declared -- lane
 # No test for two different paths sharing an env_var: no two rows in the
 # manifest do, which is the point of the check — it exists so that a future row
 # copied from a neighbour cannot silently shadow it, and the manifest is the
@@ -169,7 +216,7 @@ STUB_GET_FAIL=1 refuses "a failed read does not run the command with an empty va
 STUB_VALUE='' refuses "an empty parameter does not run the command" "is empty" dev sentry/mobile-auth-token -- child
 
 : >"$CALLS"
-GOGO_ASSUME_YES=1 run prod store/apple-asc-key store/not-declared -- lane
+GOGO_ASSUME_YES=1 run prod signing/apple-asc-key store/not-declared -- lane
 if grep -q "get-parameter" "$CALLS"; then
   bad "an unresolvable member of a set stops before any value is fetched" "$(cat "$CALLS")"
 else
@@ -205,7 +252,7 @@ without_tty() { # without_tty <args...> — a session with no controlling termin
   PATH="${SANDBOX}:${PATH}" AWS_PROFILE=stub python3 "$HARNESS" no-tty -- "$SCRIPT" "$@" >"${SANDBOX}/out" 2>&1 </dev/null
 }
 
-with_tty prod prod store/apple-asc-key store/apple-asc-key-id store/apple-asc-issuer-id -- lane
+with_tty prod prod signing/apple-asc-key signing/apple-asc-key-id signing/apple-asc-issuer-id -- lane
 status=$?
 if [[ $status -eq 0 ]] && [[ "$(grep -c 'present$' "${SANDBOX}/out")" == 3 ]] && grep -q "PRODUCTION" "${SANDBOX}/out"; then
   ok "a prod lane with redirected stdin takes its confirmation from the terminal"
@@ -213,7 +260,7 @@ else
   bad "a prod lane with redirected stdin takes its confirmation from the terminal" "status=${status}: $(cat "${SANDBOX}/out")"
 fi
 
-with_tty no prod store/apple-asc-key store/apple-asc-key-id store/apple-asc-issuer-id -- lane
+with_tty no prod signing/apple-asc-key signing/apple-asc-key-id signing/apple-asc-issuer-id -- lane
 status=$?
 if [[ $status -ne 0 ]] && grep -q "aborted" "${SANDBOX}/out" && ! grep -q "^lane:" "${SANDBOX}/out" && [[ ! -s "$CALLS" ]]; then
   ok "a wrong answer on the terminal aborts before any aws call"
@@ -230,7 +277,7 @@ else
   bad "prod with no terminal is refused with a message, before any aws call" "status=${status}, calls: $(tr '\n' ';' <"$CALLS"); out: $(cat "${SANDBOX}/out")"
 fi
 
-GOGO_ASSUME_YES=1 without_tty prod store/apple-asc-key store/apple-asc-key-id store/apple-asc-issuer-id -- lane
+GOGO_ASSUME_YES=1 without_tty prod signing/apple-asc-key signing/apple-asc-key-id signing/apple-asc-issuer-id -- lane
 status=$?
 if [[ $status -eq 0 ]] && [[ "$(grep -c 'present$' "${SANDBOX}/out")" == 3 ]]; then
   ok "GOGO_ASSUME_YES=1 runs a prod lane with no terminal at all"

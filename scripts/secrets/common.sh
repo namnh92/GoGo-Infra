@@ -153,7 +153,7 @@ param_hint() {
 
 # The confirmation is read from the controlling terminal, never from stdin.
 # stdin belongs to the caller's data: the value being written (`put.sh prod
-# store/apple-asc-key < AuthKey.p8` used to consume the key's first line as the
+# signing/apple-asc-key < AuthKey.p8` used to consume the key's first line as the
 # answer, and the multi-line credentials of GoGo-Infra#231 can only arrive that
 # way — the interactive branch is a single-line `read`), or the input of the
 # command exec-with.sh hands the set to. Callers therefore do not test stdin
