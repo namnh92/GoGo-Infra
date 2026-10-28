@@ -426,7 +426,7 @@ grep -q "child: git password=${TOKEN}" <<<"$out" && ! grep -q 'OWNER-PASSWORD' <
   && ok "git's credential lookup answers with the agent token, never the owner's helper" || bad "git credential" "$out"
 grep -q 'token-script --repo GoGo-Example' "$CALLS" \
   && ok "the token is narrowed to the checkout's repository by default" || bad "default --repo" "$(cat "$CALLS")"
-grep -q 'exec-with dev github/agent-app-private-key github/agent-app-id github/agent-app-installation-id --' "$CALLS" \
+grep -q 'exec-with tools github/agent-app-private-key github/agent-app-id github/agent-app-installation-id --' "$CALLS" \
   && ok "the key is read through exec-with.sh with the three manifest rows" || bad "exec-with call" "$(cat "$CALLS")"
 grep -q 'child: args=origin one two' <<<"$out" && ! grep -q "args=.*${TOKEN}" <<<"$out" \
   && ok "arguments pass through; the token is not one of them" || bad "args" "$out"

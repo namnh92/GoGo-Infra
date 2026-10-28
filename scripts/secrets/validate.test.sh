@@ -55,6 +55,7 @@ if [[ "$1" == "ssm" && "$2" == "get-parameters-by-path" ]]; then
   if grep -qxF "$env" "${WORK}/empty_envs" 2>/dev/null; then echo ""; exit 0; fi
   case "$prefix" in
     /gogo/ci/*)      ns=ci ;;
+    /gogo/tools*)    ns=tools ;;
     */mobile)        ns=mobile ;;
     *)               ns=backend ;;
   esac
@@ -110,6 +111,7 @@ if [[ "$1" == "ssm" && "$2" == "get-parameter" ]]; then
   # looks wrong when a test deliberately makes it wrong.
   case "$name" in
     /gogo/ci/*) env="$(cut -d/ -f4 <<< "$name")"; ns=ci;     rel="${name#/gogo/ci/${env}/}" ;;
+    /gogo/tools/*) env=tools; ns=tools;                       rel="${name#/gogo/tools/}" ;;
     */mobile/*) env="$(cut -d/ -f3 <<< "$name")"; ns=mobile; rel="${name#/gogo/${env}/mobile/}" ;;
     *)          env="$(cut -d/ -f3 <<< "$name")"; ns=backend; rel="${name#/gogo/${env}/backend/}" ;;
   esac
@@ -321,6 +323,40 @@ if [[ $rc -ne 0 && "$out" == *"MISSING"* && "$out" == *"cms/super-admin-email"* 
   ok "R1a: both rows absent are MISSING, with no tag finding for rows that do not exist"
 else bad "R1a state must read MISSING for both rows" "rc=$rc $out"; fi
 : > "${WORK}/absent"
+
+# --- GoGo-Infra#294: the tools pseudo-environment ---------------------------
+#
+# One env-less namespace, /gogo/tools/, with no capability profile. Validated on
+# its own so the five tool rows are still checked by somebody after they leave
+# /gogo/ci/dev/.
+out="$(run tools)"; rc=$?
+if [[ $rc -eq 0 && "$out" == *"OK: tools"* && "$out" == *"5 declared across 1 namespace"* ]]; then
+  ok "tools: the five tool rows validate under /gogo/tools/"
+else bad "tools: validate.sh tools should pass with the five rows present" "rc=$rc $out"; fi
+
+out="$(run dev)"; rc=$?
+if [[ $rc -eq 0 && "$out" != *"/gogo/tools"* && "$out" != *"agent-app"* ]]; then
+  ok "tools: validate.sh dev never looks at a tool row"
+else bad "tools: validate.sh dev must not report tool rows" "rc=$rc $out"; fi
+
+echo "/gogo/tools" > "${WORK}/deny"
+out="$(run tools)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"SKIPPED"* && "$out" != *"OK: tools"* ]]; then
+  ok "tools: a /gogo/tools listing nobody could read fails, without --strict"
+else bad "tools: an unreadable /gogo/tools must not pass" "rc=$rc $out"; fi
+: > "${WORK}/deny"
+
+printf '/gogo/tools/github/agent-app-id\tString\n' > "${WORK}/extra_tagged"
+out="$(run tools)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"/gogo/tools/github/agent-app-id (String)"* ]]; then
+  ok "tools: an infra-readable tag under /gogo/tools/ is a finding"
+else bad "tools: a tagged tool parameter must fail" "rc=$rc $out"; fi
+: > "${WORK}/extra_tagged"
+
+out="$(run tools --strict --include-planned)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"no capability profile"* ]]; then
+  ok "tools: --include-planned is refused (no capability profile)"
+else bad "tools: --include-planned must be refused" "rc=$rc $out"; fi
 
 printf '\n'
 if [[ "$failures" -eq 0 ]]; then echo "validate.sh: all checks passed"; else echo "validate.sh: ${failures} failure(s)"; fi
