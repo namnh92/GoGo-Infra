@@ -66,7 +66,7 @@ after a primary that may itself have been charged, so it is reserved separately 
 fallback: the turn ends with the "unavailable" answer.
 
 **D-3 One dedicated key per environment, named `gogo_ai_anthropic_<env>`.** DEV
-`gogo_ai_anthropic_dev` exists; `gogo_ai_anthropic_staging` / `gogo_ai_anthropic_prod` are
+`gogo_ai_anthropic_dev` exists; `gogo_ai_anthropic_stag` (named per ADR-0015) / `gogo_ai_anthropic_prod` are
 created by the owner when those environments are. SSM `/gogo/<env>/backend/openrouter/assistant-api-key`
 → `OPENROUTER_ASSISTANT_API_KEY`, `SecureString`, `consumer: runtime` (the API serves the
 assistant). It is **not** `openrouter/api-key` (decisions POC, `gogo_be_<env>`) and **not**
@@ -80,7 +80,7 @@ variable is declared by exactly one row. No key ever reaches the app.
 | Environment | Monthly cap (USD) | Roughly buys (Sonnet 5.5, D-1 assumptions) |
 | --- | --- | --- |
 | dev | **20** (proposed) | 1,000–2,000 turns: team testing and BE#713's eval |
-| staging | **20** (proposed) | same — created with the environment |
+| stag | **20** (proposed) | same — created with the environment |
 | prod | **150** (proposed, revisit after two weeks of real traffic) | 7,500–15,000 turns |
 
 Per-turn estimate behind it: ~6k input tokens (~4k system + guide, cacheable; ~2k history and

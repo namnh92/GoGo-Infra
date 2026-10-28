@@ -7,7 +7,7 @@ terraform {
   # not DynamoDB.
   backend "s3" {
     bucket = "gogo-terraform-state"
-    key    = "staging/terraform.tfstate"
+    key    = "stag/terraform.tfstate"
     region = "auto"
 
     endpoints = {
@@ -34,5 +34,5 @@ terraform {
 #
 #   source scripts/lib/r2-profile.sh
 #   write_r2_profile /gogo/ci/terraform/plan      # or .../apply
-#   terraform -chdir=terraform/environments/staging init \
+#   terraform -chdir=terraform/environments/stag init \
 #     -backend-config="endpoints={s3=\"https://$CF_ACCOUNT_ID.r2.cloudflarestorage.com\"}"

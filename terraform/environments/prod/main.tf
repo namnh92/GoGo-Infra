@@ -460,7 +460,7 @@ module "github_oidc" {
 
     apply = {
       description = "terraform apply for prod, production environment approval required"
-      subjects    = [for f in values(local.oidc_subject.infra) : "${f}:environment:production"]
+      subjects    = [for f in values(local.oidc_subject.infra) : "${f}:environment:prod"]
 
       policy_arns = {
         infra          = aws_iam_policy.infra_apply.arn
@@ -473,7 +473,7 @@ module "github_oidc" {
       # GoGo-Infra, matching dev: deployment orchestration lives here, and the
       # application repository hands over a ref rather than credentials.
       description = "Backend deploy: read prod runtime secrets and the deploy key"
-      subjects    = [for f in values(local.oidc_subject.infra) : "${f}:environment:production"]
+      subjects    = [for f in values(local.oidc_subject.infra) : "${f}:environment:prod"]
 
       policy_arns = {
         ssm_read = module.policy_deploy.policy_arn
@@ -482,7 +482,7 @@ module "github_oidc" {
 
     mobile-release = {
       description = "Mobile release: upload source maps to Sentry. Never the backend deploy policy."
-      subjects    = [for f in values(local.oidc_subject.mobile) : "${f}:environment:production"]
+      subjects    = [for f in values(local.oidc_subject.mobile) : "${f}:environment:prod"]
 
       policy_arns = {
         ssm_read = module.policy_mobile_release.policy_arn

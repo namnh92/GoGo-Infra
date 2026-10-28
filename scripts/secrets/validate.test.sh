@@ -7,7 +7,7 @@
 # These run against a fake `aws` on PATH, not against SSM. The point is the
 # decision logic — what counts as ready, what counts as skipped, what an
 # AccessDenied is allowed to produce — and that has to be testable without an
-# AWS session and without provisioning a staging environment to prove a failure.
+# AWS session and without provisioning a stag environment to prove a failure.
 #
 # The case that forced this file: an AccessDenied on one namespace used to be
 # indistinguishable from an empty namespace, so a readiness check could report
@@ -51,7 +51,7 @@ if [[ "$1" == "ssm" && "$2" == "get-parameters-by-path" ]]; then
   # Emit every declared path for this prefix except those listed absent.
   env="$(sed -E 's#^/gogo/(ci/)?([a-z]+).*#\2#' <<< "$prefix")"
   # An environment nobody has provisioned lists nothing — which is the real
-  # state of staging and prod, and the state a readiness check has to fail on.
+  # state of stag and prod, and the state a readiness check has to fail on.
   if grep -qxF "$env" "${WORK}/empty_envs" 2>/dev/null; then echo ""; exit 0; fi
   case "$prefix" in
     /gogo/ci/*)      ns=ci ;;
@@ -123,7 +123,7 @@ STUB
   chmod +x "${WORK}/aws"
   : > "${WORK}/deny"; : > "${WORK}/absent"; : > "${WORK}/type_override"
   : > "${WORK}/untagged"; : > "${WORK}/extra_tagged"; : > "${WORK}/tag_deny"
-  printf 'staging\nprod\n' > "${WORK}/empty_envs"
+  printf 'stag\nprod\n' > "${WORK}/empty_envs"
 }
 
 run() { # run <env> [args...] -> output, sets RC
@@ -202,20 +202,20 @@ else bad "access/aud should be required in prod only" "prod=$prod_only dev=$dev_
 
 # --- capability enablement is per-environment -------------------------------
 dev_caps="$(python3 "${ROOT}/scripts/lib/manifest.py" dev --capabilities)"
-staging_now="$(python3 "${ROOT}/scripts/lib/manifest.py" staging --capabilities)"
-staging_planned="$(python3 "${ROOT}/scripts/lib/manifest.py" staging --capabilities --include-planned)"
+staging_now="$(python3 "${ROOT}/scripts/lib/manifest.py" stag --capabilities)"
+staging_planned="$(python3 "${ROOT}/scripts/lib/manifest.py" stag --capabilities --include-planned)"
 if [[ -n "$dev_caps" && -z "$staging_now" && -n "$staging_planned" ]]; then
-  ok "a capability enabled in dev is planned, not demanded, in staging"
+  ok "a capability enabled in dev is planned, not demanded, in stag"
 else
-  bad "capability state must differ by environment" "dev/staging enabled+planned lists"
+  bad "capability state must differ by environment" "dev/stag enabled+planned lists"
 fi
 
-# --- staging readiness names its CI and public-storage credentials ----------
+# --- stag readiness names its CI and public-storage credentials ----------
 #
 # The requirement this file exists to hold: bringing up a new environment must
 # not need anyone to remember which `required:` lists to edit. Selecting the
 # capability is the whole action, and the check names the credentials.
-for env in staging prod; do
+for env in stag prod; do
   out="$(run "$env" --strict --include-planned)"; rc=$?
   if [[ $rc -ne 0 && "$out" == *"CAPABILITY PREREQUISITES MISSING"* ]]; then
     ok "${env} --include-planned fails before provisioning"
@@ -245,7 +245,7 @@ done
 # unreadable namespace: nothing was checked, so nothing can be claimed.
 probe="$(mktemp -d)"
 # Every list, whatever it holds: a capability planned for dev only
-# (ai_harness_live_decisions, GoGo-Infra#241) or for dev and staging
+# (ai_harness_live_decisions, GoGo-Infra#241) or for dev and stag
 # (firebase_distribution_*, GoGo-Infra#271) still names the environment, and the
 # probe is "names nothing". Matching each known combination broke the probe
 # every time a new one was added, so it now empties them all.

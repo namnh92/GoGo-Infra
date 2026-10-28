@@ -72,7 +72,7 @@ data "aws_iam_policy_document" "assume_role" {
 
     # Subject pinned to explicit repo + ref/environment pairs, e.g.
     #   repo:namnh92/GoGo-Infra:ref:refs/heads/master
-    #   repo:namnh92/GoGo-BE:environment:production
+    #   repo:namnh92/GoGo-BE:environment:prod
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"

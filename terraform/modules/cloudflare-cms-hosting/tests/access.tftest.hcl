@@ -38,10 +38,10 @@ run "an_empty_staff_list_still_admits_the_super_admin" {
   }
 }
 
-run "staging_requires_mfa" {
+run "stag_requires_mfa" {
   command = plan
   variables {
-    environment = "staging"
+    environment = "stag"
     hostname    = "cms-stg.gogo.id.vn"
     require_mfa = true
   }
@@ -51,10 +51,10 @@ run "staging_requires_mfa" {
   }
 }
 
-run "staging_without_mfa_is_refused" {
+run "stag_without_mfa_is_refused" {
   command = plan
   variables {
-    environment = "staging"
+    environment = "stag"
     hostname    = "cms-stg.gogo.id.vn"
     require_mfa = false
   }

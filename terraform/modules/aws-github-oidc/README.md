@@ -15,7 +15,7 @@ or environment:
 
 ```
 repo:namnh92/GoGo-Infra:ref:refs/heads/master
-repo:namnh92/GoGo-BE:environment:production
+repo:namnh92/GoGo-BE:environment:prod
 ```
 
 `repo:namnh92/*` or any subject containing `*` is rejected by a variable validation. A

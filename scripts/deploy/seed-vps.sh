@@ -38,9 +38,20 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/remote.sh"
 # does; the guard is in both places because neither is the only way to run it.
 APP_ENV="$ENVIRONMENT_NAME"
 
+# GoGo-Infra#286: the environment comes from the env file's name and nothing
+# upstream checks it, so a `.env.production` or `.env.staging` would slip past
+# the prod guard below under an alias. Only the three names exist.
+case "$APP_ENV" in
+  dev | stag | prod) ;;
+  *)
+    echo "refusing to seed '${APP_ENV}': the environment must be dev, stag or prod (REMOTE_ENV_FILE=.env.<env>)" >&2
+    exit 2
+    ;;
+esac
+
 # Production seeding is a different act from dev seeding: demo places in a
 # production catalogue are indistinguishable from real ones a week later.
-if [[ "$APP_ENV" == "prod" || "$APP_ENV" == "production" ]]; then
+if [[ "$APP_ENV" == "prod" ]]; then
   if [[ "${SEED_CONFIRM:-}" != "$APP_ENV" ]]; then
     cat >&2 <<MSG
 refusing to seed ${APP_ENV} without confirmation

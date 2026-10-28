@@ -20,7 +20,7 @@ Running GoGo-BE locally against the remote DEV services is supported for debuggi
 documented as exactly that: an option, not the architecture. The moment it becomes a
 prerequisite, DEV has quietly moved back onto laptops and stopped being reproducible.
 
-DEV, STAGING and PROD are all remote and share one runtime contract — same image, same migration
+DEV, STAG and PROD are all remote and share one runtime contract — same image, same migration
 model, same environment variables. Moving between them changes resource size, plan, credentials
 and domain. It does not change the architecture.
 

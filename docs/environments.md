@@ -2,17 +2,49 @@
 
 Three logical environments exist from the start, even though only two are enabled.
 
-| | `dev` | `staging` | `prod` |
+| | `dev` | `stag` | `prod` |
 | --- | --- | --- | --- |
 | Status | enabled | on demand | existing production |
 | Database | Neon free tier | Neon branch | managed PostgreSQL + PostGIS, backups + PITR |
 | Redis | Upstash free tier | Upstash | Redis with an SLA |
-| Assets | `gogo-dev-assets` | `gogo-staging-assets` | `gogo-prod-assets` |
-| SSM prefix | `/gogo/dev/backend/` | `/gogo/staging/backend/` | `/gogo/prod/backend/` |
-| Terraform state key | `dev/terraform.tfstate` | `staging/terraform.tfstate` | `prod/terraform.tfstate` |
+| Assets | `gogo-dev-assets` | `gogo-stag-assets` | `gogo-prod-assets` |
+| SSM prefix | `/gogo/dev/backend/` | `/gogo/stag/backend/` | `/gogo/prod/backend/` |
+| Terraform state key | `dev/terraform.tfstate` | `stag/terraform.tfstate` | `prod/terraform.tfstate` |
 | Deploy | `deploy-dev.yml`, over Cloudflare Access SSH | on demand | `deploy-production.yml`, approval required |
 | Host | the owner's MacBook on the local LAN, `192.168.68.68`, stack on Docker Desktop — see [DEV host](#dev-host-is-a-workstation) | — | own host, not yet provisioned |
 | Metrics | self-hosted Prometheus + Grafana on `192.168.68.168` | — | undecided (ADR-0006 §D4) |
+
+## Names
+
+One word per environment, on every layer (GoGo-Infra#286, [ADR-0015](adr/0015-environment-names.md)):
+
+| Layer | dev | stag | prod |
+| --- | --- | --- | --- |
+| Environment name (`require_env_arg`, `exec-with.sh`, `put.sh`, `validate.sh`) | `dev` | `stag` | `prod` |
+| SSM prefix | `/gogo/dev/…`, `/gogo/ci/dev/…` | `/gogo/stag/…`, `/gogo/ci/stag/…` | `/gogo/prod/…`, `/gogo/ci/prod/…` |
+| Terraform directory · tfvars · state key | `environments/dev` · `config/dev.tfvars` · `dev/…` | `environments/stag` · `config/stag.tfvars` · `stag/…` | `environments/prod` · `config/prod.tfvars` · `prod/…` |
+| GitHub Environment (OIDC subject `environment:<name>`) | `dev` | `stag` | `prod` |
+| GoGo-BE `APP_ENV`, Sentry `environment` | `dev` | `stag` | `prod` |
+| GoGo-CMS `VITE_APP_ENV` | `dev` | `stag` | `prod` |
+| Mobile flavour `EXPO_PUBLIC_ENV` · bundle id | `dev` · `max.gogo.dev` | `stag` · `max.gogo.stag` | `prod` · `max.gogo.prod` |
+| Provider config env (`ONESIGNAL_`/`ADJUST_`/`TENJIN_CONFIG_ENV`) | `dev` | `stag` | `prod` |
+| `bootstrap.env` suffix | `_DEV` | `_STAG` | `_PROD` |
+| DNS suffix | `-dev.gogo.id.vn` | `-stag.gogo.id.vn` | none |
+
+The GoGo-BE, GoGo-CMS and GoGo-MobileApp rows are the target of their own follow-up PRs (#286 PR-2…PR-4);
+until each merges, that repo still reads its old vocabulary (`staging`/`production` in BE and CMS, the
+`stag → staging` map in Mobile). This repository is already on the new names.
+
+Two words are accepted by some scripts but are **not environments**: `ci` → `/gogo/ci/<env>`
+(the pipeline tree; `put.sh`, `get.sh`, `delete.sh` take it) and `tools` → `/gogo/tools` (developer
+tooling keys, GoGo-Infra#294; `exec-with.sh`, `put.sh`, `validate.sh` take it). Both are
+namespace selectors behind `require_env_arg … allow-ci | allow-tools`; a validator that copies the
+three-word domain above and refuses them breaks `put.sh ci` (see `secrets.md`).
+
+`staging`, `production`, `develop` and `product` are not environment names: scripts, Terraform and
+`seed-vps.sh` refuse them. `develop` is the integration branch only. Not covered (SDK or build
+vocabularies, not GoGo environments): `NODE_ENV` (`development | test | production`), Adjust
+`sandbox | production`, APNs `development | production`.
 
 ## Naming
 
@@ -393,7 +425,7 @@ missing.
 | `openrouter/assistant-api-key` | `OPENROUTER_ASSISTANT_API_KEY` | key `gogo_ai_anthropic_<env>` | assistant unavailable |
 | `assistant/model` | `ASSISTANT_MODEL` | `anthropic/claude-sonnet-5.5` | assistant unavailable |
 | `assistant/fallback-model` | `ASSISTANT_FALLBACK_MODEL` | `anthropic/claude-haiku-5.5` | no fallback |
-| `budget/assistant-monthly-max-usd` | `ASSISTANT_MONTHLY_MAX_USD` | dev 20 · staging 20 · prod 150 | **refuse** (default-deny) |
+| `budget/assistant-monthly-max-usd` | `ASSISTANT_MONTHLY_MAX_USD` | dev 20 · stag 20 · prod 150 | **refuse** (default-deny) |
 | `budget/assistant-user-daily-max-messages` | `ASSISTANT_USER_DAILY_MAX_MESSAGES` | 30 | **refuse**, never unlimited |
 | `flags/assistant` | `FLAG_ASSISTANT` | dev `true` · prod `false` until launch | seed only, see below |
 
@@ -463,7 +495,7 @@ One bucket, one key per environment:
 ```
 gogo-terraform-state/
 ├── dev/terraform.tfstate
-├── staging/terraform.tfstate
+├── stag/terraform.tfstate
 └── prod/terraform.tfstate
 ```
 

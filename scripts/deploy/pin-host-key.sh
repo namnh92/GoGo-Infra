@@ -47,8 +47,8 @@ if [[ -z "$ENVIRONMENT" || -z "$HOST" ]]; then
 fi
 
 case "$ENVIRONMENT" in
-  dev|staging|prod) ;;
-  *) echo "environment must be dev, staging or prod" >&2; exit 2 ;;
+  dev|stag|prod) ;;
+  *) echo "environment must be dev, stag or prod" >&2; exit 2 ;;
 esac
 
 OUT="${REPO_ROOT}/config/known_hosts.${ENVIRONMENT}"

@@ -68,7 +68,7 @@ variable "require_mfa" {
 
   validation {
     condition     = var.require_mfa || var.environment == "dev"
-    error_message = "require_mfa must be true outside dev (GoGo-BE#687 D-8: staging and production enforce MFA at Access)."
+    error_message = "require_mfa must be true outside dev (GoGo-BE#687 D-8: stag and production enforce MFA at Access)."
   }
 }
 

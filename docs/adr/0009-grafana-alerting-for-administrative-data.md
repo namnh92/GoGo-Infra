@@ -207,7 +207,7 @@ Telegram from `.168` and no inbound surface whatsoever.
 ### F8 — DEV only
 
 `dev` is the only environment in scope. The rules pin `env="dev"`, and the
-provisioning test fails on any reference to `staging` or `prod`. Another
+provisioning test fails on any reference to `stag` or `prod` (names per ADR-0015). Another
 environment gets its own decision, its own baselines and its own file.
 
 ## Consequences

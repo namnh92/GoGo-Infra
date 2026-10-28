@@ -24,8 +24,8 @@ AS_JSON="no"
 for arg in "$@"; do
   case "$arg" in
     --json) AS_JSON="yes" ;;
-    dev | staging | prod) ENVIRONMENT="$arg" ;;
-    *) die "usage: check-quotas.sh [dev|staging|prod] [--json]" ;;
+    dev | stag | prod) ENVIRONMENT="$arg" ;;
+    *) die "usage: check-quotas.sh [dev|stag|prod] [--json]" ;;
   esac
 done
 

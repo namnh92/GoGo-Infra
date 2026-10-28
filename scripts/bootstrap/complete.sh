@@ -25,8 +25,8 @@ STRICT="no"
 for arg in "$@"; do
   case "$arg" in
     --strict) STRICT="yes" ;;
-    dev | staging | prod) ENVIRONMENT="$arg" ;;
-    *) echo "usage: complete.sh [dev|staging|prod] [--strict]" >&2; exit 2 ;;
+    dev | stag | prod) ENVIRONMENT="$arg" ;;
+    *) echo "usage: complete.sh [dev|stag|prod] [--strict]" >&2; exit 2 ;;
   esac
 done
 

@@ -75,7 +75,7 @@ No organisation-membership policy — a parallel `include` would admit people th
 list does not name. `require_mfa` adds Cloudflare MFA as a requirement and is
 mandatory outside dev. The organisation has only the Cloudflare account-member
 method configured, not one-time PIN, and whether that satisfies Cloudflare's
-`mfa` rule is unverified — staging and production must confirm it or add an
+`mfa` rule is unverified — stag and production must confirm it or add an
 MFA-capable identity provider first (`docs/secrets.md`). `tests/` pins all of
 this offline (`terraform test`).
 

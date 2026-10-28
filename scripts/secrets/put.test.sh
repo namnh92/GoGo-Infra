@@ -123,6 +123,17 @@ refuses "an infra_readable row without the flag is refused" "pass --infra-readab
   dev cms/access-staff-emails
 refuses "the flag with an explicit SecureString is refused" "refuses SecureString" \
   dev cms/access-staff-emails SecureString --infra-readable
+# GoGo-Infra#286, Sol F-06: `ci` is a namespace, not an environment, and the
+# manifest reader must keep answering for it — otherwise put.sh/get.sh/delete.sh
+# cannot touch any pipeline credential.
+run ci terraform/read/cloudflare-token
+status=$?
+if [[ $status -eq 0 ]] && grep -q "ssm put-parameter" "$CALLS" && grep -q "/gogo/ci/terraform/read/cloudflare-token" "$REQUESTS" "${SANDBOX}/out"; then
+  ok "a ci-namespace row is still written through the manifest lookup"
+else
+  bad "a ci-namespace row is still written through the manifest lookup" "exit ${status}: $(cat "${SANDBOX}/out") | $(grep -c put-parameter "$CALLS") put calls"
+fi
+
 refuses "the flag in the ci namespace is refused" "not the ci namespace" \
   ci terraform/read/cloudflare-token --infra-readable
 refuses "an unknown option is refused" "unknown option" \

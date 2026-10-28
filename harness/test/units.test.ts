@@ -30,6 +30,9 @@ describe('policy engine', () => {
       ['terraform apply tfplan', 'infra_apply'],
       ['terraform plan', 'unknown'],
       ['gh workflow run deploy-production.yml', 'deploy_production'],
+      // GoGo-Infra#286: the environment is `stag`; the retired `staging` still gates.
+      ['./scripts/deploy/deploy-vps.sh stag', 'deploy_staging'],
+      ['./scripts/deploy/deploy-vps.sh staging', 'deploy_staging'],
       ['psql -c "DROP TABLE places"', 'db_destructive'],
       ['psql -c "DELETE FROM places"', 'db_destructive'],
       ['./scripts/secrets/put.sh dev openrouter/jev-api-key', 'secret_rotate'],

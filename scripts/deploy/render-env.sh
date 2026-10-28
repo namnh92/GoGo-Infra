@@ -14,6 +14,13 @@ set -euo pipefail
 
 ENVIRONMENT="${1:?usage: render-env.sh <env> <output-file>}"
 OUT_FILE="${2:?usage: render-env.sh <env> <output-file>}"
+# GoGo-Infra#286 (ADR-0015): only the three names exist. A retired `staging` or
+# `production` would read an empty SSM tree, find every row missing, and render
+# the retired name into APP_ENV.
+case "$ENVIRONMENT" in
+  dev | stag | prod) ;;
+  *) echo "error: environment must be one of: dev, stag, prod (got '${ENVIRONMENT}')" >&2; exit 2 ;;
+esac
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MANIFEST_READER="${REPO_ROOT}/scripts/lib/manifest.py"

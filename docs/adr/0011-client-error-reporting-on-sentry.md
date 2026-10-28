@@ -55,7 +55,7 @@ for now — a stated transition, not an exception: its `route` tag (GoGo-CMS#241
 when it next re-vendors — GoGo-CMS#243 after this PR merges — implementing D-12 for `route` in that same change. `v1`
 and `v2` differ only by C-24 and the D-9 placeholder rule, which no `v1` case exercises.
 
-**D-3 Init contract.** DSN from the build environment; `''` or the literal `off` → the SDK is not initialised and
+**D-3 Init contract.** _(2026-10-28: the environment value set is `dev | stag | prod` — [ADR-0015](0015-environment-names.md) supersedes the `staging` below.)_ DSN from the build environment; `''` or the literal `off` → the SDK is not initialised and
 every helper is a no-op. `environment` ∈ `dev | staging | prod` (BE's vocabulary; Mobile flavour `stag` → `staging`,
 CMS `production` → `prod`), never from `__DEV__`, `NODE_ENV` or the bundler's dev flag. `release`: Mobile = bundle id,
 version and build; CMS = the deployed git SHA. A staging or production mobile build without a DSN or `off` is refused.

@@ -11,12 +11,12 @@ class TenjinEnvTest(unittest.TestCase):
     def test_never_reuses_bare_dev_keys_in_other_environments(self):
         values = {"UNSUFFIXED_VALUES_BELONG_TO": "dev", "TENJIN_IOS_SDK_KEY": "ios-dev", "TENJIN_ANDROID_SDK_KEY": "android-dev"}
         self.assertEqual(module.scoped_values(values, "dev")["TENJIN_CONFIG_ENV"], "dev")
-        for environment in ("staging", "prod"):
+        for environment in ("stag", "prod"):
             with self.assertRaises(ValueError):
                 module.scoped_values(values, environment)
 
     def test_same_keys_and_resolution_for_each_environment(self):
-        for environment in ("dev", "staging", "prod"):
+        for environment in ("dev", "stag", "prod"):
             values = {f"{key}_{environment.upper()}": "platform-key" for key in module.KEYS}
             resolved = module.scoped_values(values, environment)
             self.assertEqual(set(resolved), {*module.KEYS, "TENJIN_CONFIG_ENV"})

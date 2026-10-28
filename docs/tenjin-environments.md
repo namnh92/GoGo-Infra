@@ -11,11 +11,11 @@ python3 scripts/secrets/tenjin-mobile-env.py dev \
   --bootstrap config/bootstrap.env --out <mobile-checkout>/.env
 ```
 
-Use TENJIN_IOS_SDK_KEY_DEV / _STAGING / _PROD and the matching
+Use TENJIN_IOS_SDK_KEY_DEV / _STAG / _PROD and the matching
 TENJIN_ANDROID_SDK_KEY suffix for each environment. Existing bare values are
 accepted only for UNSUFFIXED_VALUES_BELONG_TO, never inherited by another env.
 An explicit empty suffixed value refuses the build rather than taking a bare
-value. `staging` maps to mobile flavor `stag`.
+value. The environment name is the mobile flavour (GoGo-Infra#286).
 
 The SDK client receives only its current platform's key. No key values appear
 in command output. Generated file is mode 0600 and replaced atomically.

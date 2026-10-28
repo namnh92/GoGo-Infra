@@ -77,7 +77,7 @@ dns_records = {
   vps = {
     name    = "vps-dev.gogo.id.vn"
     type    = "A"
-    content = "14.226.6.188"
+    content = "14.232.225.59" # owner 2026-10-28: the DEV public IP changed; Cloudflare already serves this
     ttl     = 300
     proxied = false
   }

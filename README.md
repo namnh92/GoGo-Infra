@@ -25,7 +25,7 @@ plaintext into state, which turns the state bucket into a credential store.
 ```
 bootstrap/terraform-state/   One-time creation of the private R2 state bucket
 terraform/modules/           Reusable modules (OIDC, SSM IAM, R2, DNS)
-terraform/environments/      dev | staging | prod, one state key each
+terraform/environments/      dev | stag | prod, one state key each
 scripts/secrets/             put / pull / list / delete / validate against SSM
 scripts/bootstrap/           Neon, Upstash, R2 lifecycle, service smoke checks
 scripts/deploy/              render-env.sh, used by the deploy workflow
@@ -53,7 +53,7 @@ a correct credential; that file lists each one as symptom, cause and fix.
 | Environment | State | Database | Redis | Assets | SSM prefix |
 | --- | --- | --- | --- | --- | --- |
 | `dev` | enabled | Neon (free tier) | Upstash | `gogo-dev-assets` | `/gogo/dev/backend/` |
-| `staging` | on demand | Neon branch | Upstash | `gogo-staging-assets` | `/gogo/staging/backend/` |
+| `stag` | on demand | Neon branch | Upstash | `gogo-stag-assets` | `/gogo/stag/backend/` |
 | `prod` | enabled | managed PostgreSQL + PITR | Redis with an SLA | `gogo-prod-assets` | `/gogo/prod/backend/` |
 
 Dev and prod never share a database, Redis, bucket, auth secret, provider credential or API key.

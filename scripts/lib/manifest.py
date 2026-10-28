@@ -32,7 +32,7 @@ Usage:
                                          caller can read `scope`, `provider` or
                                          `infra_readable` without a YAML parser
 
-`<env>` is dev, staging or prod — or `tools` (GoGo-Infra#294), the
+`<env>` is dev, stag or prod — or `tools` (GoGo-Infra#294), the
 pseudo-environment of the developer-tooling keys under /gogo/tools/. The
 `tools` namespace belongs to `tools` alone: a real environment is never handed
 a tools row, whatever filter it asks for, and `tools` is handed nothing else.
@@ -162,6 +162,15 @@ def main():
         return 2
 
     env = sys.argv[1]
+    # GoGo-Infra#286 (ADR-0015). Any other word would match no row and answer
+    # "nothing required" with exit 0, which reads like a real answer. `ci` is
+    # not an environment but the env-less pipeline tree (/gogo/ci, see
+    # ssm_prefix and `require_env_arg … allow-ci`): put.sh/get.sh/delete.sh pass
+    # it through to resolve a row's namespace, and must keep working (Sol F-06).
+    # `tools` (GoGo-Infra#294) is the other env-less tree, /gogo/tools/.
+    if env not in ("dev", "stag", "prod", "ci", "tools"):
+        sys.stderr.write(f"error: environment must be one of: dev, stag, prod (got '{env}')\n")
+        return 2
     args = sys.argv[2:]
     required_only = "--required" in args
 

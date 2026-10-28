@@ -16,12 +16,20 @@ spec.loader.exec_module(module)
 
 class MobileEnvTest(unittest.TestCase):
     def test_same_contract_all_environments_and_no_server_secrets(self):
-        for environment, flavor in module.FLAVORS.items():
+        # GoGo-Infra#286 (ADR-0015): one word per environment, no mapping table.
+        self.assertEqual(module.FLAVORS, ("dev", "stag", "prod"))
+        for environment in module.FLAVORS:
             values = module.mobile_values(environment, "00000000-0000-4000-8000-000000000001", "https://api.example.com", "https://go.example.com", "production")
-            self.assertEqual(values["EXPO_PUBLIC_ENV"], flavor)
+            self.assertEqual(values["EXPO_PUBLIC_ENV"], environment)
             self.assertEqual(values["ONESIGNAL_CONFIG_ENV"], environment)
+            self.assertEqual(values["ADJUST_CONFIG_ENV"], environment)
             self.assertEqual(values["ONESIGNAL_APNS_MODE"], "production")
             self.assertFalse(any("KEY" in key or "SECRET" in key for key in values))
+
+    def test_retired_environment_names_are_refused(self):
+        for retired in ("staging", "production", "develop"):
+            with self.assertRaises(ValueError, msg=retired):
+                module.mobile_values(retired, "00000000-0000-4000-8000-000000000001", "https://api.example.com", "https://go.example.com", "production")
 
     def test_rejects_credentials_in_client_urls(self):
         for url in ("http://example.com", "https://user:secret@example.com", "https://example.com?token=secret"):
@@ -77,7 +85,7 @@ class SentryDsnTest(unittest.TestCase):
 
     def test_missing_parameter_is_allowed_only_on_dev(self):
         self.assertEqual(module.sentry_dsn("dev", None), "")
-        for environment in ("staging", "prod"):
+        for environment in ("stag", "prod"):
             with self.subTest(environment=environment), self.assertRaises(ValueError):
                 module.sentry_dsn(environment, None)
 
@@ -120,7 +128,7 @@ class AdjustTokenTest(unittest.TestCase):
 
     def test_only_dev_may_build_without_one(self):
         self.assertEqual(module.adjust_token("dev", "android", None), "")
-        for environment in ("staging", "prod"):
+        for environment in ("stag", "prod"):
             with self.subTest(environment=environment), self.assertRaises(ValueError):
                 module.adjust_token(environment, "android", None)
 
@@ -158,7 +166,7 @@ class MainTest(unittest.TestCase):
         self.assertIn("crash reporting is off", stderr)
 
     def test_staging_and_prod_without_a_dsn_write_nothing(self):
-        for environment in ("staging", "prod"):
+        for environment in ("stag", "prod"):
             with self.subTest(environment=environment):
                 code, text, _ = self.run_main(environment, self.app_id(environment))
                 self.assertEqual(code, 1)
@@ -204,7 +212,7 @@ class MainTest(unittest.TestCase):
         self.assertIn("Adjust is off on ios", stderr)
 
     def test_staging_and_prod_without_a_token_write_nothing(self):
-        for environment in ("staging", "prod"):
+        for environment in ("stag", "prod"):
             with self.subTest(environment=environment):
                 parameters = {**self.app_id(environment), f"/gogo/{environment}/mobile/sentry/dsn": DSN, **self.adjust(environment, android=None)}
                 code, text, _ = self.run_main(environment, parameters)
@@ -212,11 +220,11 @@ class MainTest(unittest.TestCase):
                 self.assertIsNone(text)
 
     def test_staging_with_tokens_or_off_builds(self):
-        parameters = {**self.app_id("staging"), "/gogo/staging/mobile/sentry/dsn": DSN, **self.adjust("staging", android="off")}
-        code, text, _ = self.run_main("staging", parameters)
+        parameters = {**self.app_id("stag"), "/gogo/stag/mobile/sentry/dsn": DSN, **self.adjust("stag", android="off")}
+        code, text, _ = self.run_main("stag", parameters)
         self.assertEqual(code, 0)
         self.assertIn("ADJUST_ANDROID_APP_TOKEN=off\n", text)
-        self.assertIn("ADJUST_CONFIG_ENV=staging\n", text)
+        self.assertIn("ADJUST_CONFIG_ENV=stag\n", text)
 
     def test_a_denied_token_read_is_not_treated_as_missing(self):
         code, text, _ = self.run_main("dev", {**self.app_id("dev"), **self.adjust("dev", ios="DENIED")})

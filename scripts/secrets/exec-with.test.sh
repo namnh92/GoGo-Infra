@@ -181,12 +181,28 @@ else
   ok "no fetch inherits a credential already fetched"
 fi
 
+# 3b-env. GoGo-Infra#286 (ADR-0015): the retired names are refused before any
+# SSM call. `staging` would otherwise read a tree nothing writes any more, and
+# `production` a tree that never existed — both look like "missing value"
+# rather than "wrong environment".
+for retired in staging production develop; do
+  : >"$CALLS"
+  run "$retired" signing/android-key-alias -- fblane
+  status=$?
+  if [[ $status -ne 0 ]] && grep -q "environment must be one of: dev, stag, prod" "${SANDBOX}/out" \
+    && ! grep -q 'get-parameter' "$CALLS"; then
+    ok "'${retired}' is refused as an environment before any SSM call"
+  else
+    bad "'${retired}' is refused as an environment before any SSM call" "status=${status}: $(cat "${SANDBOX}/out") | $(cat "$CALLS")"
+  fi
+done
+
 # 3c. The Firebase sets (GoGo-Infra#271): the same signing/ rows plus the
 # firebase/ rows, read from each environment's own tree, with no terminal and no
-# GOGO_ASSUME_YES — dev and staging carry no typed confirmation by design.
+# GOGO_ASSUME_YES — dev and stag carry no typed confirmation by design.
 FB_ANDROID=(signing/android-keystore signing/android-keystore-password signing/android-key-alias
   signing/android-key-password firebase/app-distribution-service-account firebase/app-id-android)
-for env in dev staging; do
+for env in dev stag; do
   : >"$CALLS"
   run "$env" "${FB_ANDROID[@]}" -- fblane
   status=$?

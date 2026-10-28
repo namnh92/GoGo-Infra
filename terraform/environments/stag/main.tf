@@ -419,7 +419,7 @@ module "github_oidc" {
 
   roles = {
     plan = {
-      description = "terraform plan for staging from pull requests"
+      description = "terraform plan for stag from pull requests"
       subjects    = [for f in values(local.oidc_subject.infra) : "${f}:pull_request"]
 
       policy_arns = {
@@ -430,8 +430,8 @@ module "github_oidc" {
     }
 
     apply = {
-      description = "terraform apply for staging, through the staging GitHub Environment"
-      subjects    = [for f in values(local.oidc_subject.infra) : "${f}:environment:staging"]
+      description = "terraform apply for stag, through the stag GitHub Environment"
+      subjects    = [for f in values(local.oidc_subject.infra) : "${f}:environment:stag"]
 
       policy_arns = {
         infra          = aws_iam_policy.infra_apply.arn

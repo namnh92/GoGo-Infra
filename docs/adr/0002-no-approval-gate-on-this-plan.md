@@ -26,7 +26,7 @@ Upgrade to GitHub Pro or make this repository public to enable this feature.    
 
 Record the gap rather than paper over it, and take the mitigations that are actually available.
 
-**Environments are still created** — `dev`, `staging`, `production`. They carry no protection
+**Environments are still created** — `dev`, `staging`, `production` _(since 2026-10-28: `dev`, `stag`, `prod` — [ADR-0015](0015-environment-names.md))_. They carry no protection
 rules, but they still do the job the trust policies depend on: a job that references an
 environment causes GitHub to issue the subject `repo:<owner>/<repo>:environment:<name>`, which is
 what pins each IAM role. That part of the model is unaffected.

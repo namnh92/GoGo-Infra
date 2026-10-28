@@ -57,7 +57,7 @@ If conditional writes ever stop being honoured, the fallback is:
 
 - CI is the only place that applies, serialized by
   `concurrency: { group: terraform-<env>, cancel-in-progress: false }`, and
-- local applies are forbidden for `staging` and `prod`.
+- local applies are forbidden for `stag` and `prod`.
 
 To recover from a stuck lock, delete the `.tflock` object for the affected key, or run
 `terraform force-unlock <lock-id>` — and record why in the PR.

@@ -65,7 +65,7 @@ fi
 # keystore to Play (an *upload* key — Play App Signing re-signs releases with
 # the key Google holds, so neither is the signature an installed copy verifies,
 # and both are replaceable). A leak is still someone shipping builds as GoGo.
-# At dev and staging (#271) the keystore *is* the signature a Firebase build
+# At dev and stag (#271) the keystore *is* the signature a Firebase build
 # installs with, and the Firebase service account distributes to testers.
 # They are `ci` rows for the same reason as the Sentry upload token, and this
 # pins that the reason holds — nothing renders them anywhere, in any environment.
@@ -73,7 +73,7 @@ fi
 # #271 split the eight #231 rows: seven `signing/` (one set per environment)
 # and one `store/` (publishing, prod only), plus three `firebase/` rows.
 
-for env in dev staging prod; do
+for env in dev stag prod; do
   ci_pipeline="$(python3 "$READER" "$env" --namespace ci --consumer pipeline | cut -f1)"
   signing_rows="$(grep -E '^signing/' <<< "$ci_pipeline")"
   store_rows="$(grep -E '^store/' <<< "$ci_pipeline")"
@@ -107,7 +107,7 @@ done
 # Readiness has to be able to say they are missing, which is what `planned`
 # buys: a capability nobody declared cannot be reported as not ready.
 # store_release_* serve prod only; firebase_distribution_* serve dev and
-# staging only (owner 2026-10-28: dev/stag → Firebase, prod → stores).
+# stag only (owner 2026-10-28: dev/stag → Firebase, prod → stores).
 caps_in() {
   python3 "$READER" "$1" --capabilities --include-planned | awk -F'\t' -v p="$2" 'index($1, p) == 1 { print $1 "\t" $3 }'
 }
@@ -119,7 +119,7 @@ else
   bad "store release capabilities are not planned for prod" "$store_caps"
 fi
 
-for env in dev staging; do
+for env in dev stag; do
   store_caps_env="$(caps_in "$env" store_release_)"
   if [[ -z "$store_caps_env" ]]; then
     ok "neither store release capability claims ${env} — stores are prod only"
@@ -156,7 +156,7 @@ expect_requires() {
     bad "${env}: ${cap} requires a different set than its lane" "got: $(tr '\n' ' ' <<< "$got")"
   fi
 }
-for env in dev staging; do
+for env in dev stag; do
   expect_requires "$env" firebase_distribution_ios \
     "ci:signing/apple-asc-key ci:signing/apple-asc-key-id ci:signing/apple-asc-issuer-id ci:firebase/app-distribution-service-account ci:firebase/app-id-ios"
   expect_requires "$env" firebase_distribution_android \
@@ -172,7 +172,7 @@ expect_requires prod store_release_android \
 # signing/ that missed one list — would leave a capability waiting forever on a
 # parameter nobody can create, and readiness would report it missing as if the
 # owner had forgotten a value.
-for env in dev staging prod; do
+for env in dev stag prod; do
   declared="$(python3 "$READER" "$env" --namespace all --consumer all | awk -F'\t' '{ print $5 ":" $1 }' | sort -u)"
   dangling="$(python3 "$READER" "$env" --capability-requires --include-planned \
     | awk -F'\t' '{ print $2 ":" $3 "\t(" $1 ")" }' | sort -u \
@@ -499,7 +499,7 @@ done
 # else. It has no env_var, so a renderer that reached it would write `-=<value>`
 # into an env file. These pin that no renderer's filter can select it, and that
 # the tag IAM keys on can only ever sit on a String.
-for env in dev staging prod; do
+for env in dev stag prod; do
   tf_rows="$(python3 "$READER" "$env" --namespace all --consumer terraform | cut -f1)"
   if grep -qxF "cms/access-staff-emails" <<< "$tf_rows"; then
     ok "${env}: the terraform consumer declares cms/access-staff-emails"
@@ -558,7 +558,7 @@ fi
 # Developer-tooling keys (the agent GitHub App, the harness's provider keys) are
 # not part of any GoGo environment (owner, 2026-10-28). They live under
 # /gogo/tools/ and are read through the pseudo-environment `tools` only. A tool
-# row reaching dev, staging or prod would be validated, rendered or cloned as if
+# row reaching dev, stag or prod would be validated, rendered or cloned as if
 # the environment owned it — the mistake #293's parity work would then copy.
 TOOL_PATHS="ai-harness/anthropic-api-key
 ai-harness/openrouter-api-key
@@ -584,7 +584,7 @@ else
   bad "tools: the default namespace for tools is not tools" "$(python3 "$READER" tools --consumer all | cut -f1 | tr '\n' ' ')"
 fi
 
-for env in dev staging prod; do
+for env in dev stag prod; do
   env_rows="$(python3 "$READER" "$env" --namespace all --consumer all)"
   leaked="$(awk -F'\t' '$5 == "tools" { print $1 }' <<< "$env_rows")"
   while read -r tool_path; do
@@ -611,7 +611,7 @@ done
 
 # Sol F-01 (#294): the guard against a capability requiring a tools row from a
 # real environment is the dangling-requirement check above, which is generic —
-# a tools row is never declared for dev, staging or prod. Proven on a copy of the
+# a tools row is never declared for dev, stag or prod. Proven on a copy of the
 # reader whose manifest puts the harness capability back into dev's profile.
 MUT="$(mktemp -d)"
 mkdir -p "${MUT}/scripts/lib" "${MUT}/config"
@@ -642,6 +642,61 @@ if [[ "$harness_requires" == "tools:ai-harness/openrouter-api-key|" ]]; then
   ok "ai_harness_live_decisions requires the tools row and names no environment"
 else
   bad "ai_harness_live_decisions is not the env-less tools capability" "requires|envs = ${harness_requires:-<absent>}"
+fi
+
+# --- one environment vocabulary (GoGo-Infra#286, ADR-0015) ------------------
+#
+# Every environment list in the manifest — a row's `required`, a capability's
+# `enabled` and `planned` — names only dev, stag or prod. `staging` or
+# `production` here would be a row no environment ever demands: validate.sh
+# would read it as optional everywhere and pass while the value is missing.
+stray_envs="$(python3 - "${DIR}/../../config/secrets.manifest.yml" <<'PYEOF'
+import sys, yaml
+m = yaml.safe_load(open(sys.argv[1]))
+allowed = {"dev", "stag", "prod"}
+out = []
+for r in m.get("parameters") or []:
+    for e in r.get("required") or []:
+        if e not in allowed: out.append(f"{r.get('namespace', 'backend')}:{r['path']} required {e}")
+caps = m.get("capabilities") or {}
+items = caps.items() if isinstance(caps, dict) else [(c.get("name"), c) for c in caps]
+for name, c in items:
+    for key in ("enabled", "planned"):
+        for e in c.get(key) or []:
+            if e not in allowed: out.append(f"capability {name} {key} {e}")
+print("\n".join(out))
+PYEOF
+)"
+if [[ -z "$stray_envs" ]]; then
+  ok "every environment list names only dev, stag or prod"
+else
+  bad "the manifest names an environment outside dev|stag|prod" "$(echo "$stray_envs" | head -5 | tr '\n' ';')"
+fi
+
+# Sol F-03 / F-04 (GoGo-Infra#286): the readers refuse a retired name instead of
+# answering "nothing required" with exit 0.
+for retired in staging production; do
+  if python3 "$READER" "$retired" --required >/dev/null 2>"${TMPDIR:-/tmp}/mt.err"; then
+    bad "manifest.py accepts the retired environment '${retired}'" "exit 0"
+  elif grep -q "must be one of: dev, stag, prod" "${TMPDIR:-/tmp}/mt.err"; then
+    ok "manifest.py refuses the retired environment '${retired}'"
+  else
+    bad "manifest.py refuses '${retired}' for the wrong reason" "$(cat "${TMPDIR:-/tmp}/mt.err")"
+  fi
+  if "${DIR}/../ops/offboard-checklist.sh" "$retired" >/dev/null 2>&1; then
+    bad "offboard-checklist.sh accepts the retired environment '${retired}'" "exit 0"
+  else
+    ok "offboard-checklist.sh refuses the retired environment '${retired}'"
+  fi
+done
+rm -f "${TMPDIR:-/tmp}/mt.err"
+# Sol F-06: `ci` is the env-less pipeline tree, not an environment; the reader
+# answers for it (put.sh/get.sh/delete.sh resolve ci rows through it).
+ci_rows="$(python3 "$READER" ci --namespace all --consumer all 2>/dev/null | grep -c . || true)"
+if [[ "$ci_rows" -gt 0 ]]; then
+  ok "manifest.py still answers for the ci namespace (${ci_rows} rows)"
+else
+  bad "manifest.py no longer answers for the ci namespace" "exit $(python3 "$READER" ci --namespace all --consumer all >/dev/null 2>&1; echo $?)"
 fi
 
 echo

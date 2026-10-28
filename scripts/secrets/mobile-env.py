@@ -13,7 +13,10 @@ import uuid
 from urllib.parse import urlparse
 
 
-FLAVORS = {"dev": "dev", "staging": "stag", "prod": "prod"}
+# GoGo-Infra#286: the environment name *is* the mobile flavour (dev | stag | prod).
+# No mapping table: max.gogo.<env> is the bundle id, and every provider config
+# env (OneSignal, Adjust, Tenjin, Sentry) carries the same word.
+FLAVORS = ("dev", "stag", "prod")
 
 
 def app_id(value):
@@ -35,7 +38,7 @@ def sentry_dsn(environment, value):
     """The value written as EXPO_PUBLIC_SENTRY_DSN, or ValueError.
 
     `value` is None when the SSM parameter does not exist. Only dev may build
-    without one: a staging or production binary that silently reports nothing
+    without one: a stag or production binary that silently reports nothing
     is found after it ships, and app.config.ts refuses the same build.
     """
     if value is None:
@@ -54,7 +57,7 @@ def sentry_dsn(environment, value):
 # 8-32 letters and digits — the DEV tokens are 12 — so a six-character event
 # token pasted in by mistake is refused.
 # Same rule as the DSN: dev may build without one (Adjust off, warned);
-# staging/prod need a token or the literal `off`, so a store build cannot drop
+# stag/prod need a token or the literal `off`, so a store build cannot drop
 # its second MMP by omission.
 ADJUST_TOKEN = re.compile(r"[A-Za-z0-9]{8,32}")
 ADJUST_OFF = "off"
@@ -84,7 +87,7 @@ def mobile_values(environment, identifier, api_url, web_url, apns_mode, dsn="", 
     if environment not in FLAVORS or apns_mode not in ("development", "production"):
         raise ValueError("Invalid environment or APNs signing mode")
     return {
-        "EXPO_PUBLIC_ENV": FLAVORS[environment],
+        "EXPO_PUBLIC_ENV": environment,
         "EXPO_PUBLIC_API_URL": https_url(api_url),
         "EXPO_PUBLIC_WEB_BASE_URL": https_url(web_url),
         "ONESIGNAL_APP_ID": app_id(identifier),

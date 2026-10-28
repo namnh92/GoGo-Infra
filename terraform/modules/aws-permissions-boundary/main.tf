@@ -90,7 +90,7 @@ data "aws_iam_policy_document" "boundary" {
   # UpdateAccountName, UpdateAccountPasswordPolicy, UpdateCloudFrontPublicKey,
   # UploadCloudFrontPublicKey. The read ones Terraform or CI could plausibly
   # want: ListOpenIDConnectProviders (the aws_iam_openid_connect_provider data
-  # source looks up by `url` through it — staging and prod look up by `arn`
+  # source looks up by `url` through it — stag and prod look up by `arn`
   # instead, which is GetOpenIDConnectProvider on the reachable provider),
   # ListRoles / ListPolicies (the aws_iam_roles / aws_iam_policies data
   # sources, not used), GetAccountSummary and SimulateCustomPolicy (not used).

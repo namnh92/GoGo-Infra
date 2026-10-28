@@ -168,7 +168,7 @@ for r in rs:
     expr = q["model"]["expr"]
     want(q["model"].get("instant") is True, f"{uid}: query must be instant")
     want('env="dev"' in expr, f"{uid}: query does not pin env=\"dev\"")
-    want("staging" not in expr and "prod" not in expr, f"{uid}: query names a non-DEV environment")
+    want("stag" not in expr and "prod" not in expr, f"{uid}: query names a non-DEV environment")
 
     for metric in metric_re.findall(expr):
         want(metric in KNOWN,
@@ -330,7 +330,7 @@ for r in rs:
     expr = q["model"]["expr"]
     want(q["model"].get("instant") is True, f"{uid}: query must be instant")
     want(expr.count('env="dev"') == 2, f"{uid}: both gauges must pin env=\"dev\"")
-    want("staging" not in expr and "prod" not in expr, f"{uid}: query names a non-DEV environment")
+    want("stag" not in expr and "prod" not in expr, f"{uid}: query names a non-DEV environment")
     names = set(metric_re.findall(expr))
     # Spend is compared with the budget gauge the BE exports, never with a
     # dollar figure written here: the cap is an SSM value per environment.

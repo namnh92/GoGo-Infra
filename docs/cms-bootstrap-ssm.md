@@ -51,7 +51,7 @@ created and managed by that account, not by this document.
 
 ## Parameters
 
-| SSM path (`<env>` = dev, staging, prod) | Env var | Type | Required |
+| SSM path (`<env>` = dev, stag, prod) | Env var | Type | Required |
 | --- | --- | --- | --- |
 | `/gogo/<env>/backend/cms/seed-admin-email` | `SEED_ADMIN_EMAIL` | SecureString | optional |
 | `/gogo/<env>/backend/cms/seed-admin-password` | `SEED_ADMIN_PASSWORD` | SecureString | optional |
@@ -183,7 +183,7 @@ Only for the bootstrap command. Nothing else needs them.
 
 ## Provisioning the account
 
-### dev and staging
+### dev and stag
 
 ```sh
 cd GoGo-Infra && ./scripts/secrets/pull.sh <env> --seed --out ../GoGo-BE/.env.seed
@@ -205,7 +205,7 @@ Production is deliberately not a copy of the above, and **has not been run**.
 Three things stand between a stored parameter and a production account:
 
 1. `seed-admin.ts` refuses a production run without `SEED_ADMIN_CONFIRM=prod`.
-   The confirmation names the environment, so a command line copied from staging
+   The confirmation names the environment, so a command line copied from stag
    does not satisfy it.
 2. `pull.sh prod` refuses to put production secrets on a workstation without
    `GOGO_ALLOW_PROD_PULL=1`, which is an incident-only override.

@@ -90,13 +90,25 @@ fi
 
 # 4. A confirmation naming another environment must not satisfy prod. The
 #    comparison is against APP_ENV on both sides, so a copied command line from
-#    staging fails closed rather than seeding production.
-SEED_CONFIRM=staging run_seed prod
+#    stag fails closed rather than seeding production.
+SEED_CONFIRM=stag run_seed prod
 if [[ "$(cat "$tmp/status")" != 0 ]]; then
   ok "SEED_CONFIRM naming another environment does not satisfy prod"
 else
-  fail "SEED_CONFIRM=staging was accepted for a prod seed"
+  fail "SEED_CONFIRM=stag was accepted for a prod seed"
 fi
+
+# 4b. GoGo-Infra#286: the retired aliases are refused outright, confirmed or
+#     not. `.env.production` would otherwise seed a production catalogue with no
+#     prompt, because the guard only matches `prod`.
+for alias in production staging; do
+  SEED_CONFIRM="$alias" run_seed "$alias"
+  if [[ "$(cat "$tmp/status")" == 2 ]] && [[ ! -s "$tmp/calls" ]] && grep -qE "must be (dev, stag or prod|\.env\.dev, \.env\.stag or \.env\.prod)" "$tmp/err"; then
+    ok "environment '${alias}' is refused before any remote call"
+  else
+    fail "environment '${alias}' was not refused (status $(cat "$tmp/status"), $(wc -l <"$tmp/calls") remote calls)"
+  fi
+done
 
 # 5. The seed creates no CMS account (DB-012 / ADR-0018): bootstrapping one is a
 #    separate command, and this script must never grow it back.
