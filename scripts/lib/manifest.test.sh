@@ -647,7 +647,7 @@ fi
 # --- one environment vocabulary (GoGo-Infra#286, ADR-0015) ------------------
 #
 # Every environment list in the manifest — a row's `required`, a capability's
-# `enabled` and `planned` — names only dev, stag or prod. `stag` or
+# `enabled` and `planned` — names only dev, stag or prod. `staging` or
 # `production` here would be a row no environment ever demands: validate.sh
 # would read it as optional everywhere and pass while the value is missing.
 stray_envs="$(python3 - "${DIR}/../../config/secrets.manifest.yml" <<'PYEOF'
