@@ -480,6 +480,11 @@ interactive branch reads a single line and cannot take a multi-line key at all).
    ./scripts/secrets/put.sh prod signing/apple-asc-issuer-id   # prompts: the issuer UUID
    ```
 
+   Then move the `.p8` off disk: Apple will not issue it again, so put a copy in the owner's password
+   manager (attachment), confirm the row with `./scripts/secrets/validate.sh prod`, and delete every
+   local copy — the download folder included — with `rm -P AuthKey_XXXXXXXXXX.p8`. A `.p8` left in
+   Downloads is the key, usable by anything that can read the folder, until it is revoked.
+
 2. **Android upload keystore** — generated once:
 
    ```bash
@@ -604,7 +609,7 @@ Readiness: `validate.sh <env> --strict --include-planned` reports `firebase_dist
 | --- | --- | --- |
 | `signing/android-keystore` at dev/staging | Not recoverable as a signature — nothing re-signs a Firebase build. Generate a new one; testers uninstall before the next install; re-register SHA-1 (Maps) and, for dev, SHA-256 (assetlinks). | Someone can sign builds testers' devices accept as updates of the dev/staging app. Rotate, have testers reinstall. Prod is untouched. |
 | `signing/apple-asc-key` at dev/staging | Create another key. | With Admin role, can create and revoke certificates and profiles on the team — **including revoking the Apple Distribution certificate prod signs with**. Revoke the key at once. |
-| `firebase/app-distribution-service-account` | Create another key. | Can push builds to that project's testers until the key is deleted in Google Cloud IAM. |
+| `firebase/app-distribution-service-account` | Create another key. | Firebase App Distribution Admin is full read/write on that project's App Distribution: upload releases, add or remove testers and groups, and read tester emails (personal data), until the key is deleted in Google Cloud IAM. No other Firebase or Google Cloud service, no other project. |
 
 ### iOS: Ad Hoc certificate and profile — fastlane `cert` / `sigh`, no `match`
 
@@ -668,6 +673,11 @@ environment (`dev`, then `staging`). `put.sh` for these environments asks no con
    ./scripts/secrets/put.sh dev signing/apple-asc-issuer-id   # prompts: the issuer UUID
    ```
 
+   Then move the `.p8` off disk: Apple will not issue it again, so put a copy in the owner's password
+   manager (attachment), confirm the row with `./scripts/secrets/validate.sh dev`, and delete every
+   local copy — the download folder included — with `rm -P AuthKey_XXXXXXXXXX.p8`. A `.p8` left in
+   Downloads is the key, usable by anything that can read the folder, until it is revoked.
+
 4. **Android keystore** — one per environment, never the prod upload keystore, never the debug
    keystore (owner 2026-10-28). Same rules as prod: PKCS12, RSA-2048, one password for store and key.
 
@@ -681,13 +691,14 @@ environment (`dev`, then `staging`). `put.sh` for these environments asks no con
    ```
 
    Verify the round trip as in step 2 of the prod section (`get.sh dev signing/android-keystore --show
-   | base64 -d` into a `mktemp` file, compare digests), back the `.p12` up to the password manager —
-   at dev/staging it *is* the signature — then delete the local copy.
+   | base64 -d` into a `mktemp` file, compare digests) and back the `.p12` up to the password manager —
+   at dev/staging it *is* the signature. **Keep the local file until step 5 has read the fingerprints.**
 
-5. **Fingerprints** — public values, not secrets:
+5. **Fingerprints** — public values, not secrets. Read them from the local `.p12`, then delete it:
 
    ```bash
    keytool -list -v -keystore gogo-dev.p12 -storetype PKCS12 -alias gogo-dev | grep -E 'SHA1|SHA256'
+   rm -P gogo-dev.p12      # only after the backup in step 4 and the fingerprints above are recorded
    ```
 
    - **SHA-1 → Maps.** Google Cloud console → the project owning `google/maps-android-api-key` →

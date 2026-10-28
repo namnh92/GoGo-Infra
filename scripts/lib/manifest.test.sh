@@ -142,6 +142,31 @@ else
   bad "a firebase distribution capability appears in prod" "$fb_caps_prod"
 fi
 
+# The Firebase capabilities require exactly the set their lane is handed. The
+# dangling check below only sees requirements that are listed, so a removed or
+# truncated list would pass it and let readiness report a lane complete that
+# exec-with.sh would refuse (#276 Sol F-04). Pinned per environment.
+expect_requires() {
+  local env="$1" cap="$2" want="$3" got
+  got="$(python3 "$READER" "$env" --capability-requires --include-planned \
+    | awk -F'\t' -v c="$cap" '$1 == c { print $2 ":" $3 }' | sort)"
+  if [[ "$got" == "$(tr ' ' '\n' <<< "$want" | sort)" ]]; then
+    ok "${env}: ${cap} requires exactly its lane's rows"
+  else
+    bad "${env}: ${cap} requires a different set than its lane" "got: $(tr '\n' ' ' <<< "$got")"
+  fi
+}
+for env in dev staging; do
+  expect_requires "$env" firebase_distribution_ios \
+    "ci:signing/apple-asc-key ci:signing/apple-asc-key-id ci:signing/apple-asc-issuer-id ci:firebase/app-distribution-service-account ci:firebase/app-id-ios"
+  expect_requires "$env" firebase_distribution_android \
+    "ci:signing/android-keystore ci:signing/android-keystore-password ci:signing/android-key-alias ci:signing/android-key-password ci:firebase/app-distribution-service-account ci:firebase/app-id-android"
+done
+expect_requires prod store_release_ios \
+  "ci:signing/apple-asc-key ci:signing/apple-asc-key-id ci:signing/apple-asc-issuer-id"
+expect_requires prod store_release_android \
+  "ci:signing/android-keystore ci:signing/android-keystore-password ci:signing/android-key-alias ci:signing/android-key-password ci:store/play-service-account"
+
 # Every requirement names a declared row. Nothing else resolves `requires`
 # against the parameter list, so a typo — or a rename like #271's store/ →
 # signing/ that missed one list — would leave a capability waiting forever on a
