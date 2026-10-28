@@ -608,7 +608,7 @@ Readiness: `validate.sh <env> --strict --include-planned` reports `firebase_dist
 | | Lost | Leaked |
 | --- | --- | --- |
 | `signing/android-keystore` at dev/staging | Not recoverable as a signature — nothing re-signs a Firebase build. Generate a new one; testers uninstall before the next install; re-register SHA-1 (Maps) and, for dev, SHA-256 (assetlinks). | Someone can sign builds testers' devices accept as updates of the dev/staging app. Rotate, have testers reinstall. Prod is untouched. |
-| `signing/apple-asc-key` at dev/staging | Create another key. | With Admin role, can create and revoke certificates and profiles on the team — **including revoking the Apple Distribution certificate prod signs with**. Revoke the key at once. |
+| `signing/apple-asc-key` at dev/staging | Create another key. | **Reaches prod.** An App Store Connect key is team-wide, not per app or per environment: with Admin it can create and revoke certificates and profiles — **including the Apple Distribution certificate prod signs with** — upload builds for any of the team's apps, prod included, and change app metadata, users and TestFlight testers. Revoke the key at once, then inspect: App Store Connect → each app → TestFlight builds and App Store versions not shipped by the owner, Users and Access changes, Certificates, Identifiers & Profiles for certificates or profiles not created by the lane. Expire unknown builds; revoke unknown certificates (and regenerate every profile that named one). |
 | `firebase/app-distribution-service-account` | Create another key. | Firebase App Distribution Admin is full read/write on that project's App Distribution: upload releases, add or remove testers and groups, and read tester emails (personal data), until the key is deleted in Google Cloud IAM. It also reads project metadata — the Firebase project, its registered apps, Resource Manager project get/list — but writes nothing outside App Distribution and reaches no other project ([role definition](https://cloud.google.com/iam/docs/roles-permissions/firebaseappdistro)). |
 
 ### iOS: Ad Hoc certificate and profile — fastlane `cert` / `sigh`, no `match`
@@ -707,7 +707,8 @@ environment (`dev`, then `staging`). `put.sh` for these environments asks no con
      shows a grey map and `Authorization failure` in logcat. (Staging has no Maps key value yet —
      a separate issue; the restriction can be added when it exists.)
    - **SHA-256 → App Links (dev only).** Add it to `config/well-known/dev/assetlinks.json` next to the
-     debug fingerprint, so the Firebase dev build verifies `go-dev.gogo.id.vn`. `stag` claims no
+     debug fingerprint, in a PR; the merge to `develop` triggers `terraform-apply-dev.yml`, which
+     serves the file from the share-link Worker, so the Firebase dev build verifies `go-dev.gogo.id.vn`. `stag` claims no
      links, so staging has no file.
 
 6. **Check:** `./scripts/secrets/validate.sh dev --strict --include-planned` — both
@@ -719,8 +720,18 @@ environment (`dev`, then `staging`). `put.sh` for these environments asks no con
   kill switch and leaves the other environments' keys working.
 - **Service account key:** add a new key, store it, distribute once, delete the old key in Google Cloud
   IAM (kill switch). Removing the role also stops it.
-- **Keystore:** a new keystore is a new signature: store the four rows, re-register SHA-1 (and SHA-256
-  for dev), tell testers to uninstall and reinstall.
+- **Keystore, routine rollover** (expiry, a new machine): a new keystore is a new signature. Store the
+  four rows, add the new SHA-1 to the Maps restriction (and the new SHA-256 to
+  `config/well-known/dev/assetlinks.json` for dev), tell testers to uninstall and reinstall. The old
+  fingerprints may stay until no tester still runs a build signed with the old key, then remove them.
+- **Keystore, compromised** (the file and its password may be in someone else's hands): everything
+  above, and **remove the old fingerprints at once** — they are the trust an attacker-signed app
+  would inherit. Delete the old SHA-1 from the Maps key's Android-app restriction, delete the old
+  SHA-256 from `config/well-known/dev/assetlinks.json` in a PR — once it merges to `develop`,
+  `terraform-apply-dev.yml` applies `config/well-known/**` into the share-link Worker
+  (`modules/cloudflare-worker` reads it with `file()`), and `go-dev.gogo.id.vn` stops vouching for
+  the old key; confirm by fetching `https://go-dev.gogo.id.vn/.well-known/assetlinks.json` — and record the rotation on GoGo-Infra#271. Testers who
+  keep a build signed with the old key lose Maps and verified links on it — that is the point.
 - **Distribution certificate:** shared with prod — revoke only to replace a compromised one, and
   regenerate every profile (prod App Store and dev/staging Ad Hoc) afterwards.
 
