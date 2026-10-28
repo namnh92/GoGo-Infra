@@ -42,7 +42,7 @@
  * or an exception message. Session and observation are separate, and no task
  * state, loop counter or cache of a task is read or written.
  */
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { accessSync, appendFileSync, constants, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -294,7 +294,7 @@ async function observe(o: Options): Promise<{ record: PromptRecord; stdout: stri
   const admission = await takeSessionCall(stateDir, ids.sessionDigest, now);
   if (admission !== 'ok') return refused(`session_${admission}`);
 
-  const child = runChild(o, join(root!, WRAPPER_CLOSURE[0]), ids.observationId, read.data, stateDir);
+  const child = await runChild(o, join(root!, WRAPPER_CLOSURE[0]), ids.observationId, read.data, stateDir);
   if ('error' in child) return refused(child.error, { mode: 'jev' });
   // Recorded only when it is a category the router has; anything else is not text to keep.
   const category = (FALLBACK_CATEGORIES as readonly (string | null)[]).includes(child.errorCategory) ? child.errorCategory : null;
@@ -304,26 +304,75 @@ async function observe(o: Options): Promise<{ record: PromptRecord; stdout: stri
   return { record, stdout: hookOutput({ kind: 'advisory', outcome: child.outcome, model: child.model }) };
 }
 
-/** `<wrapper> dev ai-harness/openrouter-api-key -- node <entry> prompt-hook --live-child …`; the answer, validated, or a closed code. */
-function runChild(o: Options, wrapper: string, observationId: string, payload: string, stateDir: string): ChildAnswer | { error: string } {
+/**
+ * `<wrapper> dev ai-harness/openrouter-api-key -- node <entry> prompt-hook --live-child …`; the answer, validated, or a closed code.
+ * The wrapper leads its own process group (#260): the time limit or an oversized output kills the
+ * whole group, so an `aws` the wrapper started does not outlive the hook. Killing the wrapper alone
+ * left its descendants running.
+ */
+function runChild(o: Options, wrapper: string, observationId: string, payload: string, stateDir: string): Promise<ChildAnswer | { error: string }> {
   const entry = o.entry ?? realpathSync(process.argv[1] ?? '');
-  const r = spawnSync(wrapper, ['dev', 'ai-harness/openrouter-api-key', '--', process.execPath, entry, 'prompt-hook', '--live-child', '--observation', observationId], {
-    input: payload,
-    encoding: 'utf8',
-    timeout: o.childTimeoutMs ?? SHADOW_LIMITS.childTimeoutMs,
-    maxBuffer: 64 * 1024,
-    env: childEnv(o.env, stateDir),
+  return new Promise((resolve) => {
+    const child = spawn(wrapper, ['dev', 'ai-harness/openrouter-api-key', '--', process.execPath, entry, 'prompt-hook', '--live-child', '--observation', observationId], {
+      env: childEnv(o.env, stateDir),
+      detached: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let timedOut = false;
+    let overflow = false;
+    let epipe = false;
+    let settled = false;
+    const out = { stdout: '', stderr: '' };
+    const killGroup = () => {
+      try {
+        process.kill(-child.pid!, 'SIGKILL');
+      } catch {
+        // The group is already gone.
+      }
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killGroup();
+    }, o.childTimeoutMs ?? SHADOW_LIMITS.childTimeoutMs);
+    const settle = (r: ChildAnswer | { error: string }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(r);
+    };
+    for (const name of ['stdout', 'stderr'] as const) {
+      child[name].setEncoding('utf8');
+      child[name].on('data', (chunk: string) => {
+        if (out[name].length + chunk.length > 64 * 1024) {
+          overflow = true;
+          killGroup();
+          return;
+        }
+        out[name] += chunk;
+      });
+    }
+    child.on('error', () => settle({ error: 'jev_spawn_failed' }));
+    // A wrapper that exits before reading stdin (no AWS session, missing row) also breaks the pipe.
+    child.stdin.on('error', (e: NodeJS.ErrnoException) => {
+      if (e.code === 'EPIPE') epipe = true;
+    });
+    child.stdin.end(payload);
+    child.on('close', (status: number | null) => {
+      if (timedOut) return settle({ error: 'jev_timeout' });
+      // No AWS session is told apart (#260) by require_aws's own line in common.sh, one of the
+      // verified closure files; the text is matched, never kept or shown.
+      if ((status !== null && status !== 0) || epipe) return settle({ error: AWS_UNAVAILABLE.test(out.stderr) ? 'jev_aws_unavailable' : 'jev_wrapper_failed' });
+      if (overflow || status === null) return settle({ error: 'jev_spawn_failed' });
+      settle(parseChild(out.stdout));
+    });
   });
-  const code = (r.error as NodeJS.ErrnoException | undefined)?.code;
-  if (code === 'ETIMEDOUT') return { error: 'jev_timeout' };
-  // A wrapper that exits before reading stdin (no AWS session, missing row) also breaks the pipe.
-  // No AWS session is told apart (#260) by require_aws's own line in common.sh, one of the
-  // verified closure files; the text is matched, never kept or shown.
-  if ((r.status !== null && r.status !== 0) || code === 'EPIPE') return { error: AWS_UNAVAILABLE.test(r.stderr ?? '') ? 'jev_aws_unavailable' : 'jev_wrapper_failed' };
-  if (r.error || r.status === null) return { error: 'jev_spawn_failed' };
+}
+
+/** The child's last stdout line, validated, or a closed code. */
+function parseChild(stdout: string): ChildAnswer | { error: string } {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(r.stdout.trim().split('\n').pop() ?? '');
+    parsed = JSON.parse(stdout.trim().split('\n').pop() ?? '');
   } catch {
     return { error: 'jev_bad_output' };
   }
