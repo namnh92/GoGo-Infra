@@ -609,6 +609,31 @@ for env in dev staging prod; do
   fi
 done
 
+# Sol F-01 (#294): the guard against a capability requiring a tools row from a
+# real environment is the dangling-requirement check above, which is generic —
+# a tools row is never declared for dev, staging or prod. Proven on a copy of the
+# reader whose manifest puts the harness capability back into dev's profile.
+MUT="$(mktemp -d)"
+mkdir -p "${MUT}/scripts/lib" "${MUT}/config"
+cp "$READER" "${MUT}/scripts/lib/manifest.py"
+python3 - "${DIR}/../../config/secrets.manifest.yml" "${MUT}/config/secrets.manifest.yml" <<'PY'
+import sys
+text = open(sys.argv[1], encoding="utf-8").read()
+marker = "  - name: ai_harness_live_decisions\n    kind: feature\n    enabled: []\n"
+assert text.count(marker) == 1, "mutation target moved"
+open(sys.argv[2], "w", encoding="utf-8").write(
+    text.replace(marker, marker.replace("enabled: []", "enabled: [dev]")))
+PY
+mut_declared="$(python3 "${MUT}/scripts/lib/manifest.py" dev --namespace all --consumer all | awk -F'\t' '{ print $5 ":" $1 }' | sort -u)"
+mut_dangling="$(python3 "${MUT}/scripts/lib/manifest.py" dev --capability-requires \
+  | awk -F'\t' '{ print $2 ":" $3 }' | while read -r req; do grep -qxF "$req" <<< "$mut_declared" || echo "$req"; done)"
+rm -rf "$MUT"
+if [[ "$mut_dangling" == "tools:ai-harness/openrouter-api-key" ]]; then
+  ok "F-01: a dev capability requiring a tools row is reported as an undeclared requirement"
+else
+  bad "F-01: a dev capability requiring a tools row is not caught" "dangling: ${mut_dangling:-<none>}"
+fi
+
 harness_requires="$(cd "$DIR" && python3 -c 'import manifest
 for c in manifest.parse("capabilities"):
     if c["name"] == "ai_harness_live_decisions":

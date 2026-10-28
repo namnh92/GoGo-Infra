@@ -358,6 +358,40 @@ if [[ $rc -ne 0 && "$out" == *"no capability profile"* ]]; then
   ok "tools: --include-planned is refused (no capability profile)"
 else bad "tools: --include-planned must be refused" "rc=$rc $out"; fi
 
+# --- GoGo-Infra#294 Sol F-01: a capability never crosses into tools ---------
+#
+# A tools row belongs to no environment, so an environment's readiness can
+# never be satisfied by one. If a capability enabled for dev required a tools
+# row, the requirement used to be skipped like an unreadable namespace — but
+# nothing marked it SKIPPED, and --strict printed READY without having looked.
+# Run against a copy of the tree whose manifest puts the harness capability
+# back into dev's profile: the shipped manifest cannot express the mistake.
+MUT="${WORK}/mutated"
+mkdir -p "$MUT"
+cp -R "${ROOT}/scripts" "${ROOT}/config" "$MUT/"
+python3 - "${MUT}/config/secrets.manifest.yml" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+marker = "  - name: ai_harness_live_decisions\n    kind: feature\n    enabled: []\n"
+assert text.count(marker) == 1, "mutation target moved"
+open(path, "w", encoding="utf-8").write(
+    text.replace(marker, marker.replace("enabled: []", "enabled: [dev]")))
+PY
+out="$(MANIFEST_READER="${MUT}/scripts/lib/manifest.py" PATH="${WORK}:${PATH}" AWS_PROFILE=test \
+  "${MUT}/scripts/secrets/validate.sh" dev --strict 2>&1)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"ai_harness_live_decisions needs tools:ai-harness/openrouter-api-key"* && "$out" != *"READY:"* ]]; then
+  ok "F-01: a dev capability requiring a tools row fails --strict instead of being skipped"
+else bad "F-01: a capability crossing into tools must fail readiness" "rc=$rc $out"; fi
+
+# F-02: the tools failure explains itself in the mode the operator ran.
+echo "/gogo/tools" > "${WORK}/deny"
+out="$(run tools)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"/gogo/tools/ is always a failure"* && "$out" != *"In --strict mode"* ]]; then
+  ok "F-02: an unreadable /gogo/tools/ says it always fails, not that --strict made it fail"
+else bad "F-02: the tools SKIPPED message must not cite --strict" "rc=$rc $out"; fi
+: > "${WORK}/deny"
+
 printf '\n'
 if [[ "$failures" -eq 0 ]]; then echo "validate.sh: all checks passed"; else echo "validate.sh: ${failures} failure(s)"; fi
 exit $(( failures > 0 ))
