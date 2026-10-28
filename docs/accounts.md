@@ -157,13 +157,13 @@ Fill in as accounts are created. "Owner" is a person; "backup" must not be the s
 | Neon | `gogo-dev` | GitHub OAuth | | **none** | | |
 | Upstash | `gogo-dev` — endpoint `secure-rattler-216851.upstash.io`, Free plan; recreated 2026-09-05 (the earlier `gogo-dev-redis` / `trusting-cougar-204025` no longer exists in the account) | GitHub OAuth | | **none** | | 2026-09-05 |
 | Cloudflare | account `0c279927…e570b7b`, zone `gogo.id.vn` | GitHub OAuth | | **none** | | |
-| OneSignal | `GoGo Development` | GitHub OAuth | | **none** | | |
+| OneSignal | `gogo-dev` (org "Max", app id `4de310e9-…`) — APNs .p8 `max.gogo.dev`; FCM V1 from Firebase `gogo-dev-16ded` since 2026-10-28 (was `gogo-dev-32632`, project deleted) | GitHub OAuth | | **none** | | |
 | OneSignal | `GoGo Staging` — not created yet (owner 2026-10-28, GoGo-Infra#299) | GitHub OAuth | | **none** | | |
 | OneSignal | `GoGo Production` | GitHub OAuth | | **none** | | |
-| Firebase | `gogo-dev`, `gogo-stag` (App Distribution + FCM V1), `gogo-prod` (FCM V1 only, no SSM row) — not created yet; GoGo-Infra#271, #299 | Google | | **none** | | |
+| Firebase / Google Cloud (org `gogo.id.vn`, login namnh@gogo.id.vn) | `gogo-dev-16ded` (no. 773600986874: App Distribution + FCM V1 + every DEV Google key since #305, billing "GoGo billing account"), `gogo-stag` (no. 430013805827), `gogo-prod-a71d3` (FCM V1 only, no SSM row) — created 2026-10-28; GoGo-Infra#271, #299, #305 | Google | | **none** | | 2026-10-28 |
 | Tenjin | | GitHub OAuth | | **none** | | |
 | Adjust | plan **Base** (owner registered; welcome email: 1,500 monthly attributions in the first year — not verified against Adjust's terms). Second MMP beside Tenjin, owner 2026-10-19 (GoGo-MobileApp#363). DPA: not recorded yet — gate before the first real-token device run | not recorded | | **none** | | |
-| Google Cloud | project number `186055730568` — every DEV server key | Google | | **none** | | |
+| Google Cloud | ~~project `gogo-dev-32632` (no. `186055730568`)~~ — **deleted by the owner 2026-10-28**; its DEV keys are replaced in `gogo-dev-16ded` (#305). Sections below that cite `186055730568` are history until #305 rewrites them | Google | | **none** | | |
 | Grafana Cloud | Free stack `prometheus-prod-37-prod-ap-southeast-1`, instance id `3553140` — dev and prod share it via an `env` label. Superseded for DEV by ADR-0007 on 04/09/2026; tokens revoked 05/09/2026 after cutover | GitHub OAuth | | **none** | | 01/09/2026 |
 | Sentry | org `gogo-vn` (region US; slug renamed from `gogo-fe` 2026-10-14 — DSN unchanged), team `gogo`. Plan: **Business + Seer AI** (owner stated 2026-10-14) — supersedes the Free plan ADR-0006 budgeted; Seer sends error payloads to an AI provider. **Seer** stays **on** (owner Q-1, 2026-10-14: Seer purchased); ADR-0011 D-7 gate = privacy review + Sentry DPA, both before the first real client event — **met 2026-10-14**: owner accepted the privacy review and signed the DPA (#208 comments 6164369716, 6164377573), subject to relay evidence per client. GitHub integration: see *Sentry — GitHub App and spend controls* below (ADR-0012a D-3, D-4). Org state read 2026-10-14: `hideAiFeatures` false, `genAIConsent` false, per-project `seerScannerAutomation` true, `autofixAutomationTuning` medium | GitHub OAuth | `namnh92` (owner stated 2026-10-05) | **none** | | 2026-10-05 |
 | Sentry · `gogo-be` | `node-nestjs`, id `4512201628254209` — api and worker, every environment; `environment` from `APP_ENV` since GoGo-BE#674 (DEV api/worker report `dev`, checked 2026-10-14). Settings 2026-10-14: dataScrubber + defaults on, `scrubIPAddresses` true since 2026-10-15 (Q-2 on #208, owner; comment 6184688951), `allowedDomains` `*`; Advanced Data Scrubbing `[Remove] [Anything] from [$user.geo.**]` since 2026-10-14 (GoGo-Infra#215, owner Q-A) | GitHub OAuth | `namnh92` | **none** | | 2026-10-05 |
@@ -275,8 +275,9 @@ Where the lists live — none of them is a secret, none is in SSM:
 - **Tester devices (UDIDs):** Apple Developer → Certificates, Identifiers & Profiles → **Devices**.
   Adding one means regenerating the Ad Hoc profile (`sigh --adhoc --force`) before the next build.
 - **Testers and groups:** Firebase console → App Distribution → Testers & Groups, per project.
-- **Project ids:** `gogo-dev` and `gogo-stag` are the names the owner chose on 2026-10-28; if the
-  created projects get different ids, correct them here and in the runbook.
+- **Project ids:** display names `gogo-dev` / `gogo-stag` / `gogo-prod`; real ids `gogo-dev-16ded`, `gogo-stag`,
+  `gogo-prod-a71d3` (read 2026-10-28). Org policy `iam.managed.disableServiceAccountKeyCreation` is enforced: a key is
+  created only inside a temporary per-project override, restored right after (owner 2026-10-28).
 
 As of the merge of #271 none of these exists yet; the owner creates them and writes the values with
 `put.sh` (assistant supplies the command, never the value).
@@ -362,8 +363,8 @@ exists:
 
 | Firebase project | Project number | Holds |
 | --- | --- | --- |
-| `gogo-dev` | _(owner, after creation)_ | `/gogo/ci/dev/firebase/app-distribution-service-account` |
-| `gogo-stag` | _(owner, after creation)_ | `/gogo/ci/stag/firebase/app-distribution-service-account` |
+| `gogo-dev-16ded` | `773600986874` | `/gogo/ci/dev/firebase/app-distribution-service-account` (SA `app-distribution@gogo-dev-16ded`) |
+| `gogo-stag` | `430013805827` | `/gogo/ci/stag/firebase/app-distribution-service-account` |
 
 The three server keys were verified by calling each API with each key: every key answers `200` on its own
 API and `403 API_KEY_SERVICE_BLOCKED` on the other two. All three APIs are
@@ -487,7 +488,7 @@ generating each keystore (`docs/secrets.md` → Firebase App Distribution, step 
 | Flavour | Signed by | SHA-1 (Maps restriction) | SHA-256 (assetlinks) |
 | --- | --- | --- | --- |
 | dev | debug keystore (local builds) | _(registered for local builds; not recorded here)_ | `FA:C6:17:45:…:91:03:3B:9C` (in `config/well-known/dev`) |
-| dev | `signing/android-keystore` at dev (Firebase builds) | _(owner, after keytool)_ | _(owner, after keytool — add to `config/well-known/dev/assetlinks.json`)_ |
+| dev | `signing/android-keystore` at dev (Firebase builds), keystore `gogo-dev.p12` alias `gogo-dev`, created 2026-10-28 | `22:8A:62:B9:37:57:47:A5:6F:43:80:7D:1F:3D:5F:D8:5C:08:94:BE` — Maps key `maps-android-dev` in `gogo-dev-16ded` (#305) | `E9:E1:0F:54:…:93:E7:13:3D` (in `config/well-known/dev`, beside the debug one) |
 | stag | `signing/android-keystore` at stag (Firebase builds) | _(owner, after keytool; no stag Maps key yet)_ | n/a — stag claims no links |
 | prod | Play app signing key (Google) | _(Play Console → App integrity, #351)_ | _(same)_ |
 

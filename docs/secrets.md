@@ -786,8 +786,10 @@ environment (`dev`, then `stag`). `put.sh` for these environments asks no confir
      Record it in `docs/accounts.md` → *App identity* → signing table. Without it, the Firebase build
      shows a grey map and `Authorization failure` in logcat. (Stag has no Maps key value yet —
      a separate issue; the restriction can be added when it exists.)
-   - **SHA-256 → App Links (dev only).** Add it to `config/well-known/dev/assetlinks.json` next to the
-     debug fingerprint, in a PR; the merge to `develop` triggers `terraform-apply-dev.yml`, which
+   - **SHA-256 → App Links (dev only).** Append it to `ANDROID_SIGNING_SHA256_DEV` in `config/bootstrap.env`
+     (comma-separated, after the debug fingerprint), re-run `./scripts/deploy/render-well-known.sh dev`, and
+     commit the regenerated `config/well-known/dev/assetlinks.json` in a PR — never hand-edit the file, the
+     next render would drop the entry; the merge to `develop` triggers `terraform-apply-dev.yml`, which
      serves the file from the share-link Worker, so the Firebase dev build verifies `go-dev.gogo.id.vn`. `stag` claims no
      links, so stag has no file.
 

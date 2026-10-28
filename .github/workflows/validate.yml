@@ -326,6 +326,11 @@ jobs:
       - name: render-env aborts on an unreadable optional parameter
         run: ./scripts/deploy/render-env.test.sh
 
+      # GoGo-Infra#271 AC-6. Dev is signed by two keystores (debug, Firebase);
+      # assetlinks.json must name both, and prod must never reuse a dev one.
+      - name: render-well-known renders every listed fingerprint
+        run: ./scripts/deploy/render-well-known.test.sh
+
       # The namespace default decides what render-env.sh writes into the
       # production process environment. A client key drifting into that default
       # would hand the API a credential it cannot read and must not hold.
