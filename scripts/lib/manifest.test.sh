@@ -673,6 +673,24 @@ else
   bad "the manifest names an environment outside dev|stag|prod" "$(echo "$stray_envs" | head -5 | tr '\n' ';')"
 fi
 
+# Sol F-03 / F-04 (GoGo-Infra#286): the readers refuse a retired name instead of
+# answering "nothing required" with exit 0.
+for retired in staging production; do
+  if python3 "$READER" "$retired" --required >/dev/null 2>"${TMPDIR:-/tmp}/mt.err"; then
+    bad "manifest.py accepts the retired environment '${retired}'" "exit 0"
+  elif grep -q "must be one of: dev, stag, prod" "${TMPDIR:-/tmp}/mt.err"; then
+    ok "manifest.py refuses the retired environment '${retired}'"
+  else
+    bad "manifest.py refuses '${retired}' for the wrong reason" "$(cat "${TMPDIR:-/tmp}/mt.err")"
+  fi
+  if "${DIR}/../ops/offboard-checklist.sh" "$retired" >/dev/null 2>&1; then
+    bad "offboard-checklist.sh accepts the retired environment '${retired}'" "exit 0"
+  else
+    ok "offboard-checklist.sh refuses the retired environment '${retired}'"
+  fi
+done
+rm -f "${TMPDIR:-/tmp}/mt.err"
+
 echo
 if [[ "$failures" -gt 0 ]]; then
   echo "${failures} test(s) failed."

@@ -162,6 +162,11 @@ def main():
         return 2
 
     env = sys.argv[1]
+    # GoGo-Infra#286 (ADR-0015). Any other word would match no row and answer
+    # "nothing required" with exit 0, which reads like a real answer.
+    if env not in ("dev", "stag", "prod"):
+        sys.stderr.write(f"error: environment must be one of: dev, stag, prod (got '{env}')\n")
+        return 2
     args = sys.argv[2:]
     required_only = "--required" in args
 

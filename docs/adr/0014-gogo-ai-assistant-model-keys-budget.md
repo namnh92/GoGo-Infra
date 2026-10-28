@@ -66,7 +66,7 @@ after a primary that may itself have been charged, so it is reserved separately 
 fallback: the turn ends with the "unavailable" answer.
 
 **D-3 One dedicated key per environment, named `gogo_ai_anthropic_<env>`.** DEV
-`gogo_ai_anthropic_dev` exists; `gogo_ai_anthropic_staging` / `gogo_ai_anthropic_prod` are
+`gogo_ai_anthropic_dev` exists; `gogo_ai_anthropic_stag` (named per ADR-0015) / `gogo_ai_anthropic_prod` are
 created by the owner when those environments are. SSM `/gogo/<env>/backend/openrouter/assistant-api-key`
 → `OPENROUTER_ASSISTANT_API_KEY`, `SecureString`, `consumer: runtime` (the API serves the
 assistant). It is **not** `openrouter/api-key` (decisions POC, `gogo_be_<env>`) and **not**

@@ -18,6 +18,12 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ENVS=("$@")
 [[ "${#ENVS[@]}" -eq 0 ]] && ENVS=(dev stag prod)
+for env in "${ENVS[@]}"; do
+  case "$env" in
+    dev | stag | prod) ;;
+    *) echo "error: environment must be one of: dev, stag, prod (got '${env}')" >&2; exit 2 ;;
+  esac
+done
 
 echo "# Offboarding rotation checklist"
 echo

@@ -190,6 +190,19 @@ else
   fail "a row without env_var is skipped (exit ${status}): $(grep -c '^-=' "$tmp/out.env" 2>/dev/null) '-=' line(s)"
 fi
 
+# GoGo-Infra#286 (ADR-0015), Sol F-01: a retired name is refused before any
+# SSM call, so it can neither read an empty tree nor render APP_ENV=<retired>.
+for retired in staging production; do
+  : >"$tmp/calls" 2>/dev/null || true
+  "$fixture/scripts/deploy/render-env.sh" "$retired" "$tmp/retired.env" >"$tmp/stdout" 2>"$tmp/stderr"
+  status=$?
+  if [[ $status -eq 2 ]] && grep -q "must be one of: dev, stag, prod" "$tmp/stderr" && [[ ! -s "$tmp/retired.env" ]]; then
+    ok "render-env refuses the retired environment '${retired}' and writes nothing"
+  else
+    fail "render-env accepted the retired environment '${retired}' (exit ${status})"
+  fi
+done
+
 if [[ $fails -gt 0 ]]; then
   echo "${fails} render-env test(s) failed" >&2
   exit 1

@@ -27,6 +27,12 @@ REMOTE_ENV_FILE="${REMOTE_ENV_FILE:?set REMOTE_ENV_FILE, e.g. .env.dev or .env.p
 # Derived from the env file name so the two cannot disagree: .env.dev -> dev.
 ENVIRONMENT_NAME="${REMOTE_ENV_FILE#.env.}"
 : "${ENVIRONMENT_NAME:?REMOTE_ENV_FILE must look like .env.<environment>}"
+# GoGo-Infra#286 (ADR-0015): deploy, rollback and seed all derive the compose
+# project and APP_ENV from this name, so it is checked once here.
+case "$ENVIRONMENT_NAME" in
+  dev | stag | prod) ;;
+  *) echo "error: REMOTE_ENV_FILE must be .env.dev, .env.stag or .env.prod (got '${REMOTE_ENV_FILE}')" >&2; exit 2 ;;
+esac
 
 # The edge is chosen per host, not assumed. A host that accepts inbound
 # connections runs Caddy with its own certificate; one that does not runs

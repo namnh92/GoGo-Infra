@@ -103,7 +103,7 @@ fi
 #     prompt, because the guard only matches `prod`.
 for alias in production staging; do
   SEED_CONFIRM="$alias" run_seed "$alias"
-  if [[ "$(cat "$tmp/status")" == 2 ]] && [[ ! -s "$tmp/calls" ]] && grep -q "must be dev, stag or prod" "$tmp/err"; then
+  if [[ "$(cat "$tmp/status")" == 2 ]] && [[ ! -s "$tmp/calls" ]] && grep -qE "must be (dev, stag or prod|\.env\.dev, \.env\.stag or \.env\.prod)" "$tmp/err"; then
     ok "environment '${alias}' is refused before any remote call"
   else
     fail "environment '${alias}' was not refused (status $(cat "$tmp/status"), $(wc -l <"$tmp/calls") remote calls)"
