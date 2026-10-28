@@ -609,7 +609,7 @@ Readiness: `validate.sh <env> --strict --include-planned` reports `firebase_dist
 | --- | --- | --- |
 | `signing/android-keystore` at dev/staging | Not recoverable as a signature — nothing re-signs a Firebase build. Generate a new one; testers uninstall before the next install; re-register SHA-1 (Maps) and, for dev, SHA-256 (assetlinks). | Someone can sign builds testers' devices accept as updates of the dev/staging app. Rotate, have testers reinstall. Prod is untouched. |
 | `signing/apple-asc-key` at dev/staging | Create another key. | With Admin role, can create and revoke certificates and profiles on the team — **including revoking the Apple Distribution certificate prod signs with**. Revoke the key at once. |
-| `firebase/app-distribution-service-account` | Create another key. | Firebase App Distribution Admin is full read/write on that project's App Distribution: upload releases, add or remove testers and groups, and read tester emails (personal data), until the key is deleted in Google Cloud IAM. No other Firebase or Google Cloud service, no other project. |
+| `firebase/app-distribution-service-account` | Create another key. | Firebase App Distribution Admin is full read/write on that project's App Distribution: upload releases, add or remove testers and groups, and read tester emails (personal data), until the key is deleted in Google Cloud IAM. It also reads project metadata — the Firebase project, its registered apps, Resource Manager project get/list — but writes nothing outside App Distribution and reaches no other project ([role definition](https://cloud.google.com/iam/docs/roles-permissions/firebaseappdistro)). |
 
 ### iOS: Ad Hoc certificate and profile — fastlane `cert` / `sigh`, no `match`
 
