@@ -265,8 +265,17 @@ if [[ "$STRICT" == "yes" && "$TOOLS" == "no" ]]; then
   fi
 
   cap_gaps=""
+  env_namespaces="$(manifest_namespaces "$ENVIRONMENT")"
   while IFS=$'\t' read -r capability namespace path; do
     [[ -n "$capability" ]] || continue
+    # A requirement in a namespace this environment does not hold at all can
+    # never be satisfied here — above all `tools`, which belongs to no
+    # environment (GoGo-Infra#294, Sol F-01). Nothing lists it, so nothing
+    # marks it SKIPPED: it has to be a gap, or --strict reports READY unlooked.
+    if ! grep -qxF "$namespace" <<< "$env_namespaces"; then
+      cap_gaps+="  - ${capability} needs ${namespace}:${path}, in a namespace ${ENVIRONMENT} does not hold — fix the capability's requires:"$'\n'
+      continue
+    fi
     # A requirement in a namespace this identity could not read is unresolved,
     # not satisfied. The SKIPPED block below is what fails the run; naming it
     # here as well would report the same gap twice.
@@ -293,7 +302,11 @@ fi
 if [[ "${#skipped[@]}" -gt 0 ]]; then
   echo "SKIPPED (namespace or tags not readable by this identity):"
   printf '  - %s\n' "${skipped[@]}"
-  if [[ "$STRICT" == "yes" || "$TOOLS" == "yes" ]]; then
+  if [[ "$TOOLS" == "yes" ]]; then
+    echo "  For tools an unreadable /gogo/tools/ is always a failure: it is the only namespace,"
+    echo "  so nothing was checked. Re-run from the owner's SSO session (gogobootstrap)."
+    status=1
+  elif [[ "$STRICT" == "yes" ]]; then
     echo "  In --strict mode this is a failure. A readiness check that passes because it could"
     echo "  not look is the failure it exists to prevent. Re-run with an identity that can read"
     echo "  every namespace — a developer SSO session, not the deploy role."
