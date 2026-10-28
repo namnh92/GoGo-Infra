@@ -2,7 +2,7 @@
 // MANIFEST as #253 writes it, passed to observePrompt as `treeRoot`. The wrapper is a stand-in
 // unless a test copies the real files in.
 import { createHash } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { WRAPPER_CLOSURE } from '../../src/shadow/prompt-observation.ts';
 
@@ -11,7 +11,8 @@ export const CLOSURE = WRAPPER_CLOSURE;
 /** MANIFEST schema 2 (`files[path] = { sha256, exec }`) for `paths`, default the four closure files. */
 export function writeManifest(tree: string, paths: readonly string[] = CLOSURE): void {
   const files: Record<string, { sha256: string; exec: boolean }> = {};
-  for (const p of paths) files[p] = { sha256: createHash('sha256').update(readFileSync(join(tree, p))).digest('hex'), exec: p === CLOSURE[0] };
+  // The exec bit as found, like the launcher's buildManifest (#253 schema 2).
+  for (const p of paths) files[p] = { sha256: createHash('sha256').update(readFileSync(join(tree, p))).digest('hex'), exec: (statSync(join(tree, p)).mode & 0o100) !== 0 };
   writeFileSync(join(tree, 'MANIFEST'), `${JSON.stringify({ schema: 2, sha: 'f'.repeat(40), files }, null, 2)}\n`);
 }
 

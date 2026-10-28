@@ -297,6 +297,31 @@ describe('I6: only the verified closure of the running tree is executed (A-F-01,
     });
   }
 
+  // #260: #253 fixed MANIFEST at schema 2 with `{ sha256, exec }` entries; the hook reads only that
+  // shape, as the launcher does, and checks the exec bit too.
+  const manifestOf = (w: World) => JSON.parse(readFileSync(join(w.tree, 'MANIFEST'), 'utf8')) as { schema: unknown; files: Record<string, unknown> };
+  const rewrite = (w: World, edit: (m: { schema: unknown; files: Record<string, unknown> }) => void) => {
+    const m = manifestOf(w);
+    edit(m);
+    writeFileSync(join(w.tree, 'MANIFEST'), JSON.stringify(m));
+  };
+  for (const [name, edit] of [
+    ['bare-digest entries', (m) => { for (const [k, v] of Object.entries(m.files)) m.files[k] = (v as { sha256: string }).sha256; }],
+    ['no schema', (m) => { delete m.schema; }],
+    ['schema 1', (m) => { m.schema = 1; }],
+    ['an entry without exec', (m) => { delete (m.files[CLOSURE[1]] as { exec?: boolean }).exec; }],
+    ['the wrapper recorded as not executable', (m) => { (m.files[CLOSURE[0]] as { exec: boolean }).exec = false; }],
+    ['common.sh recorded as executable', (m) => { (m.files[CLOSURE[1]] as { exec: boolean }).exec = true; }],
+  ] as const satisfies ReadonlyArray<readonly [string, (m: { schema: unknown; files: Record<string, unknown> }) => void]>) {
+    it(`#260: a MANIFEST with ${name} → jev_wrapper_unverified`, async () => {
+      const w = world((x) => standInWrapper(x.stub, `touch '${join(x.dir, 'ran')}'\n`));
+      await grant(w, 'setup');
+      rewrite(w, edit);
+      const r = await hook(w, '#jev\nCó nên tách module?');
+      assert.deepEqual([r.record.code, r.sent.length, existsSync(join(w.dir, 'ran'))], ['jev_wrapper_unverified', 0, false]);
+    });
+  }
+
   it('[new-guard] a closure file that is a symlink to identical bytes → jev_wrapper_unverified', async () => {
     const w = world();
     await grant(w, 'setup');

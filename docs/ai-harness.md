@@ -497,8 +497,9 @@ privacy review + DPA for real prompts (#244) is not done, and the confirmation s
 - **What runs, checked before every send.** The wrapper closure is four files of the installed
   version: `scripts/secrets/exec-with.sh`, `scripts/secrets/common.sh`, `scripts/lib/manifest.py`,
   `config/secrets.manifest.yml`. Before the session call is taken, each must be listed in that
-  version's `MANIFEST`, be a regular file (no symlink) with the listed sha256, and the wrapper must
-  be executable: absent or unlisted is `jev_wrapper_missing`, anything else `jev_wrapper_unverified`.
+  version's `MANIFEST` (schema 2 only, `{ sha256, exec }` entries, as the launcher reads it; #260),
+  be a regular file (no symlink) with the listed sha256 and exec bit, and the wrapper must be
+  executable: absent or unlisted is `jev_wrapper_missing`, anything else `jev_wrapper_unverified`.
   Nothing chooses another wrapper — not the consent file, the environment or a flag — and a
   checkout has no `MANIFEST`, so it refuses. **Until #253 ships these four files in the install
   and its `MANIFEST` (owner decision D6), every send refuses with `jev_wrapper_missing`.**

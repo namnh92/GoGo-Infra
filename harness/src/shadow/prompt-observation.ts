@@ -141,18 +141,19 @@ type Readiness = 'ok' | 'jev_wrapper_missing' | 'jev_wrapper_unverified';
 
 /**
  * Whether `<root>/MANIFEST` lists the four closure files and each matches:
- * a regular file (no symlink), sha256 equal to its entry, the wrapper
- * executable. MANIFEST entries are #253's `{ sha256, exec }` or a bare
- * digest. Absent or unlisted is `missing`; anything else wrong is
- * `unverified`. Four small files, hashed before the session call and before
+ * a regular file (no symlink), sha256 and owner exec bit equal to its entry,
+ * the wrapper executable. Only #253's schema 2 is read: `{ schema: 2, files:
+ * { <path>: { sha256, exec } } }`, as the launcher reads it; the bare-digest
+ * form of the pre-#253 trial is gone (#260). Absent or unlisted is `missing`;
+ * anything else wrong is `unverified`. Four small files, hashed before the session call and before
  * the child's clock starts.
  */
 export function wrapperReady(root: string | null): Readiness {
   if (root === null) return 'jev_wrapper_missing';
   let files: Record<string, unknown>;
   try {
-    const manifest = JSON.parse(readFileSync(join(root, 'MANIFEST'), 'utf8')) as { files?: unknown };
-    if (typeof manifest.files !== 'object' || manifest.files === null) return 'jev_wrapper_unverified';
+    const manifest = JSON.parse(readFileSync(join(root, 'MANIFEST'), 'utf8')) as { schema?: unknown; files?: unknown };
+    if (manifest.schema !== 2 || typeof manifest.files !== 'object' || manifest.files === null) return 'jev_wrapper_unverified';
     files = manifest.files as Record<string, unknown>;
   } catch (e) {
     return (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'jev_wrapper_missing' : 'jev_wrapper_unverified';
@@ -160,8 +161,9 @@ export function wrapperReady(root: string | null): Readiness {
   for (const path of WRAPPER_CLOSURE) {
     const entry = files[path];
     if (entry === undefined) return 'jev_wrapper_missing';
-    const expected = typeof entry === 'string' ? entry : typeof entry === 'object' && entry !== null ? (entry as { sha256?: unknown }).sha256 : undefined;
-    if (typeof expected !== 'string') return 'jev_wrapper_unverified';
+    if (typeof entry !== 'object' || entry === null) return 'jev_wrapper_unverified';
+    const { sha256: expected, exec } = entry as { sha256?: unknown; exec?: unknown };
+    if (typeof expected !== 'string' || typeof exec !== 'boolean') return 'jev_wrapper_unverified';
     const file = join(root, path);
     let st;
     try {
@@ -169,7 +171,7 @@ export function wrapperReady(root: string | null): Readiness {
     } catch {
       return 'jev_wrapper_missing';
     }
-    if (!st.isFile()) return 'jev_wrapper_unverified';
+    if (!st.isFile() || ((st.mode & 0o100) !== 0) !== exec) return 'jev_wrapper_unverified';
     if (createHash('sha256').update(readFileSync(file)).digest('hex') !== expected) return 'jev_wrapper_unverified';
   }
   try {
