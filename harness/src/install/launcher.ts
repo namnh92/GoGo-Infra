@@ -380,14 +380,20 @@ export class Install {
   /**
    * Files 0444/0555 (by their exec bit) and directories 0555, or 0644/0755 and
    * 0755 when `writable`. Directories are opened before and closed after
-   * their contents; nothing is followed.
+   * their contents; nothing is followed. Only directories and leaves of this
+   * user are changed, and a leaf must be a regular file with one link: a hard
+   * link in a reused staging tree would otherwise change the mode of an inode
+   * outside the install (#253 S4-02, the file classes of I-2b).
    */
   setModeTree(rel: string, writable: boolean, top = true): void {
     const walk = (r: string, isTop: boolean) => {
       const abs = this.below(r);
       const st = fs.lstatSync(abs);
       if (st.isSymbolicLink()) throw new IntegrityError(`${r} is a symbolic link`);
+      if (st.uid !== uid()) throw new IntegrityError(`${r} in the install is not owned by this user`);
       if (!st.isDirectory()) {
+        if (!st.isFile()) throw new IntegrityError(`${r} in the install is a ${kindOf(st)}, not a regular file`);
+        if (st.nlink !== 1) throw new IntegrityError(`${r} in the install has ${st.nlink} hard links`);
         const exec = (st.mode & 0o100) !== 0;
         fs.chmodSync(abs, writable ? (exec ? 0o755 : 0o644) : exec ? 0o555 : 0o444);
         return;
