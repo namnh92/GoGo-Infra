@@ -37,7 +37,13 @@ Hard cut: `staging` and `production` are refused, not accepted as aliases (owner
 Environments become `stag` and `prod` (owner, Q3); the OIDC subjects follow (`environment:prod`).
 
 Out of scope, by definition not environments: `NODE_ENV`, Adjust `sandbox | production`, APNs
-`development | production`.
+`development | production`. Accepted non-environment words: `ci` (`/gogo/ci/<env>`, the pipeline
+tree) and `tools` (`/gogo/tools`, #294) — namespace selectors some scripts take opt-in, never a
+fourth environment. Deliberately kept: the JEV hard gate `deploy_staging` in
+`harness/src/policy/policy.ts` matches `stag` **and** `staging`, so a copied old command still
+gates (a gate only gets stricter). Not renamed, by design: prose in earlier ADRs (0004, 0005,
+0011 body) and historical handoffs — they describe the state at their date. The AC-2 grep of
+#286 reads against this list.
 
 ## Consequences
 

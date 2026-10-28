@@ -35,6 +35,12 @@ The GoGo-BE, GoGo-CMS and GoGo-MobileApp rows are the target of their own follow
 until each merges, that repo still reads its old vocabulary (`staging`/`production` in BE and CMS, the
 `stag → staging` map in Mobile). This repository is already on the new names.
 
+Two words are accepted by some scripts but are **not environments**: `ci` → `/gogo/ci/<env>`
+(the pipeline tree; `put.sh`, `get.sh`, `delete.sh` take it) and `tools` → `/gogo/tools` (developer
+tooling keys, GoGo-Infra#294; `exec-with.sh`, `put.sh`, `validate.sh` take it). Both are
+namespace selectors behind `require_env_arg … allow-ci | allow-tools`; a validator that copies the
+three-word domain above and refuses them breaks `put.sh ci` (see `secrets.md`).
+
 `staging`, `production`, `develop` and `product` are not environment names: scripts, Terraform and
 `seed-vps.sh` refuse them. `develop` is the integration branch only. Not covered (SDK or build
 vocabularies, not GoGo environments): `NODE_ENV` (`development | test | production`), Adjust

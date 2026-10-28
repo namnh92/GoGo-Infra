@@ -80,7 +80,7 @@ variable is declared by exactly one row. No key ever reaches the app.
 | Environment | Monthly cap (USD) | Roughly buys (Sonnet 5.5, D-1 assumptions) |
 | --- | --- | --- |
 | dev | **20** (proposed) | 1,000–2,000 turns: team testing and BE#713's eval |
-| staging | **20** (proposed) | same — created with the environment |
+| stag | **20** (proposed) | same — created with the environment |
 | prod | **150** (proposed, revisit after two weeks of real traffic) | 7,500–15,000 turns |
 
 Per-turn estimate behind it: ~6k input tokens (~4k system + guide, cacheable; ~2k history and
