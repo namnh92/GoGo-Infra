@@ -119,6 +119,13 @@ actions in one statement, sits in the permissions boundary, conditioned on the r
 alone (`metadata_only_principal_arns`), where the apply role cannot edit it. `boundary_role_keys`
 gains `readiness`.
 
+The boundary half denies `ssm:GetParameter*` as well as `kms:Decrypt` on the real key ARN — more
+than the shape asked for, kept by owner decision (Q5, #315): the role's own policy is a `gogo-*`
+policy the apply role may rewrite, and the boundary keeps the role metadata-only even if that
+policy is ever granted too much. It names the readiness role's ARN only; a boundary test pins that
+no Deny of decrypt or parameter reads names the deploy or monitor role, which decrypt their own
+trees legitimately.
+
 **Accepted:** `ssm:DescribeParameters` supports only `Resource: "*"` (A-F-03), so the role sees
 parameter **names** across the account and region; `ParameterFilters` are a query, not
 authorization. This account holds only `/gogo/*` and the owner's bootstrap parameters, names
@@ -133,6 +140,11 @@ Trust: GitHub OIDC, subject `environment:<env>` of GoGo-Infra. Least privilege i
 environment trust boundary, not isolation from other jobs with the same subject (ADR-0010).
 Rejected: widening `monitor` — its decrypt Allow would remain. D-4a (owner): the role lists
 `<env>/mobile/*`, names only.
+
+Approval (owner, Q4, #315): the `dev` GitHub Environment has a branch policy and no required
+reviewers or wait timer (read from the GitHub API on 2026-10-29), so the nightly job never waits for
+a person. If deploys to an environment ever need an approval, give the readiness check an
+environment of its own rather than lifting the deploy's protection to keep the nightly unattended.
 
 `validate.sh` lists each tree with `get-parameters-by-path` and, when that is refused, with
 `describe-parameters --parameter-filters Key=Path,Option=Recursive` (names, types, dates); once the
@@ -173,7 +185,9 @@ exit 2, which the step accepts) and `deploy-vps.sh` projects it:
   changes.
 - Files: `${DEPLOY_PATH}/ops/secrets-readiness.deploy.json` (0644, names only — the only file
   `ops/` keeps), the pair `${DEPLOY_PATH}/.deploys/<deploy_id>/{env,secrets-readiness.json}`
-  (0640; current and previous kept; host-only, outside `ops/`, because the env copies carry every
+  (0600 files in 0700 directories owned by the deploy account — the copy holds every secret the
+  running env file does, and no consumer needs group read: owner decision Q3, #315; current and
+  previous kept; host-only, outside `ops/`, because the env copies carry every
   value, including credentials since rotated out, and `ops/` is the tree mounted into the API —
   review of #315, open question 2), and `.deployed-id` / `.previous-id` beside `.deployed-revision` /
   `.previous-revision`. All of it is written in the remote command that writes
@@ -201,8 +215,12 @@ Readiness is read-only. `put.sh` and `delete-parameter` stay with the owner.
 - One command answers "is feature X ready on env Y" for metadata, nightly, with history in the
   artifacts. The CMS page (phase 2) reads the deployed projection through GoGo-BE.
 - The permissions boundary renders at 6,076 of IAM's 6,144 managed-policy characters with the
-  seven dev roles. To fit, its four four-read lists are written as `ssm:GetParameter*` — exactly
-  the same four actions. The next statement or role needs room made first.
+  seven dev roles — 68 to spare, a fit for today, not headroom. To fit, its four four-read lists
+  are written as `ssm:GetParameter*` (owner decision Q1, #315): today exactly the four actions;
+  in a Deny a wider match only denies more, so an action AWS adds under the prefix is denied too.
+  `boundary-iam-catalogue.test.sh` checks the SSM service reference and fails when the prefix
+  matches anything but those four, so such an addition is reviewed rather than absorbed; the
+  boundary test keeps the size limit. The next statement or role needs room made first.
 - Rollback restores an env file: a secret rotated after the deploy being rolled back to is undone
   until the next deploy renders SSM again. Accepted with D-6-B; the rollback output says so.
 - The nightly run is red until every declared row is stored or parked — by design.

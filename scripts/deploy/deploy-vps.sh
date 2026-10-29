@@ -30,7 +30,8 @@
 #   ${DEPLOY_PATH}/ops/secrets-readiness.deploy.json   the current projection
 #   ${DEPLOY_PATH}/.deploys/<deploy_id>/{env,secrets-readiness.json}
 #                                                     the pair, last two kept,
-#                                                     host-only (never under ops/)
+#                                                     host-only (never under ops/),
+#                                                     0600 files in 0700 directories
 #   ${DEPLOY_PATH}/.deployed-id, .previous-id          beside the revision markers
 #
 # All of it is written in the step that writes .deployed-revision — after the
@@ -373,10 +374,13 @@ echo "    ok"
 # deploy records as its rollback target (INF-148). The readiness projection and
 # the env/report pair move with it, in the same remote command (#309 D-6-B).
 if [[ -n "$deploy_id" ]]; then
-  remote "cd '${DEPLOY_PATH}' && set -e && umask 027 && mkdir -p '${PAIRS_DIR}' \
+  # The pair carries every value the running env file does: 0600 files in
+  # 0700 directories, owned by the deploy account; nothing needs group read.
+  remote "cd '${DEPLOY_PATH}' && set -e && umask 077 && mkdir -p '${PAIRS_DIR}' && chmod 700 '${PAIRS_DIR}' \
     && rm -rf '${PAIRS_DIR}/${deploy_id}' && mkdir '${PAIRS_DIR}/${deploy_id}' \
-    && install -m 640 '${REMOTE_ENV_FILE}' '${PAIRS_DIR}/${deploy_id}/env' \
-    && install -m 640 'ops/.incoming-${deploy_id}.json' '${PAIRS_DIR}/${deploy_id}/secrets-readiness.json' \
+    && chmod 700 '${PAIRS_DIR}/${deploy_id}' \
+    && install -m 600 '${REMOTE_ENV_FILE}' '${PAIRS_DIR}/${deploy_id}/env' \
+    && install -m 600 'ops/.incoming-${deploy_id}.json' '${PAIRS_DIR}/${deploy_id}/secrets-readiness.json' \
     && install -m 644 'ops/.incoming-${deploy_id}.json' 'ops/.secrets-readiness.deploy.json.new' \
     && mv -f 'ops/.secrets-readiness.deploy.json.new' '${READINESS_FILE}' && rm -f 'ops/.incoming-${deploy_id}.json' \
     && printf '%s' '${target}' > .deployed-revision && printf '%s' '${deploy_id}' > .deployed-id"

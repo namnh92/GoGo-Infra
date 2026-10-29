@@ -18,13 +18,20 @@
 # check that passes without a catalogue checks nothing.
 #
 # With no argument the script also proves itself: each mutation of the module
-# below must fail the check.
+# below must fail the check. It also checks the SSM service reference: the
+# boundary's ssm:GetParameter* must match exactly the four parameter reads
+# (GoGo-Infra#309).
 
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MODULE="${REPO_ROOT}/terraform/modules/aws-permissions-boundary"
 CATALOGUE_URL="https://servicereference.us-east-1.amazonaws.com/v1/iam/iam.json"
+# GoGo-Infra#309: the boundary denies the parameter reads as ssm:GetParameter*.
+# In a Deny a wider match only denies more, but the statements are reviewed as
+# "the four reads", so a fifth action under that prefix must be noticed.
+SSM_CATALOGUE_URL="https://servicereference.us-east-1.amazonaws.com/v1/ssm/ssm.json"
+SSM_GET_PARAMETER_ACTIONS="GetParameter GetParameterHistory GetParameters GetParametersByPath"
 
 for tool in curl jq terraform perl; do
   if ! command -v "$tool" >/dev/null 2>&1; then
@@ -65,6 +72,22 @@ fetch_catalogue() {
   jq -r "${JQ_DEFS}"' .Actions[] | select(((.Resources // []) | length) == 0) | select(mutation) | "    \(.Name)"' "$dest" | sort
 }
 
+# ssm_prefix_check <ssm.json>
+# The SSM actions ssm:GetParameter* matches must be exactly the four the
+# boundary statements were written for.
+ssm_prefix_check() {
+  local got
+  if ! jq -e '.Name == "ssm" and (.Actions | length) >= 100' "$1" >/dev/null 2>&1; then
+    echo "FAIL  $1 is not the SSM service reference (Name ssm, >= 100 actions)" >&2
+    return 1
+  fi
+  got="$(jq -r '.Actions[].Name | select(startswith("GetParameter"))' "$1" | sort | tr '\n' ' ' | sed 's/ $//')"
+  if [[ "$got" != "$SSM_GET_PARAMETER_ACTIONS" ]]; then
+    echo "FAIL  ssm:GetParameter* matches '${got}', not '${SSM_GET_PARAMETER_ACTIONS}' — review the boundary statements that use it" >&2
+    return 1
+  fi
+}
+
 # run_check <module-dir> <catalogue>
 # Renders the boundary offline (dummy provider, caller identity overridden)
 # and runs the catalogue assertions. Initialises the module when nothing has
@@ -100,6 +123,26 @@ failures=0
 
 CATALOGUE="${SCRATCH}/iam.json"
 fetch_catalogue "$CATALOGUE" || exit 1
+
+SSM_CATALOGUE="${SCRATCH}/ssm.json"
+if ! curl -sSfL --connect-timeout 10 --retry 5 --retry-delay 5 --retry-all-errors \
+    -o "$SSM_CATALOGUE" "$SSM_CATALOGUE_URL"; then
+  echo "FAIL  could not download the SSM service reference from ${SSM_CATALOGUE_URL}" >&2
+  exit 1
+fi
+if ssm_prefix_check "$SSM_CATALOGUE"; then
+  echo "  ok    ssm:GetParameter* matches exactly ${SSM_GET_PARAMETER_ACTIONS}"
+else
+  failures=$((failures + 1))
+fi
+# Self-test: a fifth action under the prefix must fail the check.
+jq '.Actions += [{"Name": "GetParameterVersions"}]' "$SSM_CATALOGUE" >"${SCRATCH}/ssm-plus.json"
+if ssm_prefix_check "${SCRATCH}/ssm-plus.json" 2>/dev/null; then
+  echo "  FAIL  the SSM prefix check passed a catalogue with a fifth GetParameter* action"
+  failures=$((failures + 1))
+else
+  echo "  ok    check refuses a fifth GetParameter* action"
+fi
 
 if run_check "$MODULE" "$CATALOGUE" >"${SCRATCH}/check.out" 2>&1; then
   echo "  ok    boundary: iam:* denied outside the environment; the OIDC provider read-only; every non-read catalogue action denied on a probe outside gogo-dev-*"

@@ -129,10 +129,12 @@ that, the provider exception is exactly the catalogue's two reads, and every non
 matched by an unconditional Deny on a probe resource of each of its types outside the
 environment. A failed download fails the test. `tests/boundary.tftest.hcl` also measures the
 rendered document against IAM's 6,144-character managed-policy limit with every role dev declares
-(6,076 with the seven dev roles and the #309 statement below; each known role costs two ARNs,
-about 100 characters). To stay under it, the four statements that deny the four parameter reads
-write them as `ssm:GetParameter*`, which matches exactly `GetParameter`, `GetParameters`,
-`GetParametersByPath` and `GetParameterHistory` (GoGo-Infra#309).
+(6,076 with the seven dev roles and the #309 statement below — 68 to spare; each known role costs
+two ARNs, about 100 characters). To stay under it, the four statements that deny the four
+parameter reads write them as `ssm:GetParameter*`, which matches exactly `GetParameter`,
+`GetParameters`, `GetParametersByPath` and `GetParameterHistory` (GoGo-Infra#309, owner decision
+Q1). In a Deny a wider match only denies more; `scripts/ci/boundary-iam-catalogue.test.sh` also
+reads the SSM service reference and fails if the prefix ever matches a fifth action.
 
 With `ssm_env` set, `SsmReadsStayInEnvironment` limits reads to `/gogo/<env>/*` and
 `/gogo/ci/<env>/*`, and `SsmWritesAreBootstrapOnly` denies every parameter write to every capped

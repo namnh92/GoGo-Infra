@@ -143,10 +143,11 @@ if [[ "$(env_id "${SB}/host/.env.dev")" == "$ID_B" && "$(env_id "$(pair "$ID_B")
 else
   fail "the env file and the pair do not carry the deploy id"
 fi
-if [[ "$(mode "$(pair "$ID_B")/env")" == 640 && "$(mode "$(pair "$ID_B")/secrets-readiness.json")" == 640 ]]; then
-  pass "the pair is 0640"
+if [[ "$(mode "$(pair "$ID_B")/env")" == 600 && "$(mode "$(pair "$ID_B")/secrets-readiness.json")" == 600 \
+      && "$(mode "$(pair "$ID_B")")" == 700 && "$(mode "${SB}/host/.deploys")" == 700 ]]; then
+  pass "the pair is 0600 files in 0700 directories (owner decision Q3)"
 else
-  fail "the pair is not 0640 ($(mode "$(pair "$ID_B")/env"))"
+  fail "the pair modes: env $(mode "$(pair "$ID_B")/env"), dir $(mode "$(pair "$ID_B")"), .deploys $(mode "${SB}/host/.deploys")"
 fi
 if [[ "$(env_id "${SB}/gogo.env")" == "" ]]; then
   pass "the rendered file the caller passed is left unchanged"

@@ -495,7 +495,8 @@ so UNKNOWN by design) and `deploy-vps.sh` leaves a projection of it — the back
 fields by allowlist — at `${DEPLOY_PATH}/ops/secrets-readiness.deploy.json`, with
 `deploy_id = <commit>-<run id>-<run attempt>`, the same value it writes into the env file as
 `APP_DEPLOY_ID`. The env file and the report are kept as a pair per deploy under
-`${DEPLOY_PATH}/.deploys/<deploy_id>/` — host-only, never under the `ops/` the API mounts — the
+`${DEPLOY_PATH}/.deploys/<deploy_id>/` — host-only, 0600 files in 0700 directories, never under
+the `ops/` the API mounts — the
 current and the previous one; a rollback restores both, and the collector overlay follows the
 restored env file. The ci, tools and mobile inventory never
 leaves GitHub. The projection is a dated snapshot of one deploy, not a live view of SSM.

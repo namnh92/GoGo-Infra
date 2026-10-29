@@ -359,6 +359,37 @@ run "document_fits_the_managed_policy_limit_with_every_dev_role" {
   }
 }
 
+# Owner decision Q5 (#315): the metadata-only Deny binds the readiness role
+# and nothing else. With deploy and monitor declared beside it, no statement
+# conditioned on aws:PrincipalArn equal to either denies them kms:Decrypt or a
+# parameter read — they decrypt their own trees legitimately.
+run "metadata_only_deny_leaves_deploy_and_monitor_alone" {
+  command = plan
+  variables {
+    known_role_names = ["gogo-dev-plan", "gogo-dev-apply", "gogo-dev-monitor", "gogo-dev-deploy", "gogo-dev-readiness"]
+  }
+  assert {
+    condition = length([
+      for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
+      if s.Effect == "Deny"
+      && length(setintersection(toset(flatten([try(s.Action, [])])), toset(["kms:Decrypt", "ssm:GetParameter*", "ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"]))) > 0
+      && length(setintersection(toset(flatten([try(s.Condition.ArnEquals["aws:PrincipalArn"], [])])), toset([
+        "arn:aws:iam::111122223333:role/gogo-dev-deploy",
+        "arn:aws:iam::111122223333:role/gogo-dev-monitor",
+      ]))) > 0
+    ]) == 0
+    error_message = "no Deny of decrypt or parameter reads may name the deploy or monitor role"
+  }
+  assert {
+    condition = length([
+      for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
+      if s.Sid == "MetadataOnlyNeverReadsOrDecrypts"
+      && toset(flatten([try(s.Condition.ArnEquals["aws:PrincipalArn"], [])])) == toset(["arn:aws:iam::111122223333:role/gogo-dev-readiness"])
+    ]) == 1
+    error_message = "MetadataOnlyNeverReadsOrDecrypts must name the readiness role alone"
+  }
+}
+
 run "no_metadata_only_role_means_no_309_statements" {
   command = plan
   variables {
