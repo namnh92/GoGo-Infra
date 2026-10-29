@@ -22,6 +22,13 @@ in command output. Generated file is mode 0600 and replaced atomically.
 
 ## Store-dependent acceptance
 
+**Prod only (owner 2026-10-29, GoGo-Infra#308).** dev and stag ship through Firebase App
+Distribution, never a store, so the click → store → install → deferred deep link path cannot run
+there. Anything that needs a store link — the tracking URL template (`backend:tenjin/tracking-url-template`,
+declared `environments: [prod]`), the Worker's `tenjin_tracking_template`, a store URL used as
+`share_fallback_url` — is configured for prod only. The Tenjin SDK and its per-app SDK keys still
+run in every environment.
+
 Owner confirmed 2026-09-05: App Store Connect app has not been created; store
 URLs are not yet available. Keep URLs absent, never manufacture a listing.
 SDK initialization/connection and native build can be tested independently.

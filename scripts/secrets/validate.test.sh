@@ -442,9 +442,9 @@ else bad "tools: an empty /gogo/tools/ must fail" "rc=$rc $out"; fi
 printf 'stag\nprod\n' > "${WORK}/empty_envs"
 
 # dev: an optional row declared for dev and not stored.
-echo "tenjin/tracking-url-template" > "${WORK}/absent"
+echo "privacy-export/wrapping-key-active" > "${WORK}/absent"
 out="$(run dev --strict)"; rc=$?
-if [[ $rc -ne 0 && "$out" == *"DECLARED, NOT STORED"* && "$out" == *"tenjin/tracking-url-template"* && "$out" != *"READY:"* ]]; then
+if [[ $rc -ne 0 && "$out" == *"DECLARED, NOT STORED"* && "$out" == *"privacy-export/wrapping-key-active"* && "$out" != *"READY:"* ]]; then
   ok "dev --strict: a declared optional row with no value is DECLARED, NOT STORED and fails"
 else bad "dev --strict must fail on a declared-absent optional row" "rc=$rc $out"; fi
 out="$(run dev)"; rc=$?
