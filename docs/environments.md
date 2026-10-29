@@ -504,6 +504,20 @@ the spend gauge over the next hour. If it rises beyond what was already reserved
 `refused_budget` is not climbing while traffic continues, the BE refusal is not working: disable
 `gogo_ai_anthropic_<env>` in OpenRouter (the hard stop), then switch `assistant.enabled` off.
 
+## Secrets readiness, nightly (GoGo-Infra#309)
+
+`secrets-readiness.yml` checks every night, at 01:00 UTC beside the quota check, that what SSM holds
+for an environment equals what the manifest declares for it, and that the tools tree is complete:
+`validate.sh <env> --strict --report` and `validate.sh tools --strict --report`, run as the
+metadata-only role `gogo-<env>-readiness` (names, types, dates, tags — never a value). The run
+summary has one line per capability; the reports are artifacts for 90 days. A red run is the
+measurement: a row declared and not stored, stored and not declared, parked, retired, of the
+wrong type or unread. DEV runs today; stag and prod join the matrix when their environments exist
+(#307, #293). Each deploy also leaves its own snapshot of the backend rows on the host
+(`ops/secrets-readiness.deploy.json`), which GoGo-BE reports (phase 2, GoGo-BE#727). Details:
+`docs/secrets.md` → *Readiness*, ADR-0016; what to do with each state:
+`docs/runbooks/secrets-readiness.md`.
+
 ## Terraform state
 
 One bucket, one key per environment:
