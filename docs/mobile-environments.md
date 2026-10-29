@@ -88,7 +88,9 @@ In-App Purchase do Apple bật mặc định trên mọi App ID.
 2. **Vân tay keystore** — bước 5 của cùng runbook:
    - SHA-1 → Google Cloud → key `google/maps-android-api-key` của dev → thêm `max.gogo.dev` + SHA-1. Ghi vào
      accounts.md → *App identity*.
-   - SHA-256 → PR thêm vào `config/well-known/dev/assetlinks.json` (agent mở PR khi owner đưa vân tay; vân tay là public).
+   - SHA-256 → thêm vào `ANDROID_SIGNING_SHA256_DEV` (danh sách, dấu phẩy), render lại `config/well-known/dev/assetlinks.json`,
+     merge PR, rồi **dán file vào biến `ASSETLINKS` của Worker trên Cloudflare** — merge không tự cập nhật Worker
+     (GoGo-Infra#172). Xong 2026-10-29: PR #306 + biến Cloudflare, file serve khớp hash với `develop`.
 3. **OneSignal `GoGo Development` — FCM.** Kiểm tra app đã có FCM V1 chưa. Chưa thì: Google Cloud, project `gogo-dev`
    → service account JSON cho FCM V1 theo hướng dẫn của OneSignal (Firebase → Project settings → Service accounts →
    Generate new private key; **không** dùng key của SA `app-distribution`) → upload lên OneSignal → Settings → Push

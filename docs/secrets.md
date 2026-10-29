@@ -789,9 +789,14 @@ environment (`dev`, then `stag`). `put.sh` for these environments asks no confir
    - **SHA-256 → App Links (dev only).** Append it to `ANDROID_SIGNING_SHA256_DEV` in `config/bootstrap.env`
      (comma-separated, after the debug fingerprint), re-run `./scripts/deploy/render-well-known.sh dev`, and
      commit the regenerated `config/well-known/dev/assetlinks.json` in a PR — never hand-edit the file, the
-     next render would drop the entry; the merge to `develop` triggers `terraform-apply-dev.yml`, which
-     serves the file from the share-link Worker, so the Firebase dev build verifies `go-dev.gogo.id.vn`. `stag` claims no
-     links, so stag has no file.
+     next render would drop the entry. **The merge does not reach the Worker**: binding values belong to
+     Cloudflare (GoGo-Infra#172, `ignore_changes = [bindings]`), so the repo file is only the value a new
+     script is created with. After the merge, paste the merged file into Cloudflare → Workers & Pages →
+     `gogo-dev-share-link` → Settings → Variables → `ASSETLINKS` → Deploy
+     ([module README](../terraform/modules/cloudflare-worker/README.md#binding-values-belong-to-cloudflare-gogo-infra172)),
+     then confirm the served copy matches: `curl -s https://go-dev.gogo.id.vn/.well-known/assetlinks.json | shasum -a 256`
+     against `shasum -a 256 config/well-known/dev/assetlinks.json`. Done this way 2026-10-29 (GoGo-Infra#306).
+     `stag` claims no links, so stag has no file.
 
 6. **Check:** `./scripts/secrets/validate.sh dev --strict --include-planned` — both
    `firebase_distribution_*` capabilities complete.
@@ -803,15 +808,15 @@ environment (`dev`, then `stag`). `put.sh` for these environments asks no confir
 - **Service account key:** add a new key, store it, distribute once, delete the old key in Google Cloud
   IAM (kill switch). Removing the role also stops it.
 - **Keystore, routine rollover** (expiry, a new machine): a new keystore is a new signature. Store the
-  four rows, add the new SHA-1 to the Maps restriction (and the new SHA-256 to
-  `config/well-known/dev/assetlinks.json` for dev), tell testers to uninstall and reinstall. The old
+  four rows, add the new SHA-1 to the Maps restriction (and, for dev, the new SHA-256 to the list,
+  re-rendered and pasted into the Worker as in step 5), tell testers to uninstall and reinstall. The old
   fingerprints may stay until no tester still runs a build signed with the old key, then remove them.
 - **Keystore, compromised** (the file and its password may be in someone else's hands): everything
   above, and **remove the old fingerprints at once** — they are the trust an attacker-signed app
   would inherit. Delete the old SHA-1 from the Maps key's Android-app restriction, delete the old
-  SHA-256 from `config/well-known/dev/assetlinks.json` in a PR — once it merges to `develop`,
-  `terraform-apply-dev.yml` applies `config/well-known/**` into the share-link Worker
-  (`modules/cloudflare-worker` reads it with `file()`), and `go-dev.gogo.id.vn` stops vouching for
+  SHA-256 from `ANDROID_SIGNING_SHA256_DEV`, re-render and merge `config/well-known/dev/assetlinks.json`,
+  then paste it into the Worker's `ASSETLINKS` variable on Cloudflare (step 5 above — Terraform does not
+  write bindings after creation, GoGo-Infra#172); only then does `go-dev.gogo.id.vn` stop vouching for
   the old key; confirm by fetching `https://go-dev.gogo.id.vn/.well-known/assetlinks.json` — and record the rotation on GoGo-Infra#271. Testers who
   keep a build signed with the old key lose Maps and verified links on it — that is the point.
 - **Distribution certificate:** shared with prod — revoke only to replace a compromised one, and
