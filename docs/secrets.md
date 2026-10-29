@@ -287,7 +287,9 @@ extra — and the manifest has the words to say which is which.
 - **`lifecycle: parked`**. The row keeps its place and its documentation, but is declared for
   *no* environment: no listing emits it, nothing validates, writes (`put.sh`), hands out
   (`exec-with.sh`), renders or rotates it — `put.sh` refuses it even with an explicit type or
-  `GOGO_ALLOW_UNDECLARED=1`, and refuses a retired path the same way. A capability that
+  `GOGO_ALLOW_UNDECLARED=1`; both SSM writers check the resolved full name (including
+  environment-qualified `ci` paths), refusing parked or retired destinations unless that
+  same full name has an active declaration. A capability that
   `requires:` a parked row keeps its `enabled`/`planned` state and is **not ready**:
   `validate.sh --strict` names the dependency as parked (#309 D-1 `dependency-parked`). A parked
   row is never `required` (the reader refuses the manifest). For a feature

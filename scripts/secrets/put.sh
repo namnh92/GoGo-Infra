@@ -50,22 +50,11 @@ require_env_arg "$ENVIRONMENT" allow-ci allow-tools
 # round trip to be reported.
 PARAM_TYPE="${positional[2]:-}"
 
-# A parked row or a retired path is known to the manifest and forbidden here —
-# not undeclared. Refused before the explicit-type shortcut and before the
-# GOGO_ALLOW_UNDECLARED escape below, which exist for paths the manifest does
-# not know at all (Astra A-F-02, #308). awk reads to the end: an early `exit`
-# under pipefail can kill the reader with BrokenPipe (see param_namespace).
-lifecycle_here="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace all --consumer all --include-parked --field lifecycle \
-  | awk -F'\t' -v p="$PARAM_PATH" '$1 == p && !seen { print $7; seen = 1 }')"
-if [[ "$lifecycle_here" == "parked" ]]; then
-  die "'${PARAM_PATH}' is parked in config/secrets.manifest.yml: declared for no environment.
-       Un-park it (delete its lifecycle: line) in the change that starts using it, then write it."
-fi
-if [[ -z "$lifecycle_here" ]] \
-   && python3 "$MANIFEST_READER" "$ENVIRONMENT" --retired | awk -F'\t' -v p="$PARAM_PATH" '$1 == p { found = 1 } END { exit !found }'; then
-  die "'${PARAM_PATH}' is retired in config/secrets.manifest.yml: it must stay absent.
-       If it is needed again, add it back under parameters: (and remove it from retired:) first."
-fi
+# Resolve before checking lifecycle: `ci dev/<path>` writes an env-qualified
+# name, and an active row in another namespace does not make that name writable.
+PARAM_NAMESPACE="$(param_namespace "$PARAM_PATH" "$ENVIRONMENT")"
+full_path="$(ssm_prefix "$ENVIRONMENT" "${PARAM_NAMESPACE:-backend}")/${PARAM_PATH}"
+require_writable_destination "$full_path"
 
 # Eligibility comes from the manifest only. GOGO_ALLOW_UNDECLARED below never
 # grants it: an undeclared path has no `infra_readable: true` to read.
@@ -128,13 +117,6 @@ fi
 # a call aimed at the wrong one is stopped before a secret has been typed into
 # it. The answer comes from the terminal, not from stdin (common.sh).
 confirm_prod "$ENVIRONMENT" "write ${PARAM_PATH}"
-
-# The manifest decides which namespace this path lives in, not the caller.
-# An undeclared path falls back to `backend`, which is where it would have gone
-# before namespaces existed and is the only namespace the confirmation above
-# describes.
-PARAM_NAMESPACE="$(param_namespace "$PARAM_PATH" "$ENVIRONMENT")"
-full_path="$(ssm_prefix "$ENVIRONMENT" "${PARAM_NAMESPACE:-backend}")/${PARAM_PATH}"
 
 hint="$(param_hint "$PARAM_PATH")"
 [[ -n "$hint" ]] && echo "       ${hint}"

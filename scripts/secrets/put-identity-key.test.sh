@@ -189,6 +189,35 @@ for bad in public encrypted rest-api-key; do
   fi
 done
 
+# A retired identity row must not be recreated by the backend fallback.
+MUTATED="${SANDBOX}/retired-identity"
+mkdir -p "$MUTATED"
+cp -R "${DIR}/../../scripts" "${DIR}/../../config" "$MUTATED/"
+python3 - "$MUTATED/config/secrets.manifest.yml" <<'PYTHON'
+import re
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+text, count = re.subn(
+    r"  - path: onesignal/identity-verification-key\n(?:(?:    [^\n]*|)\n)*",
+    "", text,
+)
+assert count == 1
+text = text.replace("\nretired:\n", "\nretired:\n  - path: onesignal/identity-verification-key\n    since: 2026-10-29\n    reason: writer lifecycle regression\n")
+open(path, "w", encoding="utf-8").write(text)
+PYTHON
+original_script="$SCRIPT"
+SCRIPT="${MUTATED}/scripts/secrets/put-identity-key.sh"
+: >"$CALLS"
+out="$(run "${KEYS}/p256-sec1.pem" dev)"
+status=$?
+if [[ $status -ne 0 && ! -s "$CALLS" && "$out" == *"is retired in config/secrets.manifest.yml"* ]]; then
+  pass "a retired identity destination is refused before any AWS call"
+else
+  fail "a retired identity destination is refused before any AWS call"
+fi
+SCRIPT="$original_script"
+
 # --- wrong AWS account -------------------------------------------------------
 
 echo "000000000000" >"$STUB_ACCOUNT_FILE"

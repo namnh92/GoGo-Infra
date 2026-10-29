@@ -141,6 +141,27 @@ ${out}"
   fi
 }
 
+# Both SSM writers check the resolved name before calling AWS. A suffix can
+# belong to an active tools row and a retired ci entry at once.
+forbidden_destination() {
+  python3 -I "$MANIFEST_READER" dev --destination-lifecycle "$1"
+}
+
+require_writable_destination() {
+  local destination="$1" reason
+  reason="$(forbidden_destination "$destination")" || die "could not check destination lifecycle"
+  case "$reason" in
+    parked)
+      die "'${destination}' is parked in config/secrets.manifest.yml: declared for no environment.
+       Un-park it (delete its lifecycle: line) in the change that starts using it, then write it."
+      ;;
+    retired)
+      die "'${destination}' is retired in config/secrets.manifest.yml: it must stay absent.
+       If it is needed again, add it back under parameters: (and remove it from retired:) first."
+      ;;
+  esac
+}
+
 # Every namespace the manifest declares, one per line.
 manifest_namespaces() {
   local env="${1:-dev}"

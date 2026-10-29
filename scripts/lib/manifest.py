@@ -28,6 +28,10 @@ Usage:
                                          `lifecycle: parked` (GoGo-Infra#308).
                                          Parked rows are emitted by nothing
                                          otherwise, for any environment
+    manifest.py <env> --destination-lifecycle <name>
+                                         Print parked/retired for a full SSM name;
+                                         empty if writable, independent of <env>.
+
     manifest.py <env> --retired          Rows of the `retired:` block that apply
                                          to the env's trees: "path<TAB>namespace<TAB>since".
                                          A retired row must be absent from SSM
@@ -274,6 +278,29 @@ def declared_in(entry, env):
     return env in entry["environments_list"]
 
 
+def destination_lifecycle(name):
+    """Match SSM names, not suffixes: the ci selector can carry an env prefix."""
+    def names(row, retired=False):
+        namespace = row.get("namespace", "backend")
+        if namespace == "tools":
+            return {"/gogo/tools/" + row["path"]}
+        environments = ENVIRONMENTS if retired else row["environments_list"]
+        return {
+            (f"/gogo/ci/{env}/" if namespace == "ci" else f"/gogo/{env}/{namespace}/")
+            + row["path"] for env in environments
+        }
+
+    rows = parse()
+    # Only an active declaration at this exact destination takes precedence.
+    if any(row["lifecycle"] == "active" and name in names(row) for row in rows):
+        return ""
+    if any(row["lifecycle"] == "parked" and name in names(row) for row in rows):
+        return "parked"
+    if any(name in names(row, retired=True) for row in parse("retired")):
+        return "retired"
+    return ""
+
+
 def main():
     if len(sys.argv) < 2:
         sys.stderr.write(__doc__)
@@ -298,6 +325,16 @@ def main():
     include_parked = "--include-parked" in args
 
     try:
+        if "--destination-lifecycle" in args:
+            index = args.index("--destination-lifecycle")
+            if index + 1 >= len(args):
+                sys.stderr.write("--destination-lifecycle needs a full SSM name\n")
+                return 2
+            reason = destination_lifecycle(args[index + 1])
+            if reason:
+                sys.stdout.write(reason + "\n")
+            return 0
+
         if "--capabilities" in args:
             for cap in capabilities(env, include_planned):
                 sys.stdout.write(

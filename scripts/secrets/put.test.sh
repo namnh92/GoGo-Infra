@@ -274,19 +274,19 @@ fi
 : >"$CALLS"
 printf '1234567' | PATH="${SANDBOX}:${PATH}" AWS_PROFILE=stub "$SCRIPT" dev github/agent-app-id >"${SANDBOX}/out" 2>&1
 status=$?
-# Since GoGo-Infra#308 the old /gogo/ci/dev/ copy of this path is retired, so the
-# refusal names that, which is the more precise reason; either way nothing is written.
-if [[ $status -ne 0 ]] && ! grep -q put-parameter "$CALLS" && grep -q "is retired in config/secrets.manifest.yml" "${SANDBOX}/out"; then
-  ok "tools: a tool row is not writable for a real environment (its old ci path is retired)"
+# This resolves to an undeclared backend name, not the retired ci copy.
+if [[ $status -ne 0 ]] && ! grep -q put-parameter "$CALLS" && grep -q "refusing to write an undeclared parameter" "${SANDBOX}/out"; then
+  ok "tools: a tool row needs the undeclared override for a real environment"
 else
-  bad "tools: a tool row is not writable for a real environment (its old ci path is retired)" "exit ${status}: $(cat "${SANDBOX}/out")"
+  bad "tools: a tool row needs the undeclared override for a real environment" "exit ${status}: $(cat "${SANDBOX}/out")"
 fi
 
 # Astra A-F-02 (#308): a parked row or a retired path is known and forbidden, not
 # undeclared — neither an explicit type nor GOGO_ALLOW_UNDECLARED=1 may write it,
 # and nothing reaches AWS.
 for case in "dev cost/ledger-enabled String|parked" "dev assistant/model String|retired" \
-            "tools ai-harness/anthropic-api-key SecureString|retired" "dev github/agent-app-id String|retired"; do
+            "tools ai-harness/anthropic-api-key SecureString|retired" "ci dev/github/agent-app-id String|retired" \
+            "ci dev/ai-harness/openrouter-api-key String|retired"; do
   args="${case%|*}"; word="${case#*|}"
   : >"$CALLS"
   # shellcheck disable=SC2086 # args is a fixed word list above
@@ -299,6 +299,30 @@ for case in "dev cost/ledger-enabled String|parked" "dev assistant/model String|
     bad "A-F-02: put.sh ${args} must be refused as ${word}" "exit ${status}; calls: $(tr '\n' ';' <"$CALLS"); $(cat "${SANDBOX}/out")"
   fi
 done
+# Every real environment's ci slice is retired, regardless of the selector.
+for env in dev stag prod; do
+  refuses "ci: ${env} retired GitHub destination" "is retired in config/secrets.manifest.yml" \
+    ci "${env}/github/agent-app-id" String
+  refuses "${env}: parked backend destination" "is parked in config/secrets.manifest.yml" \
+    "$env" cost/ledger-enabled
+  refuses "${env}: retired backend destination" "is retired in config/secrets.manifest.yml" \
+    "$env" assistant/model String
+done
+
+run ci dev/terraform/read/cloudflare-token SecureString
+if [[ $? -eq 0 ]] && [[ "$(request_field Name)" == /gogo/ci/dev/terraform/read/cloudflare-token ]]; then
+  ok "A-F-02: a qualified active ci destination is writable"
+else
+  bad "A-F-02: a qualified active ci destination must write" "$(cat "${SANDBOX}/out")"
+fi
+
+run dev github/agent-app-id String
+if [[ $? -eq 0 ]] && [[ "$(request_field Name)" == /gogo/dev/backend/github/agent-app-id ]]; then
+  ok "A-F-02: a retired ci suffix does not forbid a different backend destination"
+else
+  bad "A-F-02: lifecycle must compare full names" "$(cat "${SANDBOX}/out")"
+fi
+
 # ...while the same path declared active elsewhere still writes: the tools row
 # github/agent-app-id is retired only under ci.
 : >"$CALLS"
