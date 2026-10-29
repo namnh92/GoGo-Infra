@@ -46,7 +46,7 @@ output "cms_deploy_role_arn" {
 }
 
 output "readiness_role_arn" {
-  description = "Role the nightly secrets readiness check assumes (GoGo-Infra#309). Set as AWS_READINESS_DEV_ROLE_ARN."
+  description = "Role the nightly secrets readiness check assumes (GoGo-Infra#309). Set as the variable AWS_READINESS_ROLE_ARN of the dev GitHub Environment."
   value       = module.github_oidc.role_arns["readiness"]
 }
 

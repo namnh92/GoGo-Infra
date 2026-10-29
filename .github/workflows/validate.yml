@@ -326,6 +326,12 @@ jobs:
       - name: render-env aborts on an unreadable optional parameter
         run: ./scripts/deploy/render-env.test.sh
 
+      # GoGo-Infra#309 D-6-B. The report the API reads on the host must always
+      # describe the configuration its containers were started with: written
+      # only after verification, restored with the code on rollback.
+      - name: the readiness projection follows the deployed configuration
+        run: ./scripts/deploy/readiness-projection.test.sh
+
       # GoGo-Infra#271 AC-6. Dev is signed by two keystores (debug, Firebase);
       # assetlinks.json must name both, and prod must never reuse a dev one.
       - name: render-well-known renders every listed fingerprint
@@ -358,6 +364,12 @@ jobs:
         run: ./scripts/ci/cms-access-from-ssm.test.sh
       - name: Terraform reads two named parameters and nothing else
         run: ./scripts/ci/infra-readable-iam.test.sh
+      # GoGo-Infra#309 D-4 / ADR-0016. The readiness role reads metadata only;
+      # this pins how the environment wires it (key ARN, one attachment,
+      # boundary statement, known role). The documents themselves are pinned
+      # by the two modules' terraform tests above.
+      - name: the readiness role is metadata-only and wired once
+        run: ./scripts/ci/readiness-iam.test.sh
 
       # INF-070. The value this script moves must never reach Terraform, a file,
       # an environment variable or a log, and the only way to keep that true is
