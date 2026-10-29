@@ -503,6 +503,73 @@ if [[ "$out" == *"ci:store/play-service-account"* ]]; then
   ok "prod --include-planned still names the Play row through store_release_android"
 else bad "prod must still name the Play row" "$out"; fi
 
+# --- GoGo-Infra#308 Sol round 1 ----------------------------------------------
+#
+# A mutated copy of the tree per case, like F-01 above: the shipped manifest
+# cannot express these states.
+mutated_tree() { # mutated_tree <dir> <python body editing `text`>
+  rm -rf "$1"; mkdir -p "$1"
+  cp -R "${ROOT}/scripts" "${ROOT}/config" "$1/"
+  python3 - "$1/config/secrets.manifest.yml" "$2" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+exec(sys.argv[2])
+open(path, "w", encoding="utf-8").write(text)
+PY
+}
+
+# F-01: a manifest the reader refuses must stop every caller, not read as "no
+# rows" through process substitution. Before the fix render-env.sh wrote an env
+# file with nothing in it and exited 0.
+MUT1="${WORK}/f01"
+mutated_tree "$MUT1" 'assert text.count("\nretired:\n") == 1
+text = text.replace("\nretired:\n", "\nretired:\n  - path: database/url\n    since: 2026-10-29\n    reason: contradiction probe\n")'
+out="$(MANIFEST_READER="${MUT1}/scripts/lib/manifest.py" PATH="${WORK}:${PATH}" AWS_PROFILE=test \
+  "${MUT1}/scripts/secrets/validate.sh" dev 2>&1)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"not usable"* && "$out" == *"listed under retired: and still declared"* && "$out" != *"OK: dev"* ]]; then
+  ok "F-01: validate.sh refuses a contradictory manifest and says why"
+else bad "F-01: validate.sh must refuse a contradictory manifest with the reason" "rc=$rc $out"; fi
+rm -f "${WORK}/f01.env"
+out="$(PATH="${WORK}:${PATH}" AWS_PROFILE=test "${MUT1}/scripts/deploy/render-env.sh" dev "${WORK}/f01.env" 2>&1)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"not usable"* && ! -e "${WORK}/f01.env" ]]; then
+  ok "F-01: render-env.sh aborts on a contradictory manifest and writes no env file"
+else bad "F-01: render-env.sh must abort before rendering" "rc=$rc file=$([[ -e "${WORK}/f01.env" ]] && echo written || echo none) $out"; fi
+out="$(PATH="${WORK}:${PATH}" AWS_PROFILE=test "${MUT1}/scripts/secrets/exec-with.sh" dev database/url -- true 2>&1)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"not usable"* ]]; then
+  ok "F-01: exec-with.sh (through common.sh) refuses a contradictory manifest"
+else bad "F-01: exec-with.sh must refuse a contradictory manifest" "rc=$rc $out"; fi
+
+# F-02: a namespace with no active row is still listed. All mobile rows scoped
+# to dev, plus a retired mobile path: stag has nothing active under mobile, and
+# both a stored dev-only row and a stored retired path must still be found.
+MUT2="${WORK}/f02"
+mutated_tree "$MUT2" 'n = text.count("    namespace: mobile\n")
+assert n >= 1
+text = text.replace("    namespace: mobile\n", "    namespace: mobile\n    environments: [dev]\n")
+text = text.replace("\nretired:\n", "\nretired:\n  - path: legacy/old-key\n    namespace: mobile\n    since: 2026-10-29\n    reason: F-02 probe\n")'
+printf 'prod\n' > "${WORK}/empty_envs"
+printf '/gogo/stag/mobile/legacy/old-key\n/gogo/stag/mobile/sentry/dsn\n' > "${WORK}/extra_present"
+out="$(MANIFEST_READER="${MUT2}/scripts/lib/manifest.py" PATH="${WORK}:${PATH}" AWS_PROFILE=test \
+  "${MUT2}/scripts/secrets/validate.sh" stag 2>&1)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"RETIRED, STILL STORED (in /gogo/stag/mobile"* && "$out" == *"legacy/old-key"* \
+      && "$out" == *"UNDECLARED (in /gogo/stag/mobile"* && "$out" == *"sentry/dsn"* ]]; then
+  ok "F-02: a namespace with no active row is still listed, and what is stored there is reported"
+else bad "F-02: a namespace holding only scoped-away/retired rows must still be validated" "rc=$rc $out"; fi
+: > "${WORK}/extra_present"
+printf 'stag\nprod\n' > "${WORK}/empty_envs"
+
+# F-03: an unread namespace contributes nothing to "stored of declared"; the
+# line says how much was not looked at instead of reading it as not stored.
+echo "/gogo/ci/dev" > "${WORK}/deny"
+out="$(run dev)"; rc=$?
+stored_declared="$(grep -oE '[0-9]+ stored of [0-9]+ declared' <<< "$out")"
+if [[ $rc -eq 0 && -n "$stored_declared" && "${stored_declared%% *}" == "$(awk '{print $4}' <<< "$stored_declared")" \
+      && "$out" =~ [0-9]+\ declared\ in\ unread\ namespace\(s\),\ not\ counted ]]; then
+  ok "F-03: a SKIPPED namespace is reported as not counted, never as declared and not stored (${stored_declared})"
+else bad "F-03: stored/declared must compare read namespaces only" "rc=$rc $out"; fi
+: > "${WORK}/deny"
+
 printf '\n'
 if [[ "$failures" -eq 0 ]]; then echo "validate.sh: all checks passed"; else echo "validate.sh: ${failures} failure(s)"; fi
 exit $(( failures > 0 ))

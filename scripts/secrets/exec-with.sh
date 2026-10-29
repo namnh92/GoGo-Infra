@@ -35,6 +35,7 @@
 # printed, and never on an argument list: `aws` is handed the parameter name.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+manifest_check
 
 # Tracing prints every expansion — the fetched value included — into whatever
 # captures this shell, which for a build is a log file kept as evidence.

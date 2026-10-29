@@ -66,6 +66,7 @@
 # looked at.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+manifest_check
 
 ENVIRONMENT="${1:-}"
 require_env_arg "$ENVIRONMENT" allow-tools
@@ -103,11 +104,22 @@ status=0
 declared_total=0
 stored_total=0
 parked_total=0
+unread_declared=0
 skipped=()
 present_paths=""
 read_namespaces=()
 
-for namespace in $(manifest_namespaces "$ENVIRONMENT"); do
+# Every tree that can hold something to report: the namespaces of active rows,
+# and those of parked rows and retired paths. A namespace whose last active row
+# was parked, scoped away with environments:, or retired would otherwise never
+# be listed, and a value stored there would never be found (Sol F-02, #308).
+validate_namespaces="$( {
+  manifest_namespaces "$ENVIRONMENT"
+  python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace all --consumer all --include-parked | cut -f5
+  python3 "$MANIFEST_READER" "$ENVIRONMENT" --retired | cut -f2
+} | sort -u)"
+
+for namespace in $validate_namespaces; do
   prefix="$(ssm_prefix "$ENVIRONMENT" "$namespace")"
 
   # --consumer all, not the default. This compares the manifest against what
@@ -116,14 +128,12 @@ for namespace in $(manifest_namespaces "$ENVIRONMENT"); do
   # and the fix a reader would reach for is deleting it.
   expected_all="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace "$namespace" --consumer all | cut -f1 | sort)"
   expected_required="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace "$namespace" --consumer all --required | cut -f1 | sort)"
-  declared_total=$(( declared_total + $(echo "$expected_all" | grep -c . || true) ))
   # Parked rows are declared for no environment and retired paths must be
   # absent; both are named here only to tell a stored one apart from a plain
   # UNDECLARED, so the message says what to do with it.
   expected_parked="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace "$namespace" --consumer all --include-parked --field lifecycle \
     | awk -F'\t' '$7 == "parked" { print $1 }' | sort)"
   retired_here="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --retired | awk -F'\t' -v ns="$namespace" '$2 == ns { print $1 }' | sort)"
-  parked_total=$(( parked_total + $(echo "$expected_parked" | grep -c . || true) ))
 
   # stderr is kept: an AccessDenied here is the difference between "nothing is
   # stored under this prefix" and "this identity may not look", and those two
@@ -131,8 +141,14 @@ for namespace in $(manifest_namespaces "$ENVIRONMENT"); do
   if ! listing="$(aws ssm get-parameters-by-path --path "$prefix" --recursive \
     --query 'Parameters[].Name' --output text 2>&1)"; then
     skipped+=("${namespace}: cannot list ${prefix} — $(echo "$listing" | tail -1)")
+    # Not counted as declared-and-not-stored: nobody looked (Sol F-03, #308).
+    unread_declared=$(( unread_declared + $(echo "$expected_all" | grep -c . || true) ))
     continue
   fi
+  # Counted only for namespaces that were read, so "N stored of N declared"
+  # compares like with like.
+  declared_total=$(( declared_total + $(echo "$expected_all" | grep -c . || true) ))
+  parked_total=$(( parked_total + $(echo "$expected_parked" | grep -c . || true) ))
 
   actual="$(echo "$listing" | tr '\t' '\n' | sed "s|^${prefix}/||" | sort)"
   # Namespace-qualified: two trees can hold the same suffix, and a capability
@@ -418,7 +434,9 @@ if [[ "$status" -eq 0 ]]; then
     echo "      ./scripts/ops/check-cf-token-scopes.sh ${ENVIRONMENT}"
     echo "      ./scripts/ops/check-provider-keys.sh ${ENVIRONMENT}"
   else
-    echo "OK: ${ENVIRONMENT} — nothing undeclared, nothing required missing (${stored_total} stored of ${declared_total} declared, ${parked_total} parked, ${namespaces} namespace(s); names and types)."
+    unread_note=""
+    [[ "$unread_declared" -gt 0 ]] && unread_note="; ${unread_declared} declared in unread namespace(s), not counted"
+    echo "OK: ${ENVIRONMENT} — nothing undeclared, nothing required missing in what was read (${stored_total} stored of ${declared_total} declared, ${parked_total} parked, ${namespaces} namespace(s)${unread_note}; names and types)."
   fi
 fi
 

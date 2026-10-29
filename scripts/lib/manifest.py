@@ -38,6 +38,15 @@ Usage:
                                          (with --include-parked: also the
                                          capabilities a parked row has parked,
                                          state "parked")
+    manifest.py <env> --check            Exit 0 when the manifest is consistent, 2
+                                         (with the contradictions on stderr) when it
+                                         is not. Callers run it once, up front: the
+                                         check is global, so a manifest that passes
+                                         it passes every later call in the same run,
+                                         and a row stream read through process
+                                         substitution — whose exit status bash
+                                         discards — can never be the empty answer
+                                         of a refused manifest (Sol F-01, #308)
     manifest.py <env> --field <name>     Append one extra field to each row, so a
                                          caller can read `scope`, `provider`,
                                          `infra_readable` or `lifecycle` without
@@ -300,6 +309,11 @@ def main():
                 for requirement in cap["requires_list"]:
                     namespace, path = split_requirement(requirement)
                     sys.stdout.write("\t".join([cap["name"], namespace, path]) + "\n")
+            return 0
+
+        if "--check" in args:
+            parse()
+            parse("retired")
             return 0
 
         if "--declares" in args:

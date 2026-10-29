@@ -28,6 +28,7 @@
 # them in plaintext inside Terraform state (GoGo-Infrastructure-Plan-Spec §13).
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+manifest_check
 
 INFRA_READABLE=no
 positional=()

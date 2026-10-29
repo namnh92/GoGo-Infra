@@ -17,6 +17,7 @@
 # takes --force.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+manifest_check
 
 ENVIRONMENT=""
 FORCE="no"
