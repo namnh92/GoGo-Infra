@@ -955,12 +955,27 @@ for env in dev stag; do
     bad "${env}: the Play service account is declared" "environments: is not honoured"
   fi
 done
+# Owner 2026-10-29: whatever needs a store link exists in prod only — dev and
+# stag ship through Firebase App Distribution. The Tenjin tracking template is
+# the backend row of that kind.
+if python3 "$READER" prod --namespace backend --consumer all | cut -f1 | grep -qx 'tenjin/tracking-url-template'; then
+  ok "prod: the Tenjin tracking template is declared"
+else
+  bad "prod: the Tenjin tracking template is missing" "environments: [prod] dropped it everywhere"
+fi
+for env in dev stag; do
+  if ! python3 "$READER" "$env" --namespace all --consumer all --include-parked | cut -f1 | grep -qx 'tenjin/tracking-url-template'; then
+    ok "${env}: the Tenjin tracking template does not exist (store links are prod only)"
+  else
+    bad "${env}: the Tenjin tracking template is declared" "dev/stag have no store listing, so no campaign URL"
+  fi
+done
 if python3 "$READER" ci --namespace all --consumer all | cut -f1 | grep -qx 'store/play-service-account'; then
   ok "ci: the env-less passthrough still resolves the Play row (put.sh prod store/… needs it)"
 else
   bad "ci: the env-less passthrough lost the Play row" "put.sh/get.sh resolve ci rows through it"
 fi
-mreader="$(mutate $'    environments: [prod]\x1f    environments: [prod]\n    required: [dev]')"
+mreader="$(mutate $'never report it absent.\n    environments: [prod]\x1fnever report it absent.\n    environments: [prod]\n    required: [dev]')"
 if python3 "$mreader" dev --namespace all --consumer all >/dev/null 2>"${TMPDIR:-/tmp}/mt.err"; then
   bad "a row required where it is not declared is accepted" "exit 0"
 elif grep -q "required in dev but declared only in prod" "${TMPDIR:-/tmp}/mt.err"; then

@@ -305,8 +305,9 @@ extra — and the manifest has the words to say which is which.
   manifest. `manifest.py <env> --retired` lists the entries for the env's trees.
 - **`environments: [...]`** on a row — the environments the row is declared in at all. Elsewhere
   it does not exist: neither missing nor absent, and `UNDECLARED` if stored. `required:` must be
-  a subset. `ci:store/play-service-account` is `[prod]`: the Play upload exists nowhere else, so
-  dev's readiness never asks for it. Never on a `tools` row.
+  a subset. `ci:store/play-service-account` and `backend:tenjin/tracking-url-template` are
+  `[prod]`: anything that needs a store link exists in prod only, because dev and stag ship
+  through Firebase App Distribution, never a store (owner 2026-10-29). Never on a `tools` row.
 
 The reader checks the vocabulary (`lifecycle` value, `environments` names, `required ⊆
 environments`, no retired+declared path) and exits 2 on a contradiction instead of guessing.
