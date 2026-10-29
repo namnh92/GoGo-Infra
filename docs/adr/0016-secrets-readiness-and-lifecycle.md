@@ -195,7 +195,8 @@ exit 2, which the step accepts) and `deploy-vps.sh` projects it:
   a failed deploy leaves the previous projection and `deploy_id`, and its own rollback restores the
   previous pair's env file with the code. `rollback.sh` restores env and report together when the
   target is the recorded previous deploy; otherwise it keeps the env file, as before, and removes
-  the projection. Either rollback derives the observability overlay from the env file it restored,
+  the projection. Either rollback derives the observability overlay from the env file it restored, even
+  when the caller exported one,
   so the collector follows the configuration the containers are started with (review of #315). A
   deploy without a report (`deploy-production.yml`) removes any earlier one.
 - The API (phase 2) reads the projection through a read-only bind mount of the directory `ops/`

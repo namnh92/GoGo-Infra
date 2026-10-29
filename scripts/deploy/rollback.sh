@@ -59,6 +59,10 @@ if [[ "$restore_id" =~ ^[0-9a-f]{40}-[0-9]+-[0-9]+$ && "${restore_id%%-*}" == "$
   && remote "test -s '${DEPLOY_PATH}/${PAIRS_DIR}/${restore_id}/env' && test -s '${DEPLOY_PATH}/${PAIRS_DIR}/${restore_id}/secrets-readiness.json'"; then
   echo "==> Restoring the env file of deploy ${restore_id}"
   remote "cd '${DEPLOY_PATH}' && install -m 600 '${PAIRS_DIR}/${restore_id}/env' '${REMOTE_ENV_FILE}'"
+  # The restored env file decides the collector overlay, even when the caller
+  # exported COMPOSE_OBSERVABILITY: that choice was made for the env file being
+  # rolled back from (review of #315).
+  overlay_from_host_env
 else
   restore_id=""
 fi

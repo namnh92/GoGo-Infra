@@ -265,6 +265,21 @@ if [[ "$(env_id "${SB}/host/.env.dev")" == "$ID_A" && "$(ups)" -ge 1 && "$(ups_w
 else
   fail "rollback.sh kept the overlay of the env it rolled back from: $(tr '\n' '|' <"${SB}/docker.log")"
 fi
+# The same, with the caller exporting the overlay (a hand-run rollback copying
+# deploy-dev's environment): the restored env still decides (review of #315).
+deploy "$REV_B" 107 2 COMPOSE_OBSERVABILITY="$OBS"
+: >"${SB}/docker.log"
+env DOCKER_LOG="${SB}/docker.log" PATH="${SB}/bin:${PATH}" \
+  DEPLOY_HOST=fake.invalid DEPLOY_USER=deploy DEPLOY_PATH="${SB}/host" \
+  KNOWN_HOSTS_FILE=/dev/null SSH_KEY_FILE=/dev/null REMOTE_ENV_FILE=.env.dev \
+  COMPOSE_EDGE=docker/docker-compose.edge-tunnel.yml COMPOSE_OBSERVABILITY="$OBS" \
+  bash "$ROLLBACK" >"${SB}/out" 2>&1
+if [[ "$(env_id "${SB}/host/.env.dev")" == "$ID_A" && "$(ups)" -ge 1 && "$(ups_with_overlay)" -eq 0 ]] && ! grep -q 'Making sure Alloy' "${SB}/out"; then
+  pass "a rollback with COMPOSE_OBSERVABILITY exported still drops the overlay the restored env does not ask for"
+else
+  fail "an exported overlay survived the restore of an env without the endpoint: $(tr '\n' '|' <"${SB}/docker.log")"
+fi
+
 # A' with the endpoint, then B without it, rolled back to A': collector on.
 deploy "$REV_A" 108 1 COMPOSE_OBSERVABILITY="$OBS"
 ID_A8="${REV_A}-108-1"
