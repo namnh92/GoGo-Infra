@@ -30,10 +30,11 @@
 #      proxy and CA come from the environment only). Nothing secret is written there. A watcher
 #      forked before the mint (so it never holds the token) removes the directory once this
 #      process — which becomes the command — has exited, however it ended, reaped or not (#260,
-#      #281 retro-review, #304). A signal before the exec is handled when the step then running
-#      (a git check, or the mint) ends: the command is never started and the directory goes.
-#      Left behind only by a SIGKILL: of this process between mktemp and the watcher's fork (no
-#      EXIT trap runs), or of the watcher itself.
+#      #281 retro-review, #304). A HUP/INT/TERM before the exec is handled when the synchronous
+#      step then running (one of the checks below, the start-time lookup, the mint) ends: the
+#      command is never started and the directory goes. Left behind when no trap can run: this
+#      process killed outright (SIGKILL or any other unhandled fatal signal) between mktemp and
+#      the watcher's fork, or the watcher itself killed that way.
 #  I3  One credential. Process-only git configuration (GIT_CONFIG_*, read last): an empty
 #      credential.helper resets every helper collected from any file, then one helper for
 #      https://github.com answers with GH_TOKEN, and only when asked for protocol=https,

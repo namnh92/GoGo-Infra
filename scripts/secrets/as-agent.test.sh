@@ -1133,29 +1133,44 @@ left="$(sealed_left)"
 [[ "$rc" == 143 && "$took" -le 4 && -z "$left" ]] && ! grep -q 'gh-child:' "${SANDBOX}/8h.out" \
   && ok "T8h: TERM during the mint: the command never starts, exit 143 once the mint ends (${took}s), sealed home gone" || bad "T8h TERM during mint" "rc=$rc took=${took}s left=$left out=$(cat "${SANDBOX}/8h.out")"
 
-# 8i. #304 Sol r3 F-06: the watcher must reach cleanup even when its first look at the wrapper's
-# pid comes after the command has exited and been reaped. A caller that reaps at once (python's
-# subprocess.run) and a `ps` that answers a second late make that order certain; under `set -e`
-# an unguarded first lookup killed the watcher and left the sealed home.
+# 8i. #304 Sol r3 F-06 / #311 Sol r4 F-09: the watcher must reach cleanup even when its first look
+# at the wrapper's pid comes after the command has exited and been reaped. The order is made
+# certain by a handshake, not by timing: the `ps` the watcher calls blocks its first lstart/stat
+# lookup until the caller (python's subprocess.run, which reaps at once) has written a marker
+# after run() returned. Under `set -e` an unguarded first lookup killed the watcher and left the home.
 mkdir -p "${SANDBOX}/slowps"
-# Slow only for the watcher's own lookups (lstart/stat), not for the exec-with stub's ancestry line.
-printf '#!/bin/sh\ncase "$*" in *lstart*|*stat*) sleep 1 ;; esac\nexec %s "$@"\n' "$(command -v ps)" >"${SANDBOX}/slowps/ps"
+cat >"${SANDBOX}/slowps/ps" <<STUB
+#!/bin/sh
+case "\$*" in *lstart*|*stat*) i=0; while [ ! -e "${SANDBOX}/ctl/reaped" ] && [ \$i -lt 100 ]; do sleep 0.1; i=\$((i+1)); done ;; esac
+exec $(command -v ps) "\$@"
+STUB
 chmod +x "${SANDBOX}/slowps/ps"
+unctl reaped
 left="$(sealed_left)"; [[ -z "$left" ]] || bad "T8i setup" "sealed homes left by an earlier check: $left"
-out="$(python3 -I - "$AS" "$REPO" "$TMPDIR" "${SANDBOX}/slowps" <<'PY'
+out="$(python3 -I - "$AS" "$REPO" "$TMPDIR" "${SANDBOX}/slowps" "${CTL}/reaped" <<'PY'
 import glob, os, subprocess, sys, time
-AS, repo, tmp, slow = sys.argv[1:]
+AS, repo, tmp, slow, marker = sys.argv[1:]
 env = dict(os.environ, PATH=f"{slow}:{os.environ['PATH']}")
 r = subprocess.run([AS, '--', 'gh', 'pr', 'list'], cwd=repo, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+# run() has waited for the wrapper's pid: it is reaped. Only now may the watcher's lookup answer.
+open(marker, 'w').close()
 t0 = time.time(); left = glob.glob(os.path.join(tmp, 'as-agent.*'))
 while left and time.time() - t0 < 8:
     time.sleep(0.2); left = glob.glob(os.path.join(tmp, 'as-agent.*'))
 print(f"rc={r.returncode} agent={'gh-child: GH_TOKEN agent' in r.stdout} left={len(left)} secs={time.time() - t0:.1f}")
 PY
 )"
+unctl reaped
 [[ "$out" == "rc=0 agent=True left=0 "* ]] \
   && ok "T8i: a command reaped before the watcher's first lookup still gets its sealed home removed ($out)" || bad "T8i late watcher" "$out"
 rm -rf "${TMPDIR}"/as-agent.*
+# A ps that cannot report the wrapper's start time: refused before the mint, exit 2, home removed.
+mkdir -p "${SANDBOX}/nops"; printf '#!/bin/sh\nexit 1\n' >"${SANDBOX}/nops/ps"; chmod +x "${SANDBOX}/nops/ps"
+: >"$CALLS"
+out="$(cd "$REPO" && PATH="${SANDBOX}/nops:${PATH}" "$AS" -- gh pr list 2>&1)"; rc=$?
+left="$(sealed_left)"
+[[ "$rc" == 2 && -z "$left" ]] && grep -q "ps cannot report this process's start time" <<<"$out" && ! grep -q exec-with "$CALLS" && ! grep -q 'gh-child:' <<<"$out" \
+  && ok "T8i: no start time from ps → refused before the mint, exit 2, nothing minted, sealed home gone" || bad "T8i ps refusal" "rc=$rc left=$left calls=$(cat "$CALLS") out=$out"
 
 # 8e. A partial clone's lazy fetch under gh is a git fetch too: no transport.
 PARTIAL="${SANDBOX}/GoGo-Partial"
