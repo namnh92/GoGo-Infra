@@ -1133,6 +1133,30 @@ left="$(sealed_left)"
 [[ "$rc" == 143 && "$took" -le 4 && -z "$left" ]] && ! grep -q 'gh-child:' "${SANDBOX}/8h.out" \
   && ok "T8h: TERM during the mint: the command never starts, exit 143 once the mint ends (${took}s), sealed home gone" || bad "T8h TERM during mint" "rc=$rc took=${took}s left=$left out=$(cat "${SANDBOX}/8h.out")"
 
+# 8i. #304 Sol r3 F-06: the watcher must reach cleanup even when its first look at the wrapper's
+# pid comes after the command has exited and been reaped. A caller that reaps at once (python's
+# subprocess.run) and a `ps` that answers a second late make that order certain; under `set -e`
+# an unguarded first lookup killed the watcher and left the sealed home.
+mkdir -p "${SANDBOX}/slowps"
+# Slow only for the watcher's own lookups (lstart/stat), not for the exec-with stub's ancestry line.
+printf '#!/bin/sh\ncase "$*" in *lstart*|*stat*) sleep 1 ;; esac\nexec %s "$@"\n' "$(command -v ps)" >"${SANDBOX}/slowps/ps"
+chmod +x "${SANDBOX}/slowps/ps"
+left="$(sealed_left)"; [[ -z "$left" ]] || bad "T8i setup" "sealed homes left by an earlier check: $left"
+out="$(python3 -I - "$AS" "$REPO" "$TMPDIR" "${SANDBOX}/slowps" <<'PY'
+import glob, os, subprocess, sys, time
+AS, repo, tmp, slow = sys.argv[1:]
+env = dict(os.environ, PATH=f"{slow}:{os.environ['PATH']}")
+r = subprocess.run([AS, '--', 'gh', 'pr', 'list'], cwd=repo, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+t0 = time.time(); left = glob.glob(os.path.join(tmp, 'as-agent.*'))
+while left and time.time() - t0 < 8:
+    time.sleep(0.2); left = glob.glob(os.path.join(tmp, 'as-agent.*'))
+print(f"rc={r.returncode} agent={'gh-child: GH_TOKEN agent' in r.stdout} left={len(left)} secs={time.time() - t0:.1f}")
+PY
+)"
+[[ "$out" == "rc=0 agent=True left=0 "* ]] \
+  && ok "T8i: a command reaped before the watcher's first lookup still gets its sealed home removed ($out)" || bad "T8i late watcher" "$out"
+rm -rf "${TMPDIR}"/as-agent.*
+
 # 8e. A partial clone's lazy fetch under gh is a git fetch too: no transport.
 PARTIAL="${SANDBOX}/GoGo-Partial"
 setup_git clone -q --no-checkout --filter=blob:none https://github.com/namnh92/GoGo-Fake.git "$PARTIAL" 2>/dev/null \
