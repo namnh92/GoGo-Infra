@@ -351,6 +351,8 @@ if [[ "$STRICT" == "yes" && "$TOOLS" == "no" ]]; then
   fi
 
   cap_gaps=""
+  parked_requirements="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace all --consumer all --include-parked --field lifecycle \
+    | awk -F'\t' '$7 == "parked" { print $5 ":" $1 }')"
   env_namespaces="$(manifest_namespaces "$ENVIRONMENT")"
   while IFS=$'\t' read -r capability namespace path; do
     [[ -n "$capability" ]] || continue
@@ -366,6 +368,13 @@ if [[ "$STRICT" == "yes" && "$TOOLS" == "no" ]]; then
     # not satisfied. The SKIPPED block below is what fails the run; naming it
     # here as well would report the same gap twice.
     if [[ " ${read_namespaces[*]-} " != *" ${namespace} "* ]]; then
+      continue
+    fi
+    # A parked dependency is never satisfied, stored or not: the row is
+    # declared for no environment (Astra A-F-01, #308; #309 D-1
+    # `dependency-parked`). The capability keeps its intent and is not ready.
+    if grep -qxF "${namespace}:${path}" <<< "$parked_requirements"; then
+      cap_gaps+="  - ${capability} needs ${namespace}:${path} — parked: un-park the row, or take ${ENVIRONMENT} out of the capability"$'\n'
       continue
     fi
     if ! grep -qxF "${namespace}:${path}" <<< "$present_paths"; then

@@ -286,8 +286,11 @@ extra — and the manifest has the words to say which is which.
   required or not.
 - **`lifecycle: parked`**. The row keeps its place and its documentation, but is declared for
   *no* environment: no listing emits it, nothing validates, writes (`put.sh`), hands out
-  (`exec-with.sh`), renders or rotates it, and a capability that `requires:` it is parked with
-  it (`--capabilities` omits it; `--include-parked` lists it with state `parked`). For a feature
+  (`exec-with.sh`), renders or rotates it — `put.sh` refuses it even with an explicit type or
+  `GOGO_ALLOW_UNDECLARED=1`, and refuses a retired path the same way. A capability that
+  `requires:` a parked row keeps its `enabled`/`planned` state and is **not ready**:
+  `validate.sh --strict` names the dependency as parked (#309 D-1 `dependency-parked`). A parked
+  row is never `required` (the reader refuses the manifest). For a feature
   that has no owner on the roadmap — the spec it comes from keeps requirement precedence; this is
   deployment state. Un-park = delete the line. A value stored for a parked row is a finding
   (`PARKED, STORED`): un-park, or delete it with the aws CLI — `delete.sh` resolves paths through

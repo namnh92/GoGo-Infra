@@ -274,10 +274,39 @@ fi
 : >"$CALLS"
 printf '1234567' | PATH="${SANDBOX}:${PATH}" AWS_PROFILE=stub "$SCRIPT" dev github/agent-app-id >"${SANDBOX}/out" 2>&1
 status=$?
-if [[ $status -ne 0 ]] && ! grep -q put-parameter "$CALLS" && grep -q "undeclared parameter" "${SANDBOX}/out"; then
-  ok "tools: a tool row is undeclared for a real environment, so put.sh dev refuses it"
+# Since GoGo-Infra#308 the old /gogo/ci/dev/ copy of this path is retired, so the
+# refusal names that, which is the more precise reason; either way nothing is written.
+if [[ $status -ne 0 ]] && ! grep -q put-parameter "$CALLS" && grep -q "is retired in config/secrets.manifest.yml" "${SANDBOX}/out"; then
+  ok "tools: a tool row is not writable for a real environment (its old ci path is retired)"
 else
-  bad "tools: a tool row is undeclared for a real environment, so put.sh dev refuses it" "exit ${status}: $(cat "${SANDBOX}/out")"
+  bad "tools: a tool row is not writable for a real environment (its old ci path is retired)" "exit ${status}: $(cat "${SANDBOX}/out")"
+fi
+
+# Astra A-F-02 (#308): a parked row or a retired path is known and forbidden, not
+# undeclared — neither an explicit type nor GOGO_ALLOW_UNDECLARED=1 may write it,
+# and nothing reaches AWS.
+for case in "dev cost/ledger-enabled String|parked" "dev assistant/model String|retired" \
+            "tools ai-harness/anthropic-api-key SecureString|retired" "dev github/agent-app-id String|retired"; do
+  args="${case%|*}"; word="${case#*|}"
+  : >"$CALLS"
+  # shellcheck disable=SC2086 # args is a fixed word list above
+  printf 'x' | PATH="${SANDBOX}:${PATH}" AWS_PROFILE=stub GOGO_ALLOW_UNDECLARED=1 \
+    "$SCRIPT" $args >"${SANDBOX}/out" 2>&1
+  status=$?
+  if [[ $status -ne 0 && ! -s "$CALLS" ]] && grep -q "is ${word} in config/secrets.manifest.yml" "${SANDBOX}/out"; then
+    ok "A-F-02: put.sh ${args} is refused as ${word}, even with an explicit type and GOGO_ALLOW_UNDECLARED=1"
+  else
+    bad "A-F-02: put.sh ${args} must be refused as ${word}" "exit ${status}; calls: $(tr '\n' ';' <"$CALLS"); $(cat "${SANDBOX}/out")"
+  fi
+done
+# ...while the same path declared active elsewhere still writes: the tools row
+# github/agent-app-id is retired only under ci.
+: >"$CALLS"
+printf 'x' | PATH="${SANDBOX}:${PATH}" AWS_PROFILE=stub "$SCRIPT" tools github/agent-app-id >"${SANDBOX}/out" 2>&1
+if grep -q "put-parameter" "$CALLS"; then
+  ok "A-F-02: the active tools row github/agent-app-id is still writable"
+else
+  bad "A-F-02: an active row was refused because its path is retired in another tree" "$(cat "${SANDBOX}/out")"
 fi
 
 echo

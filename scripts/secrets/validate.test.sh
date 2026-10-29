@@ -594,6 +594,18 @@ if [[ $rc -eq 0 && -n "$stored_declared" && "${stored_declared%% *}" == "$(awk '
 else bad "F-03: stored/declared must compare read namespaces only" "rc=$rc $out"; fi
 : > "${WORK}/deny"
 
+# Astra A-F-01 (#308): an enabled capability that requires a parked row is not
+# ready, and says the dependency is parked — it never drops out of readiness.
+MUT3="${WORK}/af01"
+mutated_tree "$MUT3" 'old = "    requires: [backend:privacy-export/wrapping-key-v1, backend:r2/bucket,"
+assert text.count(old) == 1
+text = text.replace(old, "    requires: [backend:privacy-export/wrapping-key-v1, backend:cost/ledger-enabled, backend:r2/bucket,")'
+out="$(MANIFEST_READER="${MUT3}/scripts/lib/manifest.py" PATH="${WORK}:${PATH}" AWS_PROFILE=test \
+  "${MUT3}/scripts/secrets/validate.sh" dev --strict 2>&1)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"secure_export needs backend:cost/ledger-enabled — parked"* && "$out" != *"READY:"* ]]; then
+  ok "A-F-01: an enabled capability with a parked dependency fails readiness and names it parked"
+else bad "A-F-01: a parked dependency must keep the capability not ready" "rc=$rc $out"; fi
+
 printf '\n'
 if [[ "$failures" -eq 0 ]]; then echo "validate.sh: all checks passed"; else echo "validate.sh: ${failures} failure(s)"; fi
 exit $(( failures > 0 ))

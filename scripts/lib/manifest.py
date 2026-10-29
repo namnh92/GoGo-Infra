@@ -39,9 +39,9 @@ Usage:
     manifest.py <env> --include-planned   Widen either of the two above from
                                          `enabled` to `enabled + planned`, i.e.
                                          what the environment is intended to run
-                                         (with --include-parked: also the
-                                         capabilities a parked row has parked,
-                                         state "parked")
+                                         A requirement on a parked row keeps
+                                         the capability's state; validate.sh
+                                         reports it as a parked dependency
     manifest.py <env> --check            Exit 0 when the manifest is consistent, 2
                                          (with the contradictions on stderr) when it
                                          is not. Callers run it once, up front: the
@@ -66,8 +66,9 @@ of one filter in each caller.
 
 Row lifecycle (GoGo-Infra#308). A row is `active` unless it says
 `lifecycle: parked`: declared for no environment until its feature is
-scheduled, so no listing emits it, nothing validates, writes or renders it, and
-a capability that `requires:` one is parked with it. A row that must be absent
+scheduled, so no listing emits it, nothing validates, writes or renders it. A
+capability that `requires:` one keeps its enabled/planned state and is reported
+not ready by validate.sh (a parked dependency). A row that must be absent
 is not a row: it is an entry of the top-level `retired:` block, and
 `validate.sh` fails when SSM still holds it. `environments:` on a row names
 the environments in which it is declared at all (default: every one); the
@@ -182,6 +183,10 @@ def check(entries):
             problems.append(f"{key}: environments names no environment: {', '.join(unknown)}")
         if entry.get("namespace", "backend") == "tools" and "environments" in entry:
             problems.append(f"{key}: a tools row belongs to no environment and cannot carry environments:")
+        if entry["lifecycle"] == "parked" and entry["required_list"]:
+            # A parked row is declared for no environment, so a requirement on
+            # it would be dropped without a word (Astra residual, #308).
+            problems.append(f"{key}: parked but required in {', '.join(entry['required_list'])}")
         outside = [e for e in entry["required_list"] if e not in entry["environments_list"]]
         if outside:
             problems.append(
@@ -207,7 +212,7 @@ def parked_keys():
     }
 
 
-def capabilities(env, include_planned=False, include_parked=False):
+def capabilities(env, include_planned=False):
     """Capabilities this environment runs, or intends to.
 
     `enabled` is what runs today; `planned` is what the environment is meant to
@@ -215,12 +220,11 @@ def capabilities(env, include_planned=False, include_parked=False):
     on request, which is how a new environment is brought up: the check names
     every credential to create instead of anyone re-reading the workflows.
 
-    A capability that requires a parked row is parked with it (GoGo-Infra#308):
-    its credentials are declared for no environment, so readiness cannot
-    demand them. It is omitted unless `include_parked`, which lists it with
-    state `parked` for a report, never for enforcement.
+    A requirement on a parked row does not change the capability's state
+    (Astra A-F-01, #308; #309 D-1): intent stays `enabled`/`planned`, and the
+    capability is simply not ready — validate.sh names the dependency as
+    parked. Parking a row never switches a capability off by itself.
     """
-    parked = parked_keys()
     out = []
     for cap in parse("capabilities"):
         if env in cap["enabled_list"]:
@@ -229,10 +233,6 @@ def capabilities(env, include_planned=False, include_parked=False):
             cap["state"] = "planned"
         else:
             continue
-        if any(":".join(split_requirement(r)) in parked for r in cap["requires_list"]):
-            if not include_parked:
-                continue
-            cap["state"] = "parked"
         out.append(cap)
     return out
 
@@ -242,13 +242,10 @@ def declares(env):
 
     An environment named nowhere has no intended shape, so nothing can say it is
     ready. Reporting READY because a profile was omitted is the same failure as
-    reporting it because a namespace could not be read. A parked capability
-    mentions nothing: it is declared for no environment.
+    reporting it because a namespace could not be read.
     """
-    parked = parked_keys()
     return any(
-        (env in cap["enabled_list"] or env in cap["planned_list"])
-        and not any(":".join(split_requirement(r)) in parked for r in cap["requires_list"])
+        env in cap["enabled_list"] or env in cap["planned_list"]
         for cap in parse("capabilities")
     )
 
@@ -302,14 +299,14 @@ def main():
 
     try:
         if "--capabilities" in args:
-            for cap in capabilities(env, include_planned, include_parked):
+            for cap in capabilities(env, include_planned):
                 sys.stdout.write(
                     "\t".join([cap["name"], cap.get("kind", "feature"), cap["state"]]) + "\n"
                 )
             return 0
 
         if "--capability-requires" in args:
-            for cap in capabilities(env, include_planned, include_parked):
+            for cap in capabilities(env, include_planned):
                 for requirement in cap["requires_list"]:
                     namespace, path = split_requirement(requirement)
                     sys.stdout.write("\t".join([cap["name"], namespace, path]) + "\n")

@@ -868,30 +868,32 @@ else
 fi
 rm -rf "$MUT"
 
-# A capability requiring a parked row is parked with it: not enforced, listed
-# only on request, and it no longer counts as a declared profile.
+# A capability requiring a parked row keeps its intent (Astra A-F-01, #308;
+# #309 D-1): still enabled, its requirement still emitted, so validate.sh can
+# report the dependency as parked instead of the capability vanishing.
 mreader="$(mutate $'    requires: [backend:privacy-export/wrapping-key-v1, backend:r2/bucket, backend:r2/access-key-id, backend:r2/secret-access-key]\x1f    requires: [backend:privacy-export/wrapping-key-v1, backend:cost/ledger-enabled, backend:r2/bucket, backend:r2/access-key-id, backend:r2/secret-access-key]')"
-if ! python3 "$mreader" dev --capabilities | grep -q '^secure_export'; then
-  ok "a capability requiring a parked row is not listed as enabled"
+if [[ "$(python3 "$mreader" dev --capabilities | grep '^secure_export')" == $'secure_export\tfeature\tenabled' ]]; then
+  ok "A-F-01: a capability requiring a parked row stays enabled"
 else
-  bad "a capability requiring a parked row is still listed as enabled" "$(python3 "$mreader" dev --capabilities | grep '^secure_export')"
+  bad "A-F-01: a capability requiring a parked row changed state or vanished" "$(python3 "$mreader" dev --capabilities | grep '^secure_export' || echo '<absent>')"
 fi
-if ! python3 "$mreader" dev --capability-requires | grep -q '^secure_export'; then
-  ok "a parked capability's requirements are not enforced"
+if python3 "$mreader" dev --capability-requires | grep -qx $'secure_export\tbackend\tcost/ledger-enabled'; then
+  ok "A-F-01: the parked requirement is still emitted for readiness to judge"
 else
-  bad "a parked capability's requirements are still emitted" "$(python3 "$mreader" dev --capability-requires | grep '^secure_export' | head -2)"
-fi
-if [[ "$(python3 "$mreader" dev --capabilities --include-parked | grep '^secure_export')" == $'secure_export\tfeature\tparked' ]]; then
-  ok "--include-parked lists the parked capability with state parked"
-else
-  bad "--include-parked does not list the parked capability as parked" "$(python3 "$mreader" dev --capabilities --include-parked | grep '^secure_export')"
-fi
-if python3 "$mreader" dev --declares; then
-  ok "dev still has a profile through its other capabilities"
-else
-  bad "parking one capability removed dev's whole profile" "--declares returned 1"
+  bad "A-F-01: the parked requirement is no longer emitted" "$(python3 "$mreader" dev --capability-requires | grep '^secure_export')"
 fi
 rm -rf "$MUT"
+
+# A parked row cannot be required: the requirement would vanish silently.
+mreader="$(mutate $'    required: []\n    lifecycle: parked\n    description: Prometheus query endpoint\x1f    required: [dev]\n    lifecycle: parked\n    description: Prometheus query endpoint')"
+if python3 "$mreader" dev --check 2>"${TMPDIR:-/tmp}/mt.err"; then
+  bad "a parked row that is required is accepted" "exit 0"
+elif grep -q "parked but required in dev" "${TMPDIR:-/tmp}/mt.err"; then
+  ok "a parked row that is required makes the reader refuse the manifest"
+else
+  bad "the reader refused parked+required for the wrong reason" "$(cat "${TMPDIR:-/tmp}/mt.err")"
+fi
+rm -rf "$MUT"; rm -f "${TMPDIR:-/tmp}/mt.err"
 
 # retired: the block is read, scoped by the tools rule, and never a parameter.
 if [[ "$(python3 "$READER" tools --retired)" == $'ai-harness/anthropic-api-key\ttools\t2026-10-29' ]]; then
