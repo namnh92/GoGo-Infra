@@ -190,7 +190,6 @@ rollback() {
     bash "$ROLLBACK" "$@" >"${SB}/out" 2>&1
 }
 deploy "$REV_B" 106
-ID_B6="${REV_B}-106"
 prev="$(host .previous-id)"
 rollback
 if [[ "$prev" == "$ID_A" && "$(git -C "${SB}/host" rev-parse HEAD)" == "$REV_A" && "$(host .deployed-id)" == "$ID_A" \

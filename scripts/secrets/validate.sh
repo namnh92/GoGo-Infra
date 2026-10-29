@@ -130,7 +130,7 @@ on_exit() {
   rm -f "$FACTS"
   if [[ -n "$REPORT" && "$REPORT_DONE" != "yes" ]]; then
     python3 -I "$MANIFEST_READER" "$ENVIRONMENT" --report-aborted "$REPORT" \
-      --reason "validate.sh stopped (exit ${code}) before its facts were complete" "${report_flags[@]}" || true
+      --reason "validate.sh stopped (exit ${code}) before its facts were complete" ${report_flags[@]+"${report_flags[@]}"} || true
     echo "report: ${REPORT} written as aborted (UNKNOWN)" >&2
     exit 2
   fi
@@ -562,7 +562,7 @@ fi
 if [[ -n "$REPORT" ]]; then
   report_rc=0
   python3 -I "$MANIFEST_READER" "$ENVIRONMENT" --report-build --facts "$FACTS" --out "$REPORT" \
-    --validator-status "$status" "${report_flags[@]}" || report_rc=$?
+    --validator-status "$status" ${report_flags[@]+"${report_flags[@]}"} || report_rc=$?
   # The reader writes the file only once the report is complete; no file means
   # it refused, and the exit trap writes the aborted report instead.
   [[ -s "$REPORT" ]] || exit "$report_rc"
