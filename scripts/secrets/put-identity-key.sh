@@ -29,6 +29,7 @@
 # only ever inside an openssl pipe.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+manifest_check
 # shellcheck source=../lib/config.sh
 source "${REPO_ROOT}/scripts/lib/config.sh"
 

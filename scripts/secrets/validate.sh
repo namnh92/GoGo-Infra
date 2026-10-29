@@ -109,15 +109,12 @@ skipped=()
 present_paths=""
 read_namespaces=()
 
-# Every tree that can hold something to report: the namespaces of active rows,
-# and those of parked rows and retired paths. A namespace whose last active row
-# was parked, scoped away with environments:, or retired would otherwise never
-# be listed, and a value stored there would never be found (Sol F-02, #308).
-validate_namespaces="$( {
-  manifest_namespaces "$ENVIRONMENT"
-  python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace all --consumer all --include-parked | cut -f5
-  python3 "$MANIFEST_READER" "$ENVIRONMENT" --retired | cut -f2
-} | sort -u)"
+# Every tree that can hold something to report: every namespace any row or
+# retired path names, whatever its lifecycle or environments: scope (tools stays
+# tools-only). A namespace whose rows were all parked, scoped to another
+# environment or retired would otherwise never be listed, and a value stored
+# there would never be found (Sol F-02, #308).
+validate_namespaces="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --all-namespaces)"
 
 for namespace in $validate_namespaces; do
   prefix="$(ssm_prefix "$ENVIRONMENT" "$namespace")"

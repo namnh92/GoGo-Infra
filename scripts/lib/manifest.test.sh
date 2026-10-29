@@ -824,6 +824,50 @@ PY
   printf '%s' "${MUT}/scripts/lib/manifest.py"
 }
 
+# Namespace discovery is deliberately wider than row selection: a tree whose
+# only row is scoped away, parked or retired can still hold a stale value.
+# A small manifest makes each source necessary, rather than letting another
+# active row in the shipped manifest accidentally keep the test passing.
+MUT="$(mktemp -d)"
+mkdir -p "${MUT}/scripts/lib" "${MUT}/config"
+cp "$READER" "${MUT}/scripts/lib/manifest.py"
+mreader="${MUT}/scripts/lib/manifest.py"
+cat > "${MUT}/config/secrets.manifest.yml" <<'YAML'
+parameters:
+  - path: discovery/scoped
+    environments: [dev]
+    consumer: pipeline
+  - path: discovery/parked
+    namespace: ci
+    lifecycle: parked
+  - path: discovery/tool
+    namespace: tools
+retired:
+  - path: discovery/retired
+    namespace: mobile
+    since: 2026-10-29
+    reason: namespace discovery probe
+  - path: discovery/retired-tool
+    namespace: tools
+    since: 2026-10-29
+    reason: tools boundary probe
+YAML
+for env in dev stag prod; do
+  seen="$(python3 "$mreader" "$env" --all-namespaces)"; rc=$?
+  if [[ $rc -eq 0 && "$seen" == $'backend\nci\nmobile' ]]; then
+    ok "${env}: --all-namespaces includes scoped, parked and retired trees, sorted and without tools"
+  else
+    bad "${env}: --all-namespaces missed a tree or crossed the tools boundary" "rc=$rc $seen"
+  fi
+done
+seen="$(python3 "$mreader" tools --all-namespaces)"; rc=$?
+if [[ $rc -eq 0 && "$seen" == tools ]]; then
+  ok "tools: --all-namespaces emits only tools, once for active and retired rows"
+else
+  bad "tools: --all-namespaces crossed the environment boundary" "rc=$rc $seen"
+fi
+rm -rf "$MUT"
+
 # A capability requiring a parked row is parked with it: not enforced, listed
 # only on request, and it no longer counts as a declared profile.
 mreader="$(mutate $'    requires: [backend:privacy-export/wrapping-key-v1, backend:r2/bucket, backend:r2/access-key-id, backend:r2/secret-access-key]\x1f    requires: [backend:privacy-export/wrapping-key-v1, backend:cost/ledger-enabled, backend:r2/bucket, backend:r2/access-key-id, backend:r2/secret-access-key]')"

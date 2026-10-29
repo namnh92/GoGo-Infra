@@ -20,6 +20,7 @@
 
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+manifest_check
 
 ENVIRONMENT="${1:-}"
 PARAM_PATH="${2:-}"

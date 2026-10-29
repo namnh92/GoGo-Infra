@@ -10,6 +10,10 @@ Usage:
     manifest.py <env> --required         Only the parameters required in that env
     manifest.py <env> --namespace mobile Only that namespace
     manifest.py <env> --namespace all    Every namespace
+    manifest.py <env> --all-namespaces   Sorted namespace names across all rows,
+                                         including parked and retired, ignoring
+                                         environments: and consumer filters;
+                                         the tools-only boundary still applies
     manifest.py <env> --consumer seed    Only rows a seed/provisioning command loads
     manifest.py <env> --consumer observability
                                          Only rows the observability host loads
@@ -320,6 +324,20 @@ def main():
             # Exit status only: 0 when the environment has a profile, 1 when it does
             # not. Shell callers should not have to parse prose for this.
             return 0 if declares(env) else 1
+
+        if "--all-namespaces" in args:
+            # Discovery asks where a value might have been stored, not which
+            # rows are declared here today. Even a namespace whose final row
+            # is scoped to another environment must be listed, or validation
+            # cannot find its undeclared values (Sol F-02, GoGo-Infra#308).
+            namespaces = {
+                row.get("namespace", "backend")
+                for row in parse() + parse("retired")
+                if (row.get("namespace", "backend") == "tools") == (env == "tools")
+            }
+            for namespace in sorted(namespaces):
+                sys.stdout.write(namespace + "\n")
+            return 0
 
         if "--retired" in args:
             parse()  # the consistency check runs on the parameters block

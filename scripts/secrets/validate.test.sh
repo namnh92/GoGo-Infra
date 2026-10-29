@@ -40,6 +40,7 @@ make_stub() {
   cat > "${WORK}/aws" <<'STUB'
 #!/usr/bin/env bash
 WORK="$(dirname "$0")"
+printf 'aws\n' >> "${WORK}/provider_calls"
 if [[ "$1" == "sts" ]]; then echo '{"Arn":"arn:aws:iam::0:user/test"}'; exit 0; fi
 if [[ "$1" == "ssm" && "$2" == "get-parameters-by-path" ]]; then
   prefix=""
@@ -540,22 +541,45 @@ if [[ $rc -ne 0 && "$out" == *"not usable"* ]]; then
   ok "F-01: exec-with.sh (through common.sh) refuses a contradictory manifest"
 else bad "F-01: exec-with.sh must refuse a contradictory manifest" "rc=$rc $out"; fi
 
-# F-02: a namespace with no active row is still listed. All mobile rows scoped
-# to dev, plus a retired mobile path: stag has nothing active under mobile, and
-# both a stored dev-only row and a stored retired path must still be found.
+# These callers used to reach param_namespace only after prerequisites or
+# provider probes. Count AWS calls and stub the provider commands as well: a
+# refusal must happen before any of them, and a regression must stay offline.
+for provider_command in curl pnpm; do
+  cat > "${WORK}/${provider_command}" <<'STUB'
+#!/usr/bin/env bash
+printf 'provider\n' >> "$(dirname "$0")/provider_calls"
+exit 1
+STUB
+  chmod +x "${WORK}/${provider_command}"
+done
+for caller in secrets/put-worker-secret.sh secrets/put-identity-key.sh ops/check-provider-keys.sh; do
+  case "$caller" in
+    secrets/put-worker-secret.sh) caller_args=(dev share-link/worker-auth-token EDGE_AUTH_TOKEN gogo-dev-share-link) ;;
+    secrets/put-identity-key.sh) caller_args=("${WORK}/unused.pem" dev) ;;
+    ops/check-provider-keys.sh) caller_args=(dev) ;;
+  esac
+  : > "${WORK}/provider_calls"
+  out="$(PATH="${WORK}:${PATH}" AWS_PROFILE=test "${MUT1}/scripts/${caller}" "${caller_args[@]}" 2>&1)"; rc=$?
+  if [[ $rc -ne 0 && "$out" == *"not usable"* && ! -s "${WORK}/provider_calls" ]]; then
+    ok "F-01: ${caller} refuses a contradictory manifest before any AWS/provider call"
+  else bad "F-01: ${caller} must refuse before prerequisites or provider calls" "rc=$rc calls=$(cat "${WORK}/provider_calls") $out"; fi
+done
+rm -f "${WORK}/curl" "${WORK}/pnpm"
+
+# F-02: every mobile row is scoped to dev, with no parked or retired mobile
+# row to keep the namespace discoverable. A stored dev-only row in stag must
+# still be found and reported as UNDECLARED.
 MUT2="${WORK}/f02"
 mutated_tree "$MUT2" 'n = text.count("    namespace: mobile\n")
 assert n >= 1
-text = text.replace("    namespace: mobile\n", "    namespace: mobile\n    environments: [dev]\n")
-text = text.replace("\nretired:\n", "\nretired:\n  - path: legacy/old-key\n    namespace: mobile\n    since: 2026-10-29\n    reason: F-02 probe\n")'
+text = text.replace("    namespace: mobile\n", "    namespace: mobile\n    environments: [dev]\n")'
 printf 'prod\n' > "${WORK}/empty_envs"
-printf '/gogo/stag/mobile/legacy/old-key\n/gogo/stag/mobile/sentry/dsn\n' > "${WORK}/extra_present"
+printf '/gogo/stag/mobile/sentry/dsn\n' > "${WORK}/extra_present"
 out="$(MANIFEST_READER="${MUT2}/scripts/lib/manifest.py" PATH="${WORK}:${PATH}" AWS_PROFILE=test \
   "${MUT2}/scripts/secrets/validate.sh" stag 2>&1)"; rc=$?
-if [[ $rc -ne 0 && "$out" == *"RETIRED, STILL STORED (in /gogo/stag/mobile"* && "$out" == *"legacy/old-key"* \
-      && "$out" == *"UNDECLARED (in /gogo/stag/mobile"* && "$out" == *"sentry/dsn"* ]]; then
+if [[ $rc -ne 0 && "$out" == *"UNDECLARED (in /gogo/stag/mobile"* && "$out" == *"sentry/dsn"* ]]; then
   ok "F-02: a namespace with no active row is still listed, and what is stored there is reported"
-else bad "F-02: a namespace holding only scoped-away/retired rows must still be validated" "rc=$rc $out"; fi
+else bad "F-02: a namespace holding only scoped-away rows must still be validated" "rc=$rc $out"; fi
 : > "${WORK}/extra_present"
 printf 'stag\nprod\n' > "${WORK}/empty_envs"
 
