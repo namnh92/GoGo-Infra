@@ -329,7 +329,7 @@ mutate env "the boundary without the two names" 's/\n\s*infra_readable_arns\s*=\
 mutate env "a caller disabling the tag lock" 's/(\n\s*infra_readable_arns\s*=\s*local\.infra_readable_parameter_arns)/$1\n  locked_tag_keys     = []/'
 mutate env "a declared role missing from boundary_role_keys" 's/\["plan", "apply", "monitor"/["apply", "monitor"/'
 mutate env "an undeclared role in boundary_role_keys" 's/\["plan", "apply", "monitor"/["plan", "ghost", "apply", "monitor"/'
-mutate env "developer listed unconditionally" 's/\["plan", "apply", "monitor", "deploy", "cms-deploy"\]/["plan", "apply", "monitor", "deploy", "cms-deploy", "developer"]/; s/var\.developer_sso_principal_arn == "" \? \[\] : \["developer"\],/[],/'
+mutate env "developer listed unconditionally" 's/\["plan", "apply", "monitor", "deploy", "cms-deploy", "readiness"\]/["plan", "apply", "monitor", "deploy", "cms-deploy", "readiness", "developer"]/; s/var\.developer_sso_principal_arn == "" \? \[\] : \["developer"\],/[],/'
 mutate env "the boundary without ssm_env" 's/\n\s*ssm_env\s*=\s*var\.environment//'
 mutate env "IAM writes scoped to the whole project" 's/\n\s*iam_scope_prefix\s*=\s*module\.tags\.name_prefix//'
 mutate env "the boundary without known roles" 's/\n\s*known_role_names\s*=\s*\[for k in local\.boundary_role_keys[^\n]*//'

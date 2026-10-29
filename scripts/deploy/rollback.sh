@@ -19,6 +19,54 @@ LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)"
 # shellcheck source=scripts/lib/remote.sh
 source "${LIB}/remote.sh"
 
+if [[ -z "$TARGET_REF" ]]; then
+  TARGET_REF="$(remote "cat '${DEPLOY_PATH}/.previous-revision' 2>/dev/null || true")"
+  [[ -n "$TARGET_REF" ]] || {
+    echo "no previous revision recorded; pass a ref explicitly" >&2
+    exit 1
+  }
+fi
+
+echo "==> Rolling back to ${TARGET_REF}"
+remote "cd '${DEPLOY_PATH}' && git checkout --detach '${TARGET_REF}'"
+# GoGo-BE#687 (review F-06): the API records the commit it was started from in
+# its boot-time audit rows, so the value handed to `up -d` is the commit the
+# checkout resolved to — never the ref, which may be a branch or a tag.
+# The last line only: a login profile may print a banner before it (review of
+# GoGo-Infra#201, F-01). Then the value must be a full commit id before it is
+# interpolated into a remote command; anything else stops the rollback here,
+# before a single container is touched.
+target="$(remote "cd '${DEPLOY_PATH}' && git rev-parse --verify HEAD" | tail -n 1 | tr -d '[:space:]')"
+if [[ ! "$target" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "rollback: ${TARGET_REF} did not resolve to a commit id; nothing was restarted" >&2
+  exit 1
+fi
+echo "    ${TARGET_REF} -> ${target}"
+
+# GoGo-Infra#309 D-6-B (ADR-0016). When this commit is the previous deploy
+# recorded with its env/report pair, the env file it was started with goes back
+# with it, and its readiness report with that: the report on the host never
+# describes a configuration other than the one the containers run. Restoring an
+# env file can undo a secret rotation made since; the deploy after the
+# incident renders SSM again.
+#
+# Otherwise — an explicit ref, a host deployed before the pairs existed — the
+# environment file is left alone, as it always was: it is rendered from SSM and
+# not versioned with the code. No report describes that combination, so the
+# projection is removed instead of left describing the deploy rolled back from.
+restore_id="$(remote "cat '${DEPLOY_PATH}/.previous-id' 2>/dev/null || true" | tail -n 1 | tr -d '[:space:]')"
+if [[ "$restore_id" =~ ^[0-9a-f]{40}-[0-9]+-[0-9]+$ && "${restore_id%%-*}" == "$target" ]] \
+  && remote "test -s '${DEPLOY_PATH}/${PAIRS_DIR}/${restore_id}/env' && test -s '${DEPLOY_PATH}/${PAIRS_DIR}/${restore_id}/secrets-readiness.json'"; then
+  echo "==> Restoring the env file of deploy ${restore_id}"
+  remote "cd '${DEPLOY_PATH}' && install -m 600 '${PAIRS_DIR}/${restore_id}/env' '${REMOTE_ENV_FILE}'"
+  # The restored env file decides the collector overlay, even when the caller
+  # exported COMPOSE_OBSERVABILITY: that choice was made for the env file being
+  # rolled back from (review of #315).
+  overlay_from_host_env
+else
+  restore_id=""
+fi
+
 # GoGo-BE#408 F-01 — the collector overlay, derived the way deploy-dev derives it.
 #
 # deploy-dev.yml adds docker/docker-compose.observability.yml only when the env
@@ -29,7 +77,9 @@ source "${LIB}/remote.sh"
 #
 # DEV only. deploy-production.yml never sets the overlay, and a rollback must
 # not start a collector the production deploy does not run. Read from the env
-# file already on the host, the one the running containers were started with.
+# file on the host — after the restore above, so it is the env file the
+# rolled-back containers are started with, not the one being rolled back from
+# (GoGo-Infra#309 review: an overlay chosen from B's env kept Alloy on for A).
 if [[ -z "$COMPOSE_OBSERVABILITY" && "$ENVIRONMENT_NAME" == dev ]]; then
   code=0
   remote "grep -qE '^PROMETHEUS_REMOTE_WRITE_URL=.+' '${DEPLOY_PATH}/${REMOTE_ENV_FILE}'" || code=$?
@@ -57,32 +107,6 @@ if [[ -z "$COMPOSE_OBSERVABILITY" && "$ENVIRONMENT_NAME" == dev ]]; then
   fi
 fi
 
-if [[ -z "$TARGET_REF" ]]; then
-  TARGET_REF="$(remote "cat '${DEPLOY_PATH}/.previous-revision' 2>/dev/null || true")"
-  [[ -n "$TARGET_REF" ]] || {
-    echo "no previous revision recorded; pass a ref explicitly" >&2
-    exit 1
-  }
-fi
-
-echo "==> Rolling back to ${TARGET_REF}"
-remote "cd '${DEPLOY_PATH}' && git checkout --detach '${TARGET_REF}'"
-# GoGo-BE#687 (review F-06): the API records the commit it was started from in
-# its boot-time audit rows, so the value handed to `up -d` is the commit the
-# checkout resolved to — never the ref, which may be a branch or a tag.
-# The last line only: a login profile may print a banner before it (review of
-# GoGo-Infra#201, F-01). Then the value must be a full commit id before it is
-# interpolated into a remote command; anything else stops the rollback here,
-# before a single container is touched.
-target="$(remote "cd '${DEPLOY_PATH}' && git rev-parse --verify HEAD" | tail -n 1 | tr -d '[:space:]')"
-if [[ ! "$target" =~ ^[0-9a-f]{40}$ ]]; then
-  echo "rollback: ${TARGET_REF} did not resolve to a commit id; nothing was restarted" >&2
-  exit 1
-fi
-echo "    ${TARGET_REF} -> ${target}"
-
-# The environment file is left alone. It is rendered from SSM and is not
-# versioned with the code; rolling it back would silently undo a secret rotation.
 echo "==> Rebuilding and restarting"
 #
 # No --remove-orphans: it deletes every container outside this compose set — the
@@ -114,11 +138,19 @@ refresh_alloy
 # its rollback target. Left unwritten, that deploy would record the revision
 # this rollback just backed away from.
 remote "cd '${DEPLOY_PATH}' && git rev-parse HEAD > .deployed-revision"
+if [[ -n "$restore_id" ]]; then
+  remote "cd '${DEPLOY_PATH}' && install -m 644 '${PAIRS_DIR}/${restore_id}/secrets-readiness.json' 'ops/.secrets-readiness.deploy.json.new' \
+    && mv -f 'ops/.secrets-readiness.deploy.json.new' '${READINESS_FILE}' && printf '%s' '${restore_id}' > .deployed-id"
+  readiness_note="The env file and readiness report of deploy ${restore_id} were restored with it."
+else
+  remote "cd '${DEPLOY_PATH}' && rm -f '${READINESS_FILE}' .deployed-id"
+  readiness_note="No recorded env/report pair matches ${target}: ${REMOTE_ENV_FILE} was left as it is and the readiness projection removed."
+fi
 
 cat <<EOM
 
 Rolled back to ${TARGET_REF}.
 
-The database was NOT rolled back, and ${REMOTE_ENV_FILE} was left as it is. Confirm the
-schema is compatible with this revision before declaring the incident closed.
+The database was NOT rolled back. ${readiness_note}
+Confirm the schema is compatible with this revision before declaring the incident closed.
 EOM

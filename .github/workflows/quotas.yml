@@ -15,9 +15,10 @@ on:
     # 01:00 UTC — 08:00 in Asia/Ho_Chi_Minh, before the working day rather than
     # during it, so a breach is read before the queue has been quiet for hours.
     #
-    # Schedules only fire from the default branch. While that is `master`, this
-    # file has to reach `master` through a release before the timer starts; on
-    # `develop` it runs by dispatch only. Same trap as INF-045.
+    # Schedules only fire from the default branch, which is `develop`
+    # (`gh repo view --json defaultBranchRef`, 2026-10-29; corrected in
+    # GoGo-Infra#309 — this said `master`). A change here starts the timer
+    # once it reaches `develop`. Same trap as INF-045 while it was `master`.
     - cron: '0 1 * * *'
   workflow_dispatch:
 
@@ -34,9 +35,10 @@ jobs:
     name: free-tier quotas (dev)
     runs-on: ubuntu-latest
 
-    # No `environment:`. The dev environment allows only the develop branch, and
-    # a schedule runs from the default branch — claiming it here would be
-    # refused by GitHub before AWS ever saw the request.
+    # No `environment:`. The monitor role trusts the branch subjects
+    # (ref:refs/heads/develop and master), not environment:dev — written when a
+    # schedule ran from `master`, which the dev environment does not admit.
+    # The default branch is `develop` now (see the schedule above).
 
     steps:
       - uses: actions/checkout@v4

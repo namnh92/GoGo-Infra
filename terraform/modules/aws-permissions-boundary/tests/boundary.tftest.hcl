@@ -65,10 +65,31 @@ variables {
   iam_scope_prefix = "gogo-dev"
   ssm_env          = "dev"
   known_role_names = ["gogo-dev-plan", "gogo-dev-apply", "gogo-dev-deploy"]
+
+  metadata_only_principal_arns = ["arn:aws:iam::111122223333:role/gogo-dev-readiness"]
+  ssm_kms_key_arn              = "arn:aws:kms:ap-southeast-1:111122223333:key/0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0"
 }
 
 run "boundary_document" {
   command = plan
+
+  # GoGo-Infra#309 D-4 — the readiness role never decrypts and never reads a
+  # parameter, whatever its own (apply-editable) policy says. Conditioned on
+  # that role alone; kms:Decrypt on the resolved key ARN, never the alias.
+  assert {
+    condition = length([
+      for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
+      if s.Sid == "MetadataOnlyNeverReadsOrDecrypts"
+      && s.Effect == "Deny"
+      && toset(flatten([try(s.Action, [])])) == toset(["kms:Decrypt", "ssm:GetParameter*"])
+      && toset(flatten([try(s.Resource, [])])) == toset([
+        "arn:aws:kms:ap-southeast-1:111122223333:key/0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0",
+        "arn:aws:ssm:*:111122223333:parameter/*",
+      ])
+      && jsonencode(try(s.Condition, {})) == jsonencode({ ArnEquals = { "aws:PrincipalArn" = "arn:aws:iam::111122223333:role/gogo-dev-readiness" } })
+    ]) == 1
+    error_message = "MetadataOnlyNeverReadsOrDecrypts must be exactly one Deny of kms:Decrypt and ssm:GetParameter* on the SSM key ARN and every parameter, conditioned on the readiness role alone"
+  }
 
   # GoGo-Infra#196 — RequireThisBoundary: CreateRole and
   # PutRolePermissionsBoundary denied unless the boundary is this exact policy.
@@ -91,7 +112,7 @@ run "boundary_document" {
       for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
       if s.Sid == "OnlyKnownRolesReadSsm"
       && s.Effect == "Deny"
-      && toset(flatten([try(s.Action, [])])) == toset(["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"])
+      && toset(flatten([try(s.Action, [])])) == toset(["ssm:GetParameter*"])
       && toset(flatten([try(s.Resource, [])])) == toset(["*"])
       && keys(try(s.Condition, {})) == ["ArnNotEquals"]
       && toset(flatten([try(s.Condition.ArnNotEquals["aws:PrincipalArn"], [])])) == toset([
@@ -168,7 +189,7 @@ run "boundary_document" {
       for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
       if s.Sid == "SsmReadsStayInEnvironment"
       && s.Effect == "Deny"
-      && toset(flatten([try(s.Action, [])])) == toset(["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"])
+      && toset(flatten([try(s.Action, [])])) == toset(["ssm:GetParameter*"])
       && !contains(keys(s), "Resource")
       && !contains(keys(s), "Condition")
       && toset(flatten([try(s.NotResource, [])])) == toset([
@@ -202,7 +223,7 @@ run "boundary_document" {
       for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
       if s.Sid == "SsmReadCeilingPlan"
       && s.Effect == "Deny"
-      && toset(flatten([try(s.Action, [])])) == toset(["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"])
+      && toset(flatten([try(s.Action, [])])) == toset(["ssm:GetParameter*"])
       && !contains(keys(s), "Resource")
       && toset(flatten([try(s.NotResource, [])])) == toset([
         "arn:aws:ssm:ap-southeast-1:111122223333:parameter/gogo/dev/backend/cms/super-admin-email",
@@ -221,7 +242,7 @@ run "boundary_document" {
       for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
       if s.Sid == "SsmReadCeilingApply"
       && s.Effect == "Deny"
-      && toset(flatten([try(s.Action, [])])) == toset(["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"])
+      && toset(flatten([try(s.Action, [])])) == toset(["ssm:GetParameter*"])
       && !contains(keys(s), "Resource")
       && toset(flatten([try(s.NotResource, [])])) == toset([
         "arn:aws:ssm:ap-southeast-1:111122223333:parameter/gogo/dev/backend/cms/super-admin-email",
@@ -324,17 +345,77 @@ run "boundary_document" {
 # (IAM quotas). Every string in this document is whitespace-free, so stripping
 # all whitespace is exactly what IAM counts. Measured with every role dev
 # declares (local.boundary_role_keys in environments/dev, developer included),
-# because each known role costs two ARNs; the failure otherwise surfaces as a
+# because each known role costs two ARNs, with the #309 metadata-only
+# statements on (the file's variables set them); the failure otherwise surfaces as a
 # bootstrap apply error after the statement that pushed it over was reviewed.
 run "document_fits_the_managed_policy_limit_with_every_dev_role" {
   command = plan
   variables {
-    known_role_names = ["gogo-dev-plan", "gogo-dev-apply", "gogo-dev-monitor", "gogo-dev-deploy", "gogo-dev-cms-deploy", "gogo-dev-developer"]
+    known_role_names = ["gogo-dev-plan", "gogo-dev-apply", "gogo-dev-monitor", "gogo-dev-deploy", "gogo-dev-cms-deploy", "gogo-dev-readiness", "gogo-dev-developer"]
   }
   assert {
     condition     = length(replace(data.aws_iam_policy_document.boundary.json, "/\\s/", "")) < 6144
     error_message = "the rendered boundary is ${length(replace(data.aws_iam_policy_document.boundary.json, "/\\s/", ""))} characters without whitespace; IAM's managed-policy limit is 6,144"
   }
+}
+
+# Owner decision Q5 (#315): the metadata-only Deny binds the readiness role
+# and nothing else. With deploy and monitor declared beside it, no statement
+# conditioned on aws:PrincipalArn equal to either denies them kms:Decrypt or a
+# parameter read — they decrypt their own trees legitimately.
+run "metadata_only_deny_leaves_deploy_and_monitor_alone" {
+  command = plan
+  variables {
+    known_role_names = ["gogo-dev-plan", "gogo-dev-apply", "gogo-dev-monitor", "gogo-dev-deploy", "gogo-dev-readiness"]
+  }
+  assert {
+    condition = length([
+      for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
+      if s.Effect == "Deny"
+      && length(setintersection(toset(flatten([try(s.Action, [])])), toset(["kms:Decrypt", "ssm:GetParameter*", "ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"]))) > 0
+      && length(setintersection(toset(flatten([try(s.Condition.ArnEquals["aws:PrincipalArn"], [])])), toset([
+        "arn:aws:iam::111122223333:role/gogo-dev-deploy",
+        "arn:aws:iam::111122223333:role/gogo-dev-monitor",
+      ]))) > 0
+    ]) == 0
+    error_message = "no Deny of decrypt or parameter reads may name the deploy or monitor role"
+  }
+  assert {
+    condition = length([
+      for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
+      if s.Sid == "MetadataOnlyNeverReadsOrDecrypts"
+      && toset(flatten([try(s.Condition.ArnEquals["aws:PrincipalArn"], [])])) == toset(["arn:aws:iam::111122223333:role/gogo-dev-readiness"])
+    ]) == 1
+    error_message = "MetadataOnlyNeverReadsOrDecrypts must name the readiness role alone"
+  }
+}
+
+run "no_metadata_only_role_means_no_309_statements" {
+  command = plan
+  variables {
+    metadata_only_principal_arns = []
+    ssm_kms_key_arn              = ""
+  }
+  assert {
+    condition     = !strcontains(data.aws_iam_policy_document.boundary.json, "MetadataOnly")
+    error_message = "the #309 statements must be off without a metadata-only role"
+  }
+}
+
+run "a_metadata_only_role_with_the_alias_is_refused" {
+  command = plan
+  variables {
+    ssm_kms_key_arn = "arn:aws:kms:ap-southeast-1:111122223333:alias/aws/ssm"
+  }
+  expect_failures = [var.ssm_kms_key_arn]
+}
+
+run "a_wildcard_metadata_only_role_is_refused" {
+  command = plan
+  variables {
+    metadata_only_principal_arns = ["arn:aws:iam::111122223333:role/gogo-dev-*"]
+  }
+  expect_failures = [var.metadata_only_principal_arns]
 }
 
 run "no_known_roles_means_no_196_statements_and_project_scope" {

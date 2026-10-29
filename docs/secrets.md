@@ -442,6 +442,65 @@ Re-run until it prints `METADATA READY`. Read the row in `config/secrets.manifes
 creating each credential — several are deliberately narrower than the obvious choice, and the
 `scope:` field says why.
 
+## Readiness (GoGo-Infra#309, ADR-0016)
+
+The same run that prints the classes above can write them as JSON — the **readiness report**:
+
+```bash
+./scripts/secrets/validate.sh dev --strict --report /tmp/readiness-dev.json
+python3 scripts/lib/manifest.py dev --summary /tmp/readiness-dev.json    # the run summary
+```
+
+Names, types, presence and dates only. No value, length or hash is ever read into it.
+
+**Every night** `secrets-readiness.yml` runs `validate.sh dev --strict --report` and
+`validate.sh tools --strict --report` as `gogo-dev-readiness`, a role that can list parameter
+metadata and nothing else: `ssm:DescribeParameters` and tag reads, an explicit Deny of every
+`GetParameter*` and of `kms:Decrypt` on the SSM key — in its own policy and in the boundary. The
+run summary prints one line per capability, then the `core` group (rows no capability needs),
+then every row that is not OK; the two reports are the run's artifacts, kept 90 days. The run is
+red until every declared row is stored or parked — that is the measurement, not noise
+(`docs/runbooks/secrets-readiness.md` says what to do with each state).
+
+**How to read a report.** Each row carries independent fields:
+
+| Field | Values | Meaning |
+| --- | --- | --- |
+| `lifecycle` | `required`, `optional`, `planned`, `parked`, `retired`, `undeclared` | what the manifest says the row is; `planned` = only planned capabilities need it |
+| `presence` | `present`, `absent`, `unknown` | what SSM holds; `unknown` = that tree could not be read, never "absent" |
+| `findings` | `missing-required`, `declared-absent`, `undeclared`, `parked-present`, `retired-present`, `wrong-type`, `tag-missing`, `tag-misplaced` | the validate.sh classes that apply to the row |
+| `verdict` | `OK`, `FAIL`, `UNKNOWN` | the one verdict every consumer shows; computed here, nowhere else |
+| `parameter_age_days` | days | since SSM last modified the parameter — **not** when it was rotated |
+| `verified` | `not-checked` | provider-side validity is not covered (`check-provider-keys.sh`) |
+
+A capability is `ready` when every row it requires is present with verdict OK; otherwise its
+`findings` say why (`dependency-missing`, `dependency-planned`, `dependency-parked`,
+`dependency-invalid`, `dependency-outside-environment`, `dependency-unread`) and `missing` names
+the rows. Planned capabilities are always in the report and never change the nightly exit code.
+
+The overall `verdict` is FAIL over UNKNOWN over OK, and with `--report` it is the exit code:
+0 OK, 1 FAIL, 2 UNKNOWN (something could not be read — a partial collection, or a run that
+stopped early, which still writes its report as `aborted`). Without `--report` the exit codes are
+the ones above. If the report ever disagrees with the classes `validate.sh` printed it says
+`validator-disagreement` and fails; that is a bug in this repository, not in SSM.
+
+**The metadata-only path.** An identity without `ssm:GetParametersByPath` — the readiness role —
+lists each tree through `describe-parameters`, which returns names, types and dates and never a
+value. The owner's session and the deploy role keep the by-path listing. Types come from the
+listing either way. The readiness role sees parameter **names** account-wide (DescribeParameters
+cannot be scoped); ADR-0016 records that as accepted.
+
+**On the deploy host.** `deploy-dev.yml` writes the same report from the deploy role (backend only,
+so UNKNOWN by design) and `deploy-vps.sh` leaves a projection of it — the backend runtime rows,
+fields by allowlist — at `${DEPLOY_PATH}/ops/secrets-readiness.deploy.json`, with
+`deploy_id = <commit>-<run id>-<run attempt>`, the same value it writes into the env file as
+`APP_DEPLOY_ID`. The env file and the report are kept as a pair per deploy under
+`${DEPLOY_PATH}/.deploys/<deploy_id>/` — host-only, 0600 files in 0700 directories, never under
+the `ops/` the API mounts — the
+current and the previous one; a rollback restores both, and the collector overlay follows the
+restored env file. The ci, tools and mobile inventory never
+leaves GitHub. The projection is a dated snapshot of one deploy, not a live view of SSM.
+
 ## Generated values
 
 Three of these are ours to invent rather than to collect from a provider: the auth signing pair,

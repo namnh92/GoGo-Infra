@@ -57,8 +57,6 @@ COMPOSE_EDGE="${COMPOSE_EDGE:?set COMPOSE_EDGE, e.g. docker/docker-compose.edge-
 # at the old variable is worse than no gate, because it deploys the collector
 # in exactly the case where it has nowhere to send.
 COMPOSE_OBSERVABILITY="${COMPOSE_OBSERVABILITY:-}"
-compose_overlays="-f ${COMPOSE_EDGE}"
-[[ -n "$COMPOSE_OBSERVABILITY" ]] && compose_overlays="${compose_overlays} -f ${COMPOSE_OBSERVABILITY}"
 
 # ENV_FILE and --env-file both, because they do different jobs: the flag gives
 # compose the variables it needs to interpolate the file, and ENV_FILE tells the
@@ -71,8 +69,16 @@ compose_overlays="-f ${COMPOSE_EDGE}"
 # deployed the same way on the same host. The first DEV deploy landed beside an
 # unrelated `gogo-prod` stack on this machine, and both answered to names nobody
 # had chosen deliberately.
-# shellcheck disable=SC2034  # consumed by the scripts that source this file
-COMPOSE="COMPOSE_PROJECT_NAME=gogo-${ENVIRONMENT_NAME} ENV_FILE=${REMOTE_ENV_FILE} docker compose -f docker/docker-compose.prod.yml ${compose_overlays} --env-file ${REMOTE_ENV_FILE}"
+#
+# A function, so a caller that changes COMPOSE_OBSERVABILITY after sourcing
+# (overlay_from_host_env, below) can assemble it again.
+assemble_compose() {
+  local compose_overlays="-f ${COMPOSE_EDGE}"
+  [[ -z "$COMPOSE_OBSERVABILITY" ]] || compose_overlays="${compose_overlays} -f ${COMPOSE_OBSERVABILITY}"
+  # shellcheck disable=SC2034  # consumed by the scripts that source this file
+  COMPOSE="COMPOSE_PROJECT_NAME=gogo-${ENVIRONMENT_NAME} ENV_FILE=${REMOTE_ENV_FILE} docker compose -f docker/docker-compose.prod.yml ${compose_overlays} --env-file ${REMOTE_ENV_FILE}"
+}
+assemble_compose
 
 # INF-071 — which services a deploy may recreate, and which it must not.
 #
@@ -203,4 +209,48 @@ refresh_alloy() {
   fi
   remote "printf '%s' '${want}' > '${DEPLOY_PATH}/${ALLOY_MARKER}'" ||
     echo "::warning::could not record ${ALLOY_MARKER}; the next deploy recreates Alloy again" >&2
+}
+
+# GoGo-Infra#309 D-6-B (ADR-0016) — the deploy-time readiness projection.
+#
+# READINESS_FILE is what the API reads (the directory ops/ is bind-mounted
+# read-only, so a rename is visible without a restart); ops/ holds that file
+# and nothing else that outlives a deploy. PAIRS_DIR keeps, per deploy id, the
+# env file the containers were started with and the report that describes it —
+# the current deploy and the previous one, nothing older — so a rollback
+# restores both together. Host-only and outside ops/: the env copies carry
+# every value, including credentials since rotated out, and must never be in
+# the tree mounted into the API (GoGo-Infra#309 review). Relative to DEPLOY_PATH.
+# shellcheck disable=SC2034  # consumed by the scripts that source this file
+READINESS_FILE="ops/secrets-readiness.deploy.json"
+PAIRS_DIR=".deploys"
+
+# Keeps the pairs .deployed-id and .previous-id name; removes every other one.
+# Never fatal: the deploy is verified by the time this runs.
+prune_pairs() {
+  # shellcheck disable=SC2016 # expanded on the host
+  remote "cd '${DEPLOY_PATH}' && keep=\" \$(cat .deployed-id 2>/dev/null) \$(cat .previous-id 2>/dev/null) \" \
+    && for d in '${PAIRS_DIR}'/*/; do [ -d \"\$d\" ] || continue; id=\$(basename \"\$d\"); \
+         case \"\$keep\" in *\" \$id \"*) ;; *) rm -rf \"\$d\" ;; esac; done" ||
+    echo "::warning::could not prune ${PAIRS_DIR}; older env/report pairs remain on the host" >&2
+}
+
+# The observability overlay as the env file on the host says (DEV only, like
+# rollback.sh's derivation): on when it carries PROMETHEUS_REMOTE_WRITE_URL,
+# off when it does not. Used after an env file was restored from a pair, so
+# the collector follows the configuration the containers are started with.
+# An unreadable file leaves the overlay as it was, with a warning.
+overlay_from_host_env() {
+  [[ "$ENVIRONMENT_NAME" == dev ]] || return 0
+  local code=0
+  remote "grep -qE '^PROMETHEUS_REMOTE_WRITE_URL=.+' '${DEPLOY_PATH}/${REMOTE_ENV_FILE}'" || code=$?
+  case "$code" in
+    0) COMPOSE_OBSERVABILITY=docker/docker-compose.observability.yml ;;
+    1) COMPOSE_OBSERVABILITY="" ;;
+    *)
+      echo "::warning::could not read ${REMOTE_ENV_FILE} on the host (exit ${code}) — observability overlay left as it was" >&2
+      return 0
+      ;;
+  esac
+  assemble_compose
 }

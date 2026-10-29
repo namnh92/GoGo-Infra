@@ -212,12 +212,10 @@ data "aws_iam_policy_document" "boundary" {
       sid    = "SsmReadCeiling${statement.key}"
       effect = "Deny"
 
-      actions = [
-        "ssm:GetParameter",
-        "ssm:GetParameters",
-        "ssm:GetParametersByPath",
-        "ssm:GetParameterHistory",
-      ]
+      # GetParameter, GetParameters, GetParametersByPath, GetParameterHistory —
+      # the only four SSM actions the wildcard matches. Written as one to keep
+      # the document under IAM's 6,144-character limit (GoGo-Infra#309).
+      actions = ["ssm:GetParameter*"]
 
       not_resources = statement.value.readable_arns
 
@@ -351,12 +349,10 @@ data "aws_iam_policy_document" "boundary" {
       sid    = "OnlyKnownRolesReadSsm"
       effect = "Deny"
 
-      actions = [
-        "ssm:GetParameter",
-        "ssm:GetParameters",
-        "ssm:GetParametersByPath",
-        "ssm:GetParameterHistory",
-      ]
+      # GetParameter, GetParameters, GetParametersByPath, GetParameterHistory —
+      # the only four SSM actions the wildcard matches. Written as one to keep
+      # the document under IAM's 6,144-character limit (GoGo-Infra#309).
+      actions = ["ssm:GetParameter*"]
 
       resources = ["*"]
 
@@ -400,12 +396,10 @@ data "aws_iam_policy_document" "boundary" {
       sid    = "SsmReadsStayInEnvironment"
       effect = "Deny"
 
-      actions = [
-        "ssm:GetParameter",
-        "ssm:GetParameters",
-        "ssm:GetParametersByPath",
-        "ssm:GetParameterHistory",
-      ]
+      # GetParameter, GetParameters, GetParametersByPath, GetParameterHistory —
+      # the only four SSM actions the wildcard matches. Written as one to keep
+      # the document under IAM's 6,144-character limit (GoGo-Infra#309).
+      actions = ["ssm:GetParameter*"]
 
       not_resources = [
         "arn:aws:ssm:*:${local.account}:parameter/gogo/${var.ssm_env}",
@@ -437,6 +431,38 @@ data "aws_iam_policy_document" "boundary" {
       ]
 
       resources = ["*"]
+    }
+  }
+
+  # --- GoGo-Infra#309 D-4 / ADR-0016: metadata-only roles ---------------------
+  #
+  # The readiness role lists names, types, dates and tags, and must never read
+  # a value. Its own policy denies GetParameter* and kms:Decrypt, but the apply
+  # role can rewrite any gogo-* policy (ManageGoGoPolicies); this document it
+  # cannot. Conditioned on those principals alone — a blanket Deny would stop
+  # every role that decrypts legitimately. The resolved key ARN, never the
+  # alias: Decrypt is authorized against the key (A-F-03 r2).
+  #
+  # One statement for both, because the document is near IAM's 6,144-character
+  # limit: kms:Decrypt matches only the key, ssm:GetParameter* only the
+  # parameters, so the cross product denies exactly the two things.
+  dynamic "statement" {
+    for_each = length(var.metadata_only_principal_arns) == 0 ? [] : [1]
+
+    content {
+      sid     = "MetadataOnlyNeverReadsOrDecrypts"
+      effect  = "Deny"
+      actions = ["kms:Decrypt", "ssm:GetParameter*"]
+      resources = [
+        var.ssm_kms_key_arn,
+        "arn:aws:ssm:*:${local.account}:parameter/*",
+      ]
+
+      condition {
+        test     = "ArnEquals"
+        variable = "aws:PrincipalArn"
+        values   = var.metadata_only_principal_arns
+      }
     }
   }
 

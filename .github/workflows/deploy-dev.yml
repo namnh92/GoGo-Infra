@@ -40,8 +40,20 @@ jobs:
           role-to-assume: ${{ vars.AWS_DEPLOY_DEV_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
+      # GoGo-Infra#309 D-6-B: the same run writes the D-1 report, which the
+      # deploy projects onto the host. Exit 2 is UNKNOWN: this role reads
+      # <env>/backend/* only, so mobile, ci and the tags are SKIPPED by design
+      # (validate.sh's default mode). deploy-vps.sh refuses a report whose
+      # backend was not read, and an aborted one.
       - name: verify secrets match the manifest
-        run: ./scripts/secrets/validate.sh dev
+        run: |
+          set -uo pipefail
+          rc=0
+          ./scripts/secrets/validate.sh dev --report "${RUNNER_TEMP}/secrets-readiness.json" || rc=$?
+          case "$rc" in
+            0 | 2) ;;
+            *) exit "$rc" ;;
+          esac
 
       - name: render env file
         run: ./scripts/deploy/render-env.sh dev "${RUNNER_TEMP}/gogo.env"
@@ -88,6 +100,9 @@ jobs:
           REMOTE_ENV_FILE: .env.dev
           KNOWN_HOSTS_FILE: config/known_hosts.dev
           SSH_KEY_FILE: ${{ runner.temp }}/deploy_key
+          # D-6-B: projected onto the host with deploy_id =
+          # <commit>-<run id>-<run attempt> (GITHUB_RUN_ID/GITHUB_RUN_ATTEMPT are set by Actions).
+          READINESS_REPORT: ${{ runner.temp }}/secrets-readiness.json
         run: |
           set -euo pipefail
           # Access service token, in the environment variables cloudflared

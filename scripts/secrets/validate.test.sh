@@ -36,21 +36,48 @@ trap 'rm -rf "$WORK"' EXIT
 #   $WORK/tag_deny        non-empty → tag reads answer AccessDenied
 #   $WORK/extra_present   full parameter names stored beyond the declared rows
 #                         (a retired, parked or undeclared parameter)
+#   $WORK/sts_fail        non-empty → no credentials (sts answers an error)
+#   $WORK/bypath_deny     non-empty → every GetParameter* answers AccessDenied
+#                         and every call to one is logged to $WORK/value_calls:
+#                         the readiness role (GoGo-Infra#309 D-4), which lists
+#                         through DescribeParameters only
+#
+# A listing (by path or by DescribeParameters) answers one line per parameter:
+# name, type, last-modified date — the shape `--query
+# 'Parameters[].[Name,Type,LastModifiedDate]' --output text` prints.
 make_stub() {
   cat > "${WORK}/aws" <<'STUB'
 #!/usr/bin/env bash
 WORK="$(dirname "$0")"
 printf 'aws\n' >> "${WORK}/provider_calls"
-if [[ "$1" == "sts" ]]; then echo '{"Arn":"arn:aws:iam::0:user/test"}'; exit 0; fi
+if [[ "$1" == "sts" ]]; then
+  [[ -s "${WORK}/sts_fail" ]] && { echo "Unable to locate credentials" >&2; exit 255; }
+  echo '{"Arn":"arn:aws:iam::0:user/test"}'; exit 0
+fi
+if [[ "$1" == "ssm" && "$2" == get-parameter* && -s "${WORK}/bypath_deny" ]]; then
+  printf '%s\n' "$*" >> "${WORK}/value_calls"
+  echo "An error occurred (AccessDeniedException) when calling the GetParametersByPath operation: explicit deny" >&2
+  exit 254
+fi
+listing=no
 if [[ "$1" == "ssm" && "$2" == "get-parameters-by-path" ]]; then
+  listing=yes
   prefix=""
   for ((i=1;i<=$#;i++)); do [[ "${!i}" == "--path" ]] && { j=$((i+1)); prefix="${!j}"; }; done
+fi
+if [[ "$1" == "ssm" && "$2" == "describe-parameters" ]]; then
+  for arg in "$@"; do
+    [[ "$arg" == Key=Path,Option=Recursive,Values=* ]] && { listing=yes; prefix="${arg#Key=Path,Option=Recursive,Values=}"; }
+  done
+fi
+if [[ "$listing" == yes ]]; then
   while read -r denied; do
     [[ -n "$denied" && "$prefix" == "$denied"* ]] && {
       echo "An error occurred (AccessDeniedException) when calling the GetParametersByPath operation" >&2
       exit 255
     }
   done < "${WORK}/deny"
+  modified="2026-10-17T09:12:33.123000+07:00"
   # Emit every declared path for this prefix except those listed absent.
   env="$(sed -E 's#^/gogo/(ci/)?([a-z]+).*#\2#' <<< "$prefix")"
   # An environment nobody has provisioned lists nothing — which is the real
@@ -62,14 +89,15 @@ if [[ "$1" == "ssm" && "$2" == "get-parameters-by-path" ]]; then
     */mobile)        ns=mobile ;;
     *)               ns=backend ;;
   esac
-  {
-    python3 "${MANIFEST_READER}" "$env" --namespace "$ns" --consumer all \
-      | cut -f1 | while read -r p; do
-          grep -qxF "$p" "${WORK}/absent" && continue
-          printf '%s/%s\n' "$prefix" "$p"
-        done
-    grep "^${prefix}/" "${WORK}/extra_present" 2>/dev/null || true
-  } | paste -sd'\t' -
+  python3 "${MANIFEST_READER}" "$env" --namespace "$ns" --consumer all \
+    | cut -f1,3 | while IFS=$'\t' read -r p t; do
+        grep -qxF "$p" "${WORK}/absent" && continue
+        override="$(awk -F'\t' -v n="${prefix}/${p}" '$1==n{print $2}' "${WORK}/type_override")"
+        printf '%s/%s\t%s\t%s\n' "$prefix" "$p" "${override:-$t}" "$modified"
+      done
+  grep "^${prefix}/" "${WORK}/extra_present" 2>/dev/null | while read -r n; do
+    printf '%s\tSecureString\t%s\n' "$n" "$modified"
+  done
   exit 0
 fi
 # Tags (GoGo-Infra#194). By default every present infra_readable row is tagged
@@ -129,7 +157,7 @@ STUB
   chmod +x "${WORK}/aws"
   : > "${WORK}/deny"; : > "${WORK}/absent"; : > "${WORK}/type_override"
   : > "${WORK}/untagged"; : > "${WORK}/extra_tagged"; : > "${WORK}/tag_deny"
-  : > "${WORK}/extra_present"
+  : > "${WORK}/extra_present"; : > "${WORK}/bypath_deny"; : > "${WORK}/value_calls"; : > "${WORK}/sts_fail"
   printf 'stag\nprod\n' > "${WORK}/empty_envs"
 }
 
@@ -605,6 +633,251 @@ out="$(MANIFEST_READER="${MUT3}/scripts/lib/manifest.py" PATH="${WORK}:${PATH}" 
 if [[ $rc -ne 0 && "$out" == *"secure_export needs backend:cost/ledger-enabled — parked"* && "$out" != *"READY:"* ]]; then
   ok "A-F-01: an enabled capability with a parked dependency fails readiness and names it parked"
 else bad "A-F-01: a parked dependency must keep the capability not ready" "rc=$rc $out"; fi
+
+# --- GoGo-Infra#309: the readiness report -------------------------------------
+#
+# `--report <file>` writes the run as JSON (ADR-0016). What is pinned: the exit
+# code is the report's verdict (0 OK, 1 FAIL, 2 UNKNOWN), the report names
+# every class validate.sh printed and nothing else, a metadata-only identity
+# produces the same (path, lifecycle, presence) set as the owner's, and no field
+# can carry a value.
+
+REPORTS="${WORK}/reports"
+mkdir -p "$REPORTS"
+# rq <report> <python expression over r, row, cap> — prints its value.
+rq() { python3 - "$1" "$2" <<'PY'
+import json, sys
+r = json.load(open(sys.argv[1], encoding="utf-8"))
+row = {x["path"]: x for x in r["rows"]}
+cap = {c["name"]: c for c in r["capabilities"]}
+print(eval(sys.argv[2]))
+PY
+}
+report_run() { # report_run <name> <env> [args...] -> sets RC, OUT; report at $REPORTS/<name>.json
+  local name="$1"; shift
+  OUT="$(run "$@" --report "${REPORTS}/${name}.json")"; RC=$?
+}
+no_disagreement() { [[ "$(rq "$1" '[e for e in r["collection"]["errors"] if "disagreement" in e]')" == "[]" ]]; }
+
+report_run ok dev --strict
+if [[ $RC -eq 0 && "$(rq "${REPORTS}/ok.json" 'r["verdict"], r["collection"]["status"], r["schema_version"], r["env"], r["strict"]')" == "('OK', 'complete', 1, 'dev', True)" ]]; then
+  ok "#309: a ready dev writes a complete OK report and exits 0"
+else bad "#309: a ready dev must write a complete OK report" "rc=$RC $(head -c 400 "${REPORTS}/ok.json" 2>/dev/null)"; fi
+
+# Fields by allowlist: a key nobody documented — above all anything that could
+# hold a value — fails here.
+keys="$(rq "${REPORTS}/ok.json" 'sorted(set(k for x in r["rows"] for k in x))')"
+want_keys="['capabilities', 'consumer', 'env_var', 'findings', 'lifecycle', 'namespace', 'parameter_age_days', 'path', 'presence', 'type_declared', 'type_live', 'verdict', 'verified']"
+top="$(rq "${REPORTS}/ok.json" 'sorted(r)')"
+want_top="['basis', 'capabilities', 'collection', 'core', 'env', 'generated_at', 'include_planned', 'manifest_sha', 'rows', 'schema_version', 'strict', 'verdict']"
+if [[ "$keys" == "$want_keys" && "$top" == "$want_top" ]]; then
+  ok "#309: report rows and the document carry exactly the documented fields"
+else bad "#309: report fields drifted from ADR-0016" "rows=$keys top=$top"; fi
+if [[ "$(rq "${REPORTS}/ok.json" 'sorted({x["lifecycle"] for x in r["rows"]})')" == "['optional', 'parked', 'planned', 'required', 'retired']" \
+   && "$(rq "${REPORTS}/ok.json" 'row["/gogo/dev/backend/database/url"]["lifecycle"], row["/gogo/dev/backend/openrouter/assistant-api-key"]["lifecycle"], row["/gogo/dev/backend/cost/ledger-enabled"]["lifecycle"]')" == "('required', 'planned', 'parked')" ]]; then
+  ok "#309: lifecycle maps required / planned (only a planned capability needs it) / parked / retired"
+else bad "#309: lifecycle mapping is wrong" "$(rq "${REPORTS}/ok.json" 'sorted({x["lifecycle"] for x in r["rows"]})')"; fi
+if [[ "$(rq "${REPORTS}/ok.json" 'all(isinstance(x["parameter_age_days"], int) for x in r["rows"] if x["presence"] == "present") and all(x["parameter_age_days"] is None for x in r["rows"] if x["presence"] != "present")')" == "True" \
+   && "$(rq "${REPORTS}/ok.json" '{x["verified"] for x in r["rows"]}')" == "{'not-checked'}" ]]; then
+  ok "#309: parameter_age_days is a day count for stored rows only; verified is not-checked"
+else bad "#309: parameter_age_days / verified are wrong" "$(rq "${REPORTS}/ok.json" 'r["rows"][:2]')"; fi
+if [[ "$(rq "${REPORTS}/ok.json" 'cap["ai_assistant"]["status"], cap["public_catalogue_uploads"]["status"], cap["public_catalogue_uploads"]["ready"]')" == "('planned', 'enabled', True)" ]]; then
+  ok "#309: planned capabilities are in every report (A-F-09), enabled ones too"
+else bad "#309: the capability list is wrong" "$(rq "${REPORTS}/ok.json" '[(c["name"], c["status"]) for c in r["capabilities"]]')"; fi
+
+# The metadata-only path (D-4): no GetParameter*, same answer.
+echo readiness > "${WORK}/bypath_deny"
+report_run meta dev --strict
+by_path_attempts="$(grep -c 'get-parameters-by-path' "${WORK}/value_calls" || true)"
+if [[ $RC -eq 0 && "$OUT" == *"METADATA READY"* && "$by_path_attempts" -le 1 ]] \
+   && ! grep -qE 'get-parameter( |s )|with-decryption' "${WORK}/value_calls"; then
+  ok "#309 D-4: a role with no GetParameter* validates through DescribeParameters (${by_path_attempts} refused by-path attempt, no value call)"
+else bad "#309 D-4: the metadata-only path must not read parameters" "rc=$RC calls=$(cat "${WORK}/value_calls") $OUT"; fi
+set_of() { rq "$1" 'sorted((x["path"], x["lifecycle"], x["presence"]) for x in r["rows"])'; }
+if [[ -n "$(set_of "${REPORTS}/ok.json")" && "$(set_of "${REPORTS}/ok.json")" == "$(set_of "${REPORTS}/meta.json")" ]]; then
+  ok "#309 D-12: owner identity and readiness role give the same (path, lifecycle, presence) set"
+else bad "#309 D-12: the two identities disagree" "$(diff <(set_of "${REPORTS}/ok.json") <(set_of "${REPORTS}/meta.json") | head -5)"; fi
+printf '/gogo/dev/backend/auth/jwt-secret\tString\n' > "${WORK}/type_override"
+report_run meta_type dev --strict
+if [[ $RC -eq 1 && "$OUT" == *"WRONG TYPE"* && "$(rq "${REPORTS}/meta_type.json" 'row["/gogo/dev/backend/auth/jwt-secret"]["findings"], row["/gogo/dev/backend/auth/jwt-secret"]["type_live"]')" == "(['wrong-type'], 'String')" ]]; then
+  ok "#309 D-4: type drift is still caught through DescribeParameters"
+else bad "#309 D-4: the metadata path lost the type check" "rc=$RC $OUT"; fi
+: > "${WORK}/type_override"; : > "${WORK}/bypath_deny"; : > "${WORK}/value_calls"
+
+# The deploy role (default mode): mobile and ci unread, tags unreadable.
+printf '/gogo/dev/mobile\n/gogo/ci/dev\n' > "${WORK}/deny"; echo deny > "${WORK}/tag_deny"
+run dev >/dev/null; rc_plain=$?
+report_run deploy dev
+if [[ $rc_plain -eq 0 && $RC -eq 2 && "$(rq "${REPORTS}/deploy.json" 'r["verdict"], r["collection"]["status"], r["collection"]["skipped_namespaces"]')" == "('UNKNOWN', 'partial', ['ci', 'mobile'])" ]]; then
+  ok "#309: unread trees make the report UNKNOWN (exit 2); without --report the deploy check still exits 0"
+else bad "#309: a partial collection must be UNKNOWN, exit 2" "plain=$rc_plain rc=$RC $OUT"; fi
+if [[ "$(rq "${REPORTS}/deploy.json" '{x["presence"] for x in r["rows"] if x["namespace"] in ("ci", "mobile")}, {x["verdict"] for x in r["rows"] if x["namespace"] == "ci"}')" == "({'unknown'}, {'UNKNOWN'})" ]]; then
+  ok "#309: rows in an unread tree are presence unknown, verdict UNKNOWN — never absent"
+else bad "#309: unread rows must be unknown" "$(rq "${REPORTS}/deploy.json" '[x for x in r["rows"] if x["namespace"] == "ci"][:1]')"; fi
+# FAIL outranks UNKNOWN (A-F-08 r3).
+echo "database/url" > "${WORK}/absent"
+report_run deploy_fail dev
+if [[ $RC -eq 1 && "$(rq "${REPORTS}/deploy_fail.json" 'r["verdict"], r["collection"]["status"], row["/gogo/dev/backend/database/url"]["findings"]')" == "('FAIL', 'partial', ['missing-required'])" ]]; then
+  ok "#309: a FAIL row outranks a partial collection (FAIL > UNKNOWN), exit 1"
+else bad "#309: FAIL must outrank UNKNOWN" "rc=$RC $OUT"; fi
+: > "${WORK}/absent"; : > "${WORK}/deny"; : > "${WORK}/tag_deny"
+
+# Strict and unread: validate.sh fails, the report says why (UNKNOWN, exit 2).
+echo "/gogo/dev/mobile" > "${WORK}/deny"
+report_run strict_skip dev --strict
+if [[ $RC -eq 2 && "$OUT" == *"SKIPPED"* && "$(rq "${REPORTS}/strict_skip.json" 'r["verdict"]')" == "UNKNOWN" ]] \
+   && no_disagreement "${REPORTS}/strict_skip.json"; then
+  ok "#309: --strict with an unread tree reports UNKNOWN and exits 2, never 0"
+else bad "#309: strict + unread must be UNKNOWN" "rc=$RC $OUT"; fi
+: > "${WORK}/deny"
+
+# A capability whose requirement is absent: not ready, the row named.
+echo "r2/public-secret-access-key" > "${WORK}/absent"
+report_run cap dev --strict
+if [[ $RC -eq 1 && "$(rq "${REPORTS}/cap.json" 'cap["public_catalogue_uploads"]["verdict"], cap["public_catalogue_uploads"]["ready"], cap["public_catalogue_uploads"]["missing"], cap["public_catalogue_uploads"]["findings"]')" == "('FAIL', False, ['/gogo/dev/backend/r2/public-secret-access-key'], ['dependency-missing'])" ]] \
+   && no_disagreement "${REPORTS}/cap.json"; then
+  ok "#309: an enabled capability with an absent requirement is FAIL, not ready, and names it"
+else bad "#309: capability readiness is wrong" "rc=$RC $(rq "${REPORTS}/cap.json" 'cap["public_catalogue_uploads"], r["collection"]')"; fi
+: > "${WORK}/absent"
+
+# A planned capability never changes the exit code (A-F-09).
+echo "openrouter/assistant-api-key" > "${WORK}/absent"
+report_run planned dev
+if [[ $RC -eq 0 && "$(rq "${REPORTS}/planned.json" 'r["verdict"], cap["ai_assistant"]["verdict"], cap["ai_assistant"]["ready"], cap["ai_assistant"]["findings"]')" == "('OK', 'FAIL', False, ['dependency-planned'])" ]]; then
+  ok "#309: a planned capability missing its row is reported not ready (dependency-planned) and the run still exits 0"
+else bad "#309: a planned capability must not drive the exit code" "rc=$RC $(rq "${REPORTS}/planned.json" 'cap["ai_assistant"]')"; fi
+: > "${WORK}/absent"
+
+# Parked dependency (A-F-01): the mutated manifest of the case above.
+out="$(MANIFEST_READER="${MUT3}/scripts/lib/manifest.py" PATH="${WORK}:${PATH}" AWS_PROFILE=test \
+  "${MUT3}/scripts/secrets/validate.sh" dev --strict --report "${REPORTS}/parked.json" 2>&1)"; rc=$?
+if [[ $rc -eq 1 && "$(rq "${REPORTS}/parked.json" 'cap["secure_export"]["verdict"], cap["secure_export"]["findings"]')" == "('FAIL', ['dependency-parked'])" ]] \
+   && no_disagreement "${REPORTS}/parked.json"; then
+  ok "#309: a capability requiring a parked row is FAIL with dependency-parked"
+else bad "#309: dependency-parked is not reported" "rc=$rc $out"; fi
+
+# Every row class, each with its finding and lifecycle.
+printf '/gogo/dev/backend/nothing/declared-here\n/gogo/dev/backend/cost/ledger-enabled\n/gogo/ci/dev/github/agent-app-id\n' > "${WORK}/extra_present"
+echo "/gogo/dev/backend/cms/access-staff-emails" > "${WORK}/untagged"
+printf '/gogo/dev/backend/database/url\tSecureString\n' > "${WORK}/extra_tagged"
+echo "privacy-export/wrapping-key-active" > "${WORK}/absent"
+report_run classes dev --strict
+got="$(rq "${REPORTS}/classes.json" '[(row[p]["lifecycle"], row[p]["findings"], row[p]["verdict"]) for p in ("/gogo/dev/backend/nothing/declared-here", "/gogo/dev/backend/cost/ledger-enabled", "/gogo/ci/dev/github/agent-app-id", "/gogo/dev/backend/cms/access-staff-emails", "/gogo/dev/backend/database/url", "/gogo/dev/backend/privacy-export/wrapping-key-active")]')"
+want="[('undeclared', ['undeclared'], 'FAIL'), ('parked', ['parked-present'], 'FAIL'), ('retired', ['retired-present'], 'FAIL'), ('required', ['tag-missing'], 'FAIL'), ('required', ['tag-misplaced'], 'FAIL'), ('optional', ['declared-absent'], 'FAIL')]"
+if [[ $RC -eq 1 && "$got" == "$want" ]] && no_disagreement "${REPORTS}/classes.json"; then
+  ok "#309: undeclared, parked-present, retired-present, tag-missing, tag-misplaced, declared-absent each land on their row"
+else bad "#309: row findings are wrong" "rc=$RC got=$got $(rq "${REPORTS}/classes.json" 'r["collection"]')"; fi
+report_run classes_default dev
+if [[ $RC -eq 1 && "$(rq "${REPORTS}/classes_default.json" 'row["/gogo/dev/backend/privacy-export/wrapping-key-active"]["findings"], row["/gogo/dev/backend/privacy-export/wrapping-key-active"]["verdict"]')" == "(['declared-absent'], 'OK')" ]] \
+   && no_disagreement "${REPORTS}/classes_default.json"; then
+  ok "#309: declared-absent fails a row under --strict only"
+else bad "#309: declared-absent outside --strict must stay a note" "rc=$RC"; fi
+: > "${WORK}/extra_present"; : > "${WORK}/untagged"; : > "${WORK}/extra_tagged"; : > "${WORK}/absent"
+
+# D-12 regression: the tools tree with one row deleted fails (the 2026-10-29
+# incident class), and so does the empty tree.
+echo "github/agent-app-id" > "${WORK}/absent"
+report_run tools_one tools --strict
+if [[ $RC -eq 1 && "$(rq "${REPORTS}/tools_one.json" 'r["verdict"], row["/gogo/tools/github/agent-app-id"]["findings"], row["/gogo/tools/github/agent-app-id"]["presence"]')" == "('FAIL', ['declared-absent'], 'absent')" ]] \
+   && no_disagreement "${REPORTS}/tools_one.json"; then
+  ok "#309 D-12: tools with one row deleted — report FAIL, exit 1"
+else bad "#309 D-12: a deleted tools row must fail the tools report" "rc=$RC $OUT"; fi
+: > "${WORK}/absent"
+printf 'stag\nprod\ntools\n' > "${WORK}/empty_envs"
+report_run tools_empty tools
+if [[ $RC -eq 1 && "$(rq "${REPORTS}/tools_empty.json" 'r["verdict"], sorted({x["verdict"] for x in r["rows"] if x["lifecycle"] != "retired"})')" == "('FAIL', ['FAIL'])" ]]; then
+  ok "#309 D-12: an empty tools tree fails without --strict, every declared row FAIL"
+else bad "#309 D-12: an empty tools tree must fail" "rc=$RC $OUT"; fi
+printf 'stag\nprod\n' > "${WORK}/empty_envs"
+report_run tools_ok tools --strict
+if [[ $RC -eq 0 && "$(rq "${REPORTS}/tools_ok.json" 'r["verdict"], r["capabilities"], sorted({x["namespace"] for x in r["rows"]})')" == "('OK', [], ['tools'])" ]]; then
+  ok "#309: the tools report holds tools rows only and no capability"
+else bad "#309: the tools report is wrong" "rc=$RC $OUT"; fi
+
+# A run that stops early still writes a report: aborted, UNKNOWN, exit 2.
+echo fail > "${WORK}/sts_fail"
+report_run aborted dev --strict
+if [[ $RC -eq 2 && "$(rq "${REPORTS}/aborted.json" 'r["verdict"], r["collection"]["status"], r["collection"]["errors"][0].startswith("aborted:")')" == "('UNKNOWN', 'partial', True)" ]]; then
+  ok "#309 A-F-08: a run that stops before collecting writes an aborted UNKNOWN report and exits 2"
+else bad "#309: an aborted run must still write its report" "rc=$RC $OUT"; fi
+: > "${WORK}/sts_fail"
+
+# The class list is pinned against validate.sh (A-F-08): every heading it
+# prints has a report code, and no code names a heading it does not print.
+printed="$(grep -oE '^[[:space:]]*echo "[A-Z][A-Z ,-]*[A-Z]( \(|:| [a-z])' "$VALIDATE" | sed -E 's/^[[:space:]]*echo "//; s/( \(|:| [a-z])$//' \
+  | grep -vxE 'METADATA READY|OK' | sort -u)"
+declared_classes="$(python3 "${ROOT}/scripts/lib/manifest.py" dev --validator-classes | cut -f1 | sort -u)"
+if [[ -n "$printed" && "$printed" == "$declared_classes" ]]; then
+  ok "#309: the report's class list equals the classes validate.sh prints ($(wc -l <<< "$printed" | tr -d ' '))"
+else bad "#309: validate.sh's classes and the report's differ" "$(diff <(echo "$printed") <(echo "$declared_classes"))"; fi
+
+# The two halves cross-check each other: a validate.sh that printed a class the
+# report did not derive (here: one whose finding lines were lost) is a FAIL with
+# the disagreement named, never a softer verdict.
+MUT4="${WORK}/disagree"
+rm -rf "$MUT4"; mkdir -p "$MUT4"; cp -R "${ROOT}/scripts" "${ROOT}/config" "$MUT4/"
+python3 - "${MUT4}/scripts/secrets/validate.sh" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+old = '  record undeclared "$prefix" "$unknown"\n'
+assert text.count(old) == 1
+open(path, "w", encoding="utf-8").write(text.replace(old, ""))
+PY
+printf '/gogo/dev/backend/nothing/declared-here\n' > "${WORK}/extra_present"
+out="$(MANIFEST_READER="${MUT4}/scripts/lib/manifest.py" PATH="${WORK}:${PATH}" AWS_PROFILE=test \
+  "${MUT4}/scripts/secrets/validate.sh" dev --report "${REPORTS}/disagree.json" 2>&1)"; rc=$?
+if [[ $rc -eq 1 && "$(rq "${REPORTS}/disagree.json" 'r["verdict"], any(e.startswith("validator-disagreement") for e in r["collection"]["errors"])')" == "('FAIL', True)" ]]; then
+  ok "#309: a class printed but not recorded is a validator-disagreement FAIL"
+else bad "#309: the cross-check must catch a lost class" "rc=$rc $out"; fi
+: > "${WORK}/extra_present"
+
+# The run summary (D-3): one line per capability, then core.
+summary="$(python3 "${ROOT}/scripts/lib/manifest.py" dev --summary "${REPORTS}/cap.json")"
+caps_n="$(rq "${REPORTS}/cap.json" 'len(r["capabilities"])')"
+lines_n="$(grep -cE '^\| [a-z_]+ \| (enabled|planned) \|' <<< "$summary")"
+if [[ "$lines_n" -eq "$caps_n" && "$summary" == *"| public_catalogue_uploads | enabled | FAIL | dependency-missing |"* && "$summary" == *"| core ("* && "$summary" == *"/gogo/dev/backend/r2/public-secret-access-key"* ]]; then
+  ok "#309 D-3: the summary prints one line per capability (${caps_n}), the core group and the failing rows"
+else bad "#309 D-3: the summary is wrong" "$summary"; fi
+if python3 "${ROOT}/scripts/lib/manifest.py" tools --summary "${REPORTS}/cap.json" >/dev/null 2>&1; then
+  bad "#309: --summary must refuse a report for another environment" "it printed one"
+else ok "#309: --summary refuses a report for another environment"; fi
+
+# The deploy projection (D-6-B): backend runtime rows, allowlisted fields.
+SHA="$(printf '%040d' 7 | tr 0 a)"
+proj="${REPORTS}/projection.json"
+if python3 "${ROOT}/scripts/lib/manifest.py" dev --project-deploy "${REPORTS}/deploy.json" --release-sha "$SHA" --run-id 4242 --run-attempt 3 > "$proj"; then
+  ok "#309 D-6-B: the deploy role's partial report projects (backend was read)"
+else bad "#309 D-6-B: projection of the deploy report failed" "$(cat "$proj")"; fi
+pk="$(rq "$proj" 'sorted(r), sorted({k for x in r["rows"] for k in x}), sorted({k for c in r["capabilities"] for k in c})')"
+want_pk="(['capabilities', 'deploy_id', 'env', 'generated_at', 'manifest_sha', 'release_sha', 'rows', 'run_attempt', 'run_id', 'schema_version'], ['capabilities', 'env_var', 'findings', 'lifecycle', 'path', 'presence', 'verdict'], ['missing', 'name', 'ready', 'status', 'verdict'])"
+if [[ "$pk" == "$want_pk" ]]; then
+  ok "#309 D-6-B: projection fields are exactly the allowlist (no parameter_age_days, no namespace)"
+else bad "#309 D-6-B: projection fields drifted" "$pk"; fi
+backend_runtime="$(python3 "${ROOT}/scripts/lib/manifest.py" dev --namespace backend --consumer runtime --include-parked | cut -f1 | sed 's#^#/gogo/dev/backend/#' | sort)"
+if [[ "$(rq "$proj" '"\n".join(sorted(x["path"] for x in r["rows"]))')" == "$backend_runtime" \
+   && "$(rq "$proj" 'r["deploy_id"]')" == "${SHA}-4242-3" \
+   && "$(rq "$proj" '[c["name"] for c in r["capabilities"]]')" == "['public_catalogue_uploads', 'avatar_cache_purge', 'share_link_edge', 'secure_export', 'ai_assistant']" ]]; then
+  ok "#309 D-6-B: the projection is exactly the backend runtime rows and the capabilities they form; deploy_id = <sha>-<run id>-<attempt>"
+else bad "#309 D-6-B: projection content is wrong" "$(rq "$proj" '[c["name"] for c in r["capabilities"]], r["deploy_id"], len(r["rows"])')"; fi
+if grep -qE '/gogo/(ci|tools)/|/mobile/' "$proj"; then
+  bad "#309 D-6-B: no ci, tools or mobile name may reach the host" "$(grep -E '/gogo/(ci|tools)/|/mobile/' "$proj" | head -3)"
+else ok "#309 D-6-B: no ci, tools or mobile name reaches the projection"; fi
+if python3 "${ROOT}/scripts/lib/manifest.py" dev --project-deploy "${REPORTS}/aborted.json" --release-sha "$SHA" --run-id 1 --run-attempt 1 >/dev/null 2>&1; then
+  bad "#309 D-6-B: an aborted report must not project" "it projected"
+else ok "#309 D-6-B: an aborted report does not project"; fi
+if python3 "${ROOT}/scripts/lib/manifest.py" dev --project-deploy "${REPORTS}/ok.json" --release-sha develop --run-id 1 --run-attempt 1 >/dev/null 2>&1; then
+  bad "#309 D-6-B: a ref is not a release sha" "it projected"
+else ok "#309 D-6-B: a mutable ref is refused as release_sha"; fi
+if python3 "${ROOT}/scripts/lib/manifest.py" dev --project-deploy "${REPORTS}/deploy.json" --release-sha "$SHA" --run-id 1 >/dev/null 2>&1; then
+  bad "#309 review: a projection without a run attempt must be refused" "it projected"
+else ok "#309 review: a projection needs the run attempt (a re-run keeps the run id)"; fi
+echo "/gogo/dev/backend" > "${WORK}/deny"
+report_run nobackend dev
+: > "${WORK}/deny"
+if python3 "${ROOT}/scripts/lib/manifest.py" dev --project-deploy "${REPORTS}/nobackend.json" --release-sha "$SHA" --run-id 1 --run-attempt 1 >/dev/null 2>&1; then
+  bad "#309 D-6-B: a report that never read backend must not project" "it projected"
+else ok "#309 D-6-B: a report that never read backend does not project"; fi
 
 printf '\n'
 if [[ "$failures" -eq 0 ]]; then echo "validate.sh: all checks passed"; else echo "validate.sh: ${failures} failure(s)"; fi

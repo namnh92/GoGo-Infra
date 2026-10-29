@@ -114,3 +114,33 @@ variable "ssm_env" {
     error_message = "ssm_env is an environment name such as dev, no wildcards."
   }
 }
+
+variable "metadata_only_principal_arns" {
+  description = <<-DESC
+    Roles that may see parameter metadata and never a value (GoGo-Infra#309,
+    ADR-0016: the readiness role). For each, every GetParameter* and
+    kms:Decrypt on ssm_kms_key_arn is denied here, where the apply role cannot
+    edit it. Empty disables both statements.
+  DESC
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for a in var.metadata_only_principal_arns : can(regex("^arn:aws:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_-]+$", a))])
+    error_message = "metadata_only_principal_arns are exact role ARNs, no wildcards."
+  }
+}
+
+variable "ssm_kms_key_arn" {
+  description = "Resolved ARN of the SSM key (data.aws_kms_key.ssm.arn), denied to metadata_only_principal_arns. Required when that list is set; never the alias."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      length(var.metadata_only_principal_arns) == 0
+      || can(regex("^arn:aws:kms:[a-z0-9-]+:[0-9]{12}:key/[A-Za-z0-9-]+$", var.ssm_kms_key_arn))
+    )
+    error_message = "ssm_kms_key_arn must be a KMS key ARN (never an alias) when metadata_only_principal_arns is set."
+  }
+}

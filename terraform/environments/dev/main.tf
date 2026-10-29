@@ -61,7 +61,7 @@ locals {
   # `developer` only when that role exists: a listed name that does not exist is
   # a reader ARN anyone with CreateRole could fill (review of PR #197).
   boundary_role_keys = concat(
-    ["plan", "apply", "monitor", "deploy", "cms-deploy"],
+    ["plan", "apply", "monitor", "deploy", "cms-deploy", "readiness"],
     var.developer_sso_principal_arn == "" ? [] : ["developer"],
   )
 
@@ -114,6 +114,12 @@ module "boundary" {
   iam_scope_prefix = module.tags.name_prefix
   ssm_env          = var.environment
   known_role_names = [for k in local.boundary_role_keys : "${module.tags.name_prefix}-${k}"]
+
+  # GoGo-Infra#309 D-4 / ADR-0016. The readiness role reads metadata only: no
+  # parameter read and no decrypt of the SSM key, here where the apply role
+  # cannot edit it as well as in the role's own policy.
+  metadata_only_principal_arns = ["arn:aws:iam::${local.account}:role/${module.tags.name_prefix}-readiness"]
+  ssm_kms_key_arn              = data.aws_kms_key.ssm.arn
 }
 
 # --- Scoped SSM policies -----------------------------------------------------
@@ -199,6 +205,21 @@ module "policy_monitor" {
     "ci/${var.environment}/neon/*",
   ]
 
+  kms_key_arn = data.aws_kms_key.ssm.arn
+  tags        = module.tags.tags
+}
+
+# GoGo-Infra#309 D-4 / ADR-0016 — the nightly secrets readiness check. Names,
+# types, dates and tags of /gogo/<env>/*, /gogo/ci/<env>/* and /gogo/tools/*
+# (mobile included, names only: owner D-4a), and nothing that returns a value:
+# no GetParameter* of any kind, kms:Decrypt denied on the resolved key ARN.
+# DescribeParameters takes no resource scoping, so the role sees parameter
+# names account-wide — accepted in ADR-0016, the one GoGo role that does.
+module "policy_readiness" {
+  source = "../../modules/aws-ssm-readiness"
+
+  name        = "${module.tags.name_prefix}-readiness"
+  environment = var.environment
   kms_key_arn = data.aws_kms_key.ssm.arn
   tags        = module.tags.tags
 }
@@ -603,6 +624,20 @@ module "github_oidc" {
 
       policy_arns = {
         ssm_read = module.policy_deploy.policy_arn
+      }
+    }
+
+    readiness = {
+      # secrets-readiness.yml declares `environment: dev` and runs on its
+      # schedule from `develop`, the default branch, which the dev
+      # environment's branch policy admits. Least privilege inside the
+      # environment trust boundary, not isolation from other dev jobs
+      # (ADR-0010, ADR-0016).
+      description = "Nightly secrets readiness for dev: parameter metadata only, never a value (GoGo-Infra#309)"
+      subjects    = [for f in values(local.oidc_subject.infra) : "${f}:environment:dev"]
+
+      policy_arns = {
+        ssm_metadata = module.policy_readiness.policy_arn
       }
     }
 
