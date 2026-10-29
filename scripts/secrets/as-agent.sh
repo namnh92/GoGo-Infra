@@ -30,8 +30,12 @@
 #      proxy and CA come from the environment only). Nothing secret is written there. A watcher
 #      forked before the mint (so it never holds the token) removes the directory once this
 #      process — which becomes the command — has exited, however it ended, reaped or not (#260,
-#      #281 retro-review, #304). A signal before the exec is handled when the step then running
-#      (a git check, or the mint) ends: the command is never started and the directory goes.
+#      #281 retro-review, #304). A HUP/INT/TERM before the exec is handled when the synchronous
+#      step then running (one of the checks below, the start-time lookup, the mint) ends: the
+#      command is never started and the directory goes. It can be left behind only when no trap
+#      can run: this process killed outright (SIGKILL or any other unhandled fatal signal) between
+#      mktemp and the watcher's fork, or the watcher killed that way once this process has exec'd
+#      (before that, this process's own EXIT trap still removes it).
 #  I3  One credential. Process-only git configuration (GIT_CONFIG_*, read last): an empty
 #      credential.helper resets every helper collected from any file, then one helper for
 #      https://github.com answers with GH_TOKEN, and only when asked for protocol=https,
@@ -485,18 +489,24 @@ fi
 # Forked here, before the mint, so it never holds the token; this process then execs into the
 # command as before, so a signal to it is a signal to the command (#281 retro-review F-01, F-02).
 # Its stdio is /dev/null: it must not hold open a pipe a caller reads to EOF.
+# Running = the pid exists, is not a zombie, and is still the process this watcher was forked
+# from (same start time, not a reuse of its number). `kill -0` alone is true of a process that
+# has exited but whose parent has not reaped it, which would hold the directory for as long as
+# the caller holds the zombie (#304 Sol r2, F-04). The identity is read here, synchronously, while
+# this process certainly exists; the watcher runs without errexit, so a lookup that finds nothing
+# (the command already gone and reaped before the watcher's first turn) leads to the cleanup
+# instead of ending the watcher (#304 Sol r3, F-06).
 watched=$$
+born="$(ps -o lstart= -p "$watched" 2>/dev/null)" || born=""
+[[ -n "$born" ]] || die "ps cannot report this process's start time; the sealed home could not be cleaned up — refusing"
 (
+  set +e
   trap '' HUP INT TERM
-  # Running = the pid exists, is not a zombie, and is still the process this watcher was forked
-  # from (same start time, not a reuse of its number). `kill -0` alone is true of a process that
-  # has exited but whose parent has not reaped it, which would hold the directory for as long as
-  # the caller holds the zombie (#304 Sol r2, F-04).
-  born="$(ps -o lstart= -p "$watched" 2>/dev/null)"
   running() {
-    local state
+    local state now
     state="$(ps -o stat= -p "$watched" 2>/dev/null | tr -d ' ')"
-    [[ -n "$state" && "$state" != Z* && "$(ps -o lstart= -p "$watched" 2>/dev/null)" == "$born" ]]
+    now="$(ps -o lstart= -p "$watched" 2>/dev/null)"
+    [[ -n "$state" && "$state" != Z* && "$now" == "$born" ]]
   }
   while running; do sleep 1; done
   rm -rf "$W"
