@@ -29,6 +29,7 @@
 # only ever inside an openssl pipe.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+manifest_check
 # shellcheck source=../lib/config.sh
 source "${REPO_ROOT}/scripts/lib/config.sh"
 
@@ -131,6 +132,10 @@ case "$spki_hex" in
 esac
 unset spki_hex
 
+PARAM_NAMESPACE="$(param_namespace "$PARAM_PATH" "$ENVIRONMENT")"
+full_path="$(ssm_prefix "$ENVIRONMENT" "${PARAM_NAMESPACE:-backend}")/${PARAM_PATH}"
+require_writable_destination "$full_path"
+
 # ── AWS identity ────────────────────────────────────────────────────────────
 [[ -n "$PROFILE" ]] && export AWS_PROFILE="$PROFILE"
 
@@ -147,9 +152,6 @@ actual_account="$(aws sts get-caller-identity --query 'Account' --output text)"
 [[ "$actual_account" == "$expected_account" ]] ||
   die "wrong AWS account: session is in ${actual_account}, expected ${expected_account}.
        Set --profile, or 'aws sso login --profile <name>'."
-
-PARAM_NAMESPACE="$(param_namespace "$PARAM_PATH" "$ENVIRONMENT")"
-full_path="$(ssm_prefix "$ENVIRONMENT" "${PARAM_NAMESPACE:-backend}")/${PARAM_PATH}"
 
 # ── Overwrite is opt-in ─────────────────────────────────────────────────────
 #

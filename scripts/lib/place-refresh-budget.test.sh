@@ -142,8 +142,10 @@ fi
 # This is the INF-052 failure in miniature: names that match a document and not
 # the schema GoGo-BE validates on startup. If a ceiling is renamed in one place
 # only, the gate reports REFUSE-ALL forever while SSM holds a real value under
-# a name render-env.sh never emits.
-declared="$(python3 "${DIR}/manifest.py" dev --namespace backend | cut -f2)"
+# a name render-env.sh never emits. --include-parked: the core/quality ceilings
+# are parked (GoGo-Infra#308) — declared for no environment until phase 2 has an
+# owner — and the gate still has to check the name the row will come back under.
+declared="$(python3 "${DIR}/manifest.py" dev --namespace backend --include-parked | cut -f2)"
 missing=()
 for var in "${PRB_SCOPE_VARS[@]}" "${PRB_UNIT_VARS[@]}"; do
   grep -qx "$var" <<<"$declared" || missing+=("$var")

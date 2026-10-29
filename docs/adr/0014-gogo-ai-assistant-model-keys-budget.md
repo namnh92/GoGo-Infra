@@ -226,3 +226,13 @@ GoGo-Infra#257 naming the build.
    assistant budget (D-7; GoGo-BE#711).
 5. Measured Vietnamese quality and time-to-first-token for D-1/D-2, which may move the model.
 6. The launch gate's evidence, recorded on BE#713.
+
+## Note 2026-10-29 — rows GoGo-BE never read (GoGo-Infra#308)
+
+The SSM rows `assistant/model` (D-1), `assistant/fallback-model` (D-2) and `flags/assistant`
+(D-6 seed) were removed from the manifest and listed under `retired:` (owner 2026-10-29: rows no
+code reads leave the manifest; the task that needs one adds it back). GoGo-BE at 9e516f7 reads
+none of `ASSISTANT_MODEL`, `ASSISTANT_FALLBACK_MODEL`, `FLAG_ASSISTANT`: it answers with Jev
+(Decisions API) and Claude Haiku over BYOK, and `assistant.enabled` comes from `FEATURE_FLAGS`
+only, default off. The decisions above stand as design; their SSM rows return with the code.
+

@@ -331,6 +331,12 @@ allowed to make, or allowed to make spend it is not measuring.
 | `cost/ledger-enabled` | `COST_LEDGER_ENABLED` | `true` | ledger writes anyway |
 | `cost/ledger-flush-ms` | `COST_LEDGER_FLUSH_MS` | `5000` | flushes every 5s anyway |
 
+Both rows are **parked** since 2026-10-29 (GoGo-Infra#308, owner decision: cost observability has
+no owner on the roadmap), with the other eight cost-observability rows (the Cost Explorer pair
+stays active: GoGo-BE reads it) — declared for no
+environment until the feature is scheduled; the code defaults above are what runs. Cost-Spec
+keeps requirement precedence.
+
 DEV has been writing `provider_usage_daily` since GoGo-BE#335 merged, without a parameter in
 this repository. Declaring them changes nothing about that. It makes the running values
 **visible and changeable without a code deploy**, and gives the PR2 rollback — stop writing the
@@ -350,8 +356,8 @@ still owed. If the answer moves the number, it moves a parameter rather than a c
 | `budget/place-refresh-daily-max-calls` | `PLACE_REFRESH_DAILY_MAX_CALLS` |
 | `budget/place-refresh-daily-max-list-cost-usd` | `PLACE_REFRESH_DAILY_MAX_LIST_COST_USD` |
 | `budget/place-refresh-daily-max-units-google-details-liveness` | `PLACE_REFRESH_DAILY_MAX_UNITS_GOOGLE_DETAILS_LIVENESS` |
-| `budget/place-refresh-daily-max-units-google-details-core` | `PLACE_REFRESH_DAILY_MAX_UNITS_GOOGLE_DETAILS_CORE` |
-| `budget/place-refresh-daily-max-units-google-details-quality` | `PLACE_REFRESH_DAILY_MAX_UNITS_GOOGLE_DETAILS_QUALITY` |
+| `budget/place-refresh-daily-max-units-google-details-core` | `PLACE_REFRESH_DAILY_MAX_UNITS_GOOGLE_DETAILS_CORE` (parked, #308) |
+| `budget/place-refresh-daily-max-units-google-details-quality` | `PLACE_REFRESH_DAILY_MAX_UNITS_GOOGLE_DETAILS_QUALITY` (parked, #308) |
 
 **Unset means refuse. It does not mean unlimited.** GoGo-BE's guard is default-deny
 (`libs/modules/cost/application/provider-budget.service.ts`): a missing ceiling returns
@@ -404,6 +410,11 @@ intended shape, not a half-finished one.
 | `places/resolution-attestation-secret` | `PLACE_RESOLUTION_ATTESTATION_SECRET` | generated, see `docs/secrets.md` | plan §2.8 |
 | `places/resolution-ttl-s` | `PLACE_RESOLUTION_TTL_S` | 600 | plan §2.8 default |
 
+All four, and the core/quality ceilings above, are **parked** since 2026-10-29 (GoGo-Infra#308):
+place refresh and the resolve attestation have no owner on the roadmap, so the rows are declared
+for no environment and the application defaults apply. The place-ingestion spec keeps
+requirement precedence; un-parking is deleting the `lifecycle:` line.
+
 None of these four names is read by GoGo-BE on `develop` yet, so all four are optional in every
 environment. Each becomes `required` in an environment on the day its value lands there — the
 same rule `google/maps-ios-api-key` follows, and for the reason INF-053 exists: once a value is
@@ -423,11 +434,15 @@ missing.
 | Parameter | Env var | Proposed value (owner sets) | Absent means |
 | --- | --- | --- | --- |
 | `openrouter/assistant-api-key` | `OPENROUTER_ASSISTANT_API_KEY` | key `gogo_ai_anthropic_<env>` | assistant unavailable |
-| `assistant/model` | `ASSISTANT_MODEL` | `anthropic/claude-sonnet-5.5` | assistant unavailable |
-| `assistant/fallback-model` | `ASSISTANT_FALLBACK_MODEL` | `anthropic/claude-haiku-5.5` | no fallback |
 | `budget/assistant-monthly-max-usd` | `ASSISTANT_MONTHLY_MAX_USD` | dev 20 · stag 20 · prod 150 | **refuse** (default-deny) |
 | `budget/assistant-user-daily-max-messages` | `ASSISTANT_USER_DAILY_MAX_MESSAGES` | 30 | **refuse**, never unlimited |
-| `flags/assistant` | `FLAG_ASSISTANT` | dev `true` · prod `false` until launch | seed only, see below |
+
+`assistant/model`, `assistant/fallback-model` and `flags/assistant` were removed on 2026-10-29
+(GoGo-Infra#308, owner: rows no code reads leave the manifest): GoGo-BE reads none of
+`ASSISTANT_MODEL`, `ASSISTANT_FALLBACK_MODEL` or `FLAG_ASSISTANT` — it answers with Jev
+(Decisions API) and Claude Haiku over BYOK, and reads `assistant.enabled` from `FEATURE_FLAGS`
+only (default off). They are listed under `retired:`; the task that makes GoGo-BE read one adds
+its row back.
 
 **The budget is enforced in three places** (ADR-0014 D-4): the credit limit on the OpenRouter key
 (monthly reset, same figure as `ASSISTANT_MONTHLY_MAX_USD`), GoGo-BE's own refusal, and the
@@ -438,7 +453,8 @@ request, and the Anthropic limit is shared with every other BYOK use on the acco
 assistant stays off until ADR-0014's *Launch gate* is recorded on GoGo-BE#713.
 
 **Kill switch, no redeploy:** the `assistant.enabled` row in `FEATURE_FLAGS`, changed through the
-CMS and audited. `FLAG_ASSISTANT` only seeds it when the row does not exist, so a deploy never
+CMS and audited. *(ADR-0014 planned a `FLAG_ASSISTANT` seed; GoGo-BE never read it and the row is
+retired, #308 — a missing row reads as off.)* A seed would only create the row when absent, so a deploy never
 turns an operator's off back on. Off answers "unavailable" without calling OpenRouter, on every
 API instance within 60 s (ADR-0014 D-6); a flag that cannot be read counts as off; streams
 already started finish within their `max_tokens`. **Hard stop that does not depend on
@@ -506,6 +522,9 @@ The bucket is private. State is sensitive: treat a leaked state file as a creden
 1. Copy `terraform/environments/dev` and change `local.environment`, the backend key and the
    OIDC subjects.
 2. Set `create_oidc_provider = false` — the provider is account-wide and is created once.
-3. Add the environment to the `required` lists in `secrets.manifest.yaml`.
+3. In `secrets.manifest.yaml`, list the environment under the capabilities it will run
+   (`planned:` first, `enabled:` once provisioned) and under `environments:` of any row scoped to
+   fewer than all three. `required:` lists are per row and rarely change; parked rows stay parked.
+   `validate.sh <env> --strict --include-planned` then prints the credentials to create.
 4. Create the matching GitHub Environment with its approval rules.
 5. Run `scripts/bootstrap/validate-services.sh <env>` before pointing anything at it.

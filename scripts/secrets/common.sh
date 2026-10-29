@@ -125,6 +125,43 @@ param_namespace() {
     | awk -F'\t' -v p="$path" '$1 == p && !seen { print $5; seen = 1 }'
 }
 
+# The reader exits 2 on a manifest that contradicts itself (GoGo-Infra#308).
+# Most callers read its rows through `$(…)` in a pipeline or `< <(…)`, where
+# that exit status is lost and a refusal would read as "no rows". The check is
+# global, so one call before the first row is read closes that for the whole
+# run (Sol F-01). Called explicitly by every script that reads the manifest —
+# not at source time: scripts that source this file only for its helpers
+# (render-well-known.sh, check-quotas.sh, …) never read the manifest and are
+# copied into test trees without it.
+manifest_check() {
+  local out
+  if ! out="$(python3 -I "$MANIFEST_READER" dev --check 2>&1)"; then
+    die "config/secrets.manifest.yml is not usable — nothing was read or written:
+${out}"
+  fi
+}
+
+# Both SSM writers check the resolved name before calling AWS. A suffix can
+# belong to an active tools row and a retired ci entry at once.
+forbidden_destination() {
+  python3 -I "$MANIFEST_READER" dev --destination-lifecycle "$1"
+}
+
+require_writable_destination() {
+  local destination="$1" reason
+  reason="$(forbidden_destination "$destination")" || die "could not check destination lifecycle"
+  case "$reason" in
+    parked)
+      die "'${destination}' is parked in config/secrets.manifest.yml: declared for no environment.
+       Un-park it (delete its lifecycle: line) in the change that starts using it, then write it."
+      ;;
+    retired)
+      die "'${destination}' is retired in config/secrets.manifest.yml: it must stay absent.
+       If it is needed again, add it back under parameters: (and remove it from retired:) first."
+      ;;
+  esac
+}
+
 # Every namespace the manifest declares, one per line.
 manifest_namespaces() {
   local env="${1:-dev}"

@@ -96,7 +96,7 @@ async function main(argv: string[]): Promise<number> {
     }
     case 'status': {
       const ledger = new BudgetLedger({ stateDir: config.stateDir, budgets: config.budgets });
-      const status = { month: ledger.month, budgets: (['openrouter_jev', 'anthropic_api', 'claude_max'] as const).map((a) => ledger.status(a)), decisions: summarize(sink.read()) };
+      const status = { month: ledger.month, budgets: (['openrouter_jev', 'claude_max'] as const).map((a) => ledger.status(a)), decisions: summarize(sink.read()) };
       process.stdout.write(`${JSON.stringify(status, null, 2)}\n`);
       return 0;
     }

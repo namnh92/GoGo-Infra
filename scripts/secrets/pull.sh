@@ -22,6 +22,7 @@
 # written as `-=<value>`.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+manifest_check
 # shellcheck source=../lib/place-refresh-budget.sh
 source "${REPO_ROOT}/scripts/lib/place-refresh-budget.sh"
 # shellcheck source=../lib/env-file.sh

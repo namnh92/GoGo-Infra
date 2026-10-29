@@ -16,6 +16,10 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# Rows are read through process substitution, which discards the reader's exit
+# status; check the manifest once, up front (GoGo-Infra#308, Sol F-01).
+python3 "${REPO_ROOT}/scripts/lib/manifest.py" dev --check \
+  || { echo "error: config/secrets.manifest.yml is not usable" >&2; exit 2; }
 ENVS=("$@")
 [[ "${#ENVS[@]}" -eq 0 ]] && ENVS=(dev stag prod)
 for env in "${ENVS[@]}"; do

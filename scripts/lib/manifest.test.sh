@@ -71,17 +71,21 @@ fi
 # pins that the reason holds — nothing renders them anywhere, in any environment.
 #
 # #271 split the eight #231 rows: seven `signing/` (one set per environment)
-# and one `store/` (publishing, prod only), plus three `firebase/` rows.
+# and one `store/` (publishing, prod only), plus three `firebase/` rows. Since
+# GoGo-Infra#308 the store row says so itself (`environments: [prod]`): dev and
+# stag are never handed it, so they can never report it absent.
 
 for env in dev stag prod; do
   ci_pipeline="$(python3 "$READER" "$env" --namespace ci --consumer pipeline | cut -f1)"
   signing_rows="$(grep -E '^signing/' <<< "$ci_pipeline")"
-  store_rows="$(grep -E '^store/' <<< "$ci_pipeline")"
+  store_rows="$(grep -E '^store/' <<< "$ci_pipeline" || true)"
   firebase_rows="$(grep -E '^firebase/' <<< "$ci_pipeline")"
+  store_expected=""
+  [[ "$env" == "prod" ]] && store_expected="store/play-service-account"
 
-  if [[ "$(grep -c . <<< "$signing_rows")" == 7 && "$store_rows" == "store/play-service-account" \
+  if [[ "$(grep -c . <<< "$signing_rows")" == 7 && "$store_rows" == "$store_expected" \
     && "$(grep -c . <<< "$firebase_rows")" == 3 ]]; then
-    ok "${env}: seven signing, one store and three firebase rows are declared under ci"
+    ok "${env}: seven signing, $([[ -n "$store_expected" ]] && echo one || echo no) store and three firebase rows are declared under ci"
   else
     bad "${env}: signing/store/firebase rows missing or extra" "$(printf '%s\n' "$signing_rows" "$store_rows" "$firebase_rows")"
   fi
@@ -289,12 +293,20 @@ fi
 # Two of these fail loudly if they drift (the ledger pair changes a running
 # behaviour). Five of them fail silently — a budget ceiling under the wrong name
 # is an unset ceiling, and an unset ceiling refuses without saying so.
-inf057_backend=(
-  COST_LEDGER_ENABLED
-  COST_LEDGER_FLUSH_MS
+#
+# GoGo-Infra#308 parked the ledger pair, the core/quality ceilings and the four
+# refresh/attestation rows (owner 2026-10-29): declared for no environment
+# until the feature has an owner. The name guard still holds for them — the
+# row comes back under the name GoGo-BE reads — so they are checked through
+# --include-parked, and the default listing is checked to leave them out.
+inf057_active=(
   PLACE_REFRESH_DAILY_MAX_CALLS
   PLACE_REFRESH_DAILY_MAX_LIST_COST_USD
   PLACE_REFRESH_DAILY_MAX_UNITS_GOOGLE_DETAILS_LIVENESS
+)
+inf057_parked=(
+  COST_LEDGER_ENABLED
+  COST_LEDGER_FLUSH_MS
   PLACE_REFRESH_DAILY_MAX_UNITS_GOOGLE_DETAILS_CORE
   PLACE_REFRESH_DAILY_MAX_UNITS_GOOGLE_DETAILS_QUALITY
   PLACE_REFRESH_POLL_MS
@@ -303,14 +315,28 @@ inf057_backend=(
   PLACE_RESOLUTION_TTL_S
 )
 backend_vars="$(python3 "$READER" dev --namespace backend | cut -f2)"
+backend_vars_all="$(python3 "$READER" dev --namespace backend --include-parked | cut -f2)"
 missing_inf057=()
-for var in "${inf057_backend[@]}"; do
-  grep -qx "$var" <<<"$backend_vars" || missing_inf057+=("$var")
+for var in "${inf057_active[@]}" "${inf057_parked[@]}"; do
+  grep -qx "$var" <<<"$backend_vars_all" || missing_inf057+=("$var")
 done
 if [[ "${#missing_inf057[@]}" -eq 0 ]]; then
-  ok "every INF-057 parameter is in the backend namespace (${#inf057_backend[@]} rows)"
+  ok "every INF-057 parameter is in the backend namespace, active or parked ($(( ${#inf057_active[@]} + ${#inf057_parked[@]} )) rows)"
 else
   bad "an INF-057 parameter is missing from the backend namespace" "${missing_inf057[*]}"
+fi
+leaked_inf057=()
+for var in "${inf057_parked[@]}"; do
+  grep -qx "$var" <<<"$backend_vars" && leaked_inf057+=("$var")
+done
+missing_active=()
+for var in "${inf057_active[@]}"; do
+  grep -qx "$var" <<<"$backend_vars" || missing_active+=("$var")
+done
+if [[ "${#leaked_inf057[@]}" -eq 0 && "${#missing_active[@]}" -eq 0 ]]; then
+  ok "the default dev listing renders the ${#inf057_active[@]} active INF-057 rows and none of the ${#inf057_parked[@]} parked ones"
+else
+  bad "parked INF-057 rows leak into the dev listing, or active ones are missing" "leaked: ${leaked_inf057[*]-} missing: ${missing_active[*]-}"
 fi
 
 # The attestation key signs a server-issued capability. A mobile build has no
@@ -414,8 +440,10 @@ else
 fi
 # Absent must degrade the assistant, never stop a deploy (ADR-0014 D-6): no
 # assistant row is required in any environment until BE#713 reads it.
-for path in openrouter/assistant-api-key assistant/model assistant/fallback-model \
-            budget/assistant-monthly-max-usd budget/assistant-user-daily-max-messages flags/assistant; do
+# assistant/model, assistant/fallback-model and flags/assistant were retired by
+# GoGo-Infra#308 (owner 2026-10-29: GoGo-BE reads none of them).
+for path in openrouter/assistant-api-key \
+            budget/assistant-monthly-max-usd budget/assistant-user-daily-max-messages; do
   row="$(python3 "$READER" dev --namespace backend --consumer runtime | awk -F'\t' -v p="$path" '$1 == p')"
   if [[ -z "$row" ]]; then
     bad "${path} is not a backend runtime row" "ADR-0014 declares it for the API"
@@ -426,11 +454,11 @@ for path in openrouter/assistant-api-key assistant/model assistant/fallback-mode
   fi
 done
 assistant_cap="$(python3 "$READER" dev --capability-requires --include-planned | awk -F'\t' '$1 == "ai_assistant" { print $2 ":" $3 }' | sort | tr '\n' ' ')"
-if [[ "$assistant_cap" == "backend:assistant/model backend:budget/assistant-monthly-max-usd backend:budget/assistant-user-daily-max-messages backend:openrouter/assistant-api-key " ]]; then
-  ok "capability ai_assistant names the key, the model and both limits"
+if [[ "$assistant_cap" == "backend:budget/assistant-monthly-max-usd backend:budget/assistant-user-daily-max-messages backend:openrouter/assistant-api-key " ]]; then
+  ok "capability ai_assistant names the key and both limits (the model row is retired, #308)"
 else
   bad "capability ai_assistant requires '${assistant_cap}'" \
-      "readiness must report the assistant missing its key, model or a limit (ADR-0014 D-4/D-5)"
+      "readiness must report the assistant missing its key or a limit (ADR-0014 D-4/D-5)"
 fi
 
 count_runtime=$(python3 "$READER" dev --namespace all | wc -l | tr -d ' ')
@@ -555,22 +583,23 @@ fi
 
 # --- GoGo-Infra#294: the tools namespace belongs to no environment ----------
 #
-# Developer-tooling keys (the agent GitHub App, the harness's provider keys) are
+# Developer-tooling keys (the agent GitHub App, the harness's provider key) are
 # not part of any GoGo environment (owner, 2026-10-28). They live under
 # /gogo/tools/ and are read through the pseudo-environment `tools` only. A tool
 # row reaching dev, stag or prod would be validated, rendered or cloned as if
 # the environment owned it — the mistake #293's parity work would then copy.
-TOOL_PATHS="ai-harness/anthropic-api-key
-ai-harness/openrouter-api-key
+# Four rows since GoGo-Infra#308: `ai-harness/anthropic-api-key` is retired
+# (owner 2026-10-29 — the harness has no Anthropic path).
+TOOL_PATHS="ai-harness/openrouter-api-key
 github/agent-app-id
 github/agent-app-installation-id
 github/agent-app-private-key"
 
 tools_rows="$(python3 "$READER" tools --namespace all --consumer all)"
 if [[ "$(cut -f1 <<< "$tools_rows" | sort)" == "$TOOL_PATHS" ]]; then
-  ok "tools: the reader emits exactly the five tool rows"
+  ok "tools: the reader emits exactly the four tool rows"
 else
-  bad "tools: the reader emits a different set than the five tool rows" "$(cut -f1 <<< "$tools_rows" | tr '\n' ' ')"
+  bad "tools: the reader emits a different set than the four tool rows" "$(cut -f1 <<< "$tools_rows" | tr '\n' ' ')"
 fi
 off_shape="$(awk -F'\t' '$5 != "tools" || $4 != "" || $6 != "pipeline" { print $1 " (" $5 ", required=" $4 ", " $6 ")" }' <<< "$tools_rows")"
 if [[ -z "$off_shape" ]]; then
@@ -658,6 +687,8 @@ out = []
 for r in m.get("parameters") or []:
     for e in r.get("required") or []:
         if e not in allowed: out.append(f"{r.get('namespace', 'backend')}:{r['path']} required {e}")
+    for e in r.get("environments") or []:
+        if e not in allowed: out.append(f"{r.get('namespace', 'backend')}:{r['path']} environments {e}")
 caps = m.get("capabilities") or {}
 items = caps.items() if isinstance(caps, dict) else [(c.get("name"), c) for c in caps]
 for name, c in items:
@@ -668,7 +699,7 @@ print("\n".join(out))
 PYEOF
 )"
 if [[ -z "$stray_envs" ]]; then
-  ok "every environment list names only dev, stag or prod"
+  ok "every environment list (required, environments, enabled, planned) names only dev, stag or prod"
 else
   bad "the manifest names an environment outside dev|stag|prod" "$(echo "$stray_envs" | head -5 | tr '\n' ';')"
 fi
@@ -698,6 +729,265 @@ if [[ "$ci_rows" -gt 0 ]]; then
 else
   bad "manifest.py no longer answers for the ci namespace" "exit $(python3 "$READER" ci --namespace all --consumer all >/dev/null 2>&1; echo $?)"
 fi
+
+# --- row lifecycle: parked, retired, environments (GoGo-Infra#308) ----------
+#
+# Owner 2026-10-29: stored must equal declared. A row whose feature has no
+# owner is parked — declared for no environment, emitted by no listing — so no
+# readiness check asks dev for a value nobody is going to write. A path that
+# must be absent is retired. A row that exists in one environment only says so
+# with `environments:`. The vocabulary is what #309's report is built on.
+PARKED_PATHS="budget/place-refresh-daily-max-units-google-details-core
+budget/place-refresh-daily-max-units-google-details-quality
+cost/collector-poll-ms
+cost/collectors-enabled
+cost/estimate-enabled
+cost/estimate-poll-ms
+cost/ledger-enabled
+cost/ledger-flush-ms
+cost/monitoring-budget-micros
+flags/place-refresh
+github/billing-account
+github/billing-token
+observability/metrics-query-url
+places/resolution-attestation-secret
+places/resolution-ttl-s
+worker/place-refresh-poll-ms"
+
+for env in dev stag prod ci tools; do
+  listed="$(python3 "$READER" "$env" --namespace all --consumer all | cut -f1 | sort)"
+  leaked="$(comm -12 <(echo "$PARKED_PATHS") <(echo "$listed"))"
+  if [[ -z "$leaked" ]]; then
+    ok "${env}: no parked row is emitted by the default listing"
+  else
+    bad "${env}: a parked row is emitted" "$(tr '\n' ' ' <<< "$leaked")"
+  fi
+  req_leaked="$(python3 "$READER" "$env" --namespace all --consumer all --required | cut -f1 | sort | comm -12 <(echo "$PARKED_PATHS") -)"
+  if [[ -z "$req_leaked" ]]; then
+    ok "${env}: no parked row is required"
+  else
+    bad "${env}: a parked row is required" "$(tr '\n' ' ' <<< "$req_leaked")"
+  fi
+done
+for env in dev stag prod; do
+  parked_seen="$(python3 "$READER" "$env" --namespace all --consumer all --include-parked --field lifecycle \
+    | awk -F'\t' '$7 == "parked" { print $1 }' | sort)"
+  if [[ "$parked_seen" == "$PARKED_PATHS" ]]; then
+    ok "${env}: --include-parked --field lifecycle lists exactly the 16 parked rows"
+  else
+    bad "${env}: --include-parked lists a different set than the 16 parked rows" \
+        "$(comm -3 <(echo "$PARKED_PATHS") <(echo "$parked_seen") | tr '\n' ' ')"
+  fi
+done
+odd_lifecycle="$(python3 "$READER" dev --namespace all --consumer all --include-parked --field lifecycle \
+  | awk -F'\t' '$7 != "active" && $7 != "parked" { print $1 "=" $7 }')"
+if [[ -z "$odd_lifecycle" ]]; then
+  ok "--field lifecycle prints active or parked for every row, never blank"
+else
+  bad "--field lifecycle printed something else" "$(tr '\n' ' ' <<< "$odd_lifecycle")"
+fi
+# A parked row drops out of the default listing only; every other column stays
+# where it was (render-env.sh and pull.sh read positionally).
+parked_cols="$(python3 "$READER" dev --namespace all --consumer all --include-parked | awk -F'\t' 'NF != 6' | head -3)"
+if [[ -z "$parked_cols" ]]; then
+  ok "--include-parked keeps the six-column contract"
+else
+  bad "--include-parked changed the column count" "$parked_cols"
+fi
+
+# The shipped manifest: no capability that an environment enables or plans
+# requires a parked row. The rule is proven on a mutated copy below.
+cap_on_parked=""
+for env in dev stag prod; do
+  while IFS=$'\t' read -r cap ns path; do
+    [[ -n "$cap" ]] || continue
+    [[ "$ns" == "backend" ]] && grep -qxF "$path" <<< "$PARKED_PATHS" && cap_on_parked+="${env}:${cap}:${path} "
+  done < <(python3 "$READER" "$env" --capability-requires --include-planned --include-parked)
+done
+if [[ -z "$cap_on_parked" ]]; then
+  ok "no enabled or planned capability requires a parked row"
+else
+  bad "a capability requires a parked row" "$cap_on_parked"
+fi
+
+mutate() { # mutate <old>$'\x1f'<new> -> prints the mutated reader's path, sets MUT
+  MUT="$(mktemp -d)"
+  mkdir -p "${MUT}/scripts/lib" "${MUT}/config"
+  cp "$READER" "${MUT}/scripts/lib/manifest.py"
+  python3 - "${DIR}/../../config/secrets.manifest.yml" "${MUT}/config/secrets.manifest.yml" "$1" <<'PY'
+import sys
+text = open(sys.argv[1], encoding="utf-8").read()
+old, new = sys.argv[3].split("\x1f")
+assert text.count(old) == 1, "mutation target moved: " + old[:60]
+open(sys.argv[2], "w", encoding="utf-8").write(text.replace(old, new))
+PY
+  printf '%s' "${MUT}/scripts/lib/manifest.py"
+}
+
+# Namespace discovery is deliberately wider than row selection: a tree whose
+# only row is scoped away, parked or retired can still hold a stale value.
+# A small manifest makes each source necessary, rather than letting another
+# active row in the shipped manifest accidentally keep the test passing.
+MUT="$(mktemp -d)"
+mkdir -p "${MUT}/scripts/lib" "${MUT}/config"
+cp "$READER" "${MUT}/scripts/lib/manifest.py"
+mreader="${MUT}/scripts/lib/manifest.py"
+cat > "${MUT}/config/secrets.manifest.yml" <<'YAML'
+parameters:
+  - path: discovery/scoped
+    environments: [dev]
+    consumer: pipeline
+  - path: discovery/parked
+    namespace: ci
+    lifecycle: parked
+  - path: discovery/tool
+    namespace: tools
+retired:
+  - path: discovery/retired
+    namespace: mobile
+    since: 2026-10-29
+    reason: namespace discovery probe
+  - path: discovery/retired-tool
+    namespace: tools
+    since: 2026-10-29
+    reason: tools boundary probe
+YAML
+for env in dev stag prod; do
+  seen="$(python3 "$mreader" "$env" --all-namespaces)"; rc=$?
+  if [[ $rc -eq 0 && "$seen" == $'backend\nci\nmobile' ]]; then
+    ok "${env}: --all-namespaces includes scoped, parked and retired trees, sorted and without tools"
+  else
+    bad "${env}: --all-namespaces missed a tree or crossed the tools boundary" "rc=$rc $seen"
+  fi
+done
+seen="$(python3 "$mreader" tools --all-namespaces)"; rc=$?
+if [[ $rc -eq 0 && "$seen" == tools ]]; then
+  ok "tools: --all-namespaces emits only tools, once for active and retired rows"
+else
+  bad "tools: --all-namespaces crossed the environment boundary" "rc=$rc $seen"
+fi
+rm -rf "$MUT"
+
+# A capability requiring a parked row keeps its intent (Astra A-F-01, #308;
+# #309 D-1): still enabled, its requirement still emitted, so validate.sh can
+# report the dependency as parked instead of the capability vanishing.
+mreader="$(mutate $'    requires: [backend:privacy-export/wrapping-key-v1, backend:r2/bucket, backend:r2/access-key-id, backend:r2/secret-access-key]\x1f    requires: [backend:privacy-export/wrapping-key-v1, backend:cost/ledger-enabled, backend:r2/bucket, backend:r2/access-key-id, backend:r2/secret-access-key]')"
+if [[ "$(python3 "$mreader" dev --capabilities | grep '^secure_export')" == $'secure_export\tfeature\tenabled' ]]; then
+  ok "A-F-01: a capability requiring a parked row stays enabled"
+else
+  bad "A-F-01: a capability requiring a parked row changed state or vanished" "$(python3 "$mreader" dev --capabilities | grep '^secure_export' || echo '<absent>')"
+fi
+if python3 "$mreader" dev --capability-requires | grep -qx $'secure_export\tbackend\tcost/ledger-enabled'; then
+  ok "A-F-01: the parked requirement is still emitted for readiness to judge"
+else
+  bad "A-F-01: the parked requirement is no longer emitted" "$(python3 "$mreader" dev --capability-requires | grep '^secure_export')"
+fi
+rm -rf "$MUT"
+
+# A parked row cannot be required: the requirement would vanish silently.
+mreader="$(mutate $'    required: []\n    lifecycle: parked\n    description: Prometheus query endpoint\x1f    required: [dev]\n    lifecycle: parked\n    description: Prometheus query endpoint')"
+if python3 "$mreader" dev --check 2>"${TMPDIR:-/tmp}/mt.err"; then
+  bad "a parked row that is required is accepted" "exit 0"
+elif grep -q "parked but required in dev" "${TMPDIR:-/tmp}/mt.err"; then
+  ok "a parked row that is required makes the reader refuse the manifest"
+else
+  bad "the reader refused parked+required for the wrong reason" "$(cat "${TMPDIR:-/tmp}/mt.err")"
+fi
+rm -rf "$MUT"; rm -f "${TMPDIR:-/tmp}/mt.err"
+
+# retired: the block is read, scoped by the tools rule, and never a parameter.
+if [[ "$(python3 "$READER" tools --retired)" == $'ai-harness/anthropic-api-key\ttools\t2026-10-29' ]]; then
+  ok "tools: --retired lists the withdrawn Anthropic row and nothing else"
+else
+  bad "tools: --retired differs" "$(python3 "$READER" tools --retired | tr '\n' ' ')"
+fi
+RETIRED_CI="ai-harness/anthropic-api-key
+ai-harness/openrouter-api-key
+github/agent-app-id
+github/agent-app-installation-id
+github/agent-app-private-key"
+# Owner 2026-10-29: rows no code reads are removed and listed here until the
+# stored values are deleted.
+RETIRED_BACKEND="backend:assistant/fallback-model
+backend:assistant/model
+backend:flags/assistant
+backend:observability/grafana-url"
+for env in dev stag prod ci; do
+  seen="$(python3 "$READER" "$env" --retired | awk -F'\t' '$2 == "ci" { print $1 }' | sort)"
+  other="$(python3 "$READER" "$env" --retired | awk -F'\t' '$2 != "ci" { print $2 ":" $1 }' | sort)"
+  if [[ "$seen" == "$RETIRED_CI" && "$other" == "$RETIRED_BACKEND" ]]; then
+    ok "${env}: --retired lists the five #294 ci rows, the four unread backend rows (#308) and no tools row"
+  else
+    bad "${env}: --retired differs" "$(python3 "$READER" "$env" --retired | tr '\n' ' ')"
+  fi
+done
+# A retired path is never declared in the same tree (the ci paths are retired
+# under ci and still declared under tools — a different tree).
+overlap="$(comm -12 <(python3 "$READER" tools --retired | cut -f1 | sort -u) \
+  <(python3 "$READER" tools --namespace all --consumer all --include-parked | cut -f1 | sort -u))"
+overlap+="$(comm -12 <(python3 "$READER" dev --retired | awk -F'\t' '$2 == "ci" { print $1 }' | sort -u) \
+  <(python3 "$READER" dev --namespace ci --consumer all --include-parked | cut -f1 | sort -u))"
+if [[ -z "$overlap" ]]; then
+  ok "no retired path is also declared in the same tree"
+else
+  bad "a retired path is also declared" "$(tr '\n' ' ' <<< "$overlap")"
+fi
+mreader="$(mutate $'retired:\n\x1fretired:\n  - path: database/url\n    since: 2026-10-29\n    reason: contradiction probe\n')"
+if python3 "$mreader" dev --namespace all --consumer all >/dev/null 2>"${TMPDIR:-/tmp}/mt.err"; then
+  bad "a path both retired and declared is accepted" "exit 0"
+elif grep -q "listed under retired: and still declared" "${TMPDIR:-/tmp}/mt.err"; then
+  ok "a path both retired and declared makes the reader refuse the manifest"
+else
+  bad "the reader refused a retired+declared path for the wrong reason" "$(cat "${TMPDIR:-/tmp}/mt.err")"
+fi
+rm -rf "$MUT"
+
+# environments: a row declared for one environment exists nowhere else.
+if python3 "$READER" prod --namespace ci --consumer all | cut -f1 | grep -qx 'store/play-service-account'; then
+  ok "prod: the Play service account is declared"
+else
+  bad "prod: the Play service account is missing" "environments: [prod] dropped it everywhere"
+fi
+for env in dev stag; do
+  if ! python3 "$READER" "$env" --namespace all --consumer all --include-parked | cut -f1 | grep -qx 'store/play-service-account'; then
+    ok "${env}: the Play service account does not exist (environments: [prod])"
+  else
+    bad "${env}: the Play service account is declared" "environments: is not honoured"
+  fi
+done
+if python3 "$READER" ci --namespace all --consumer all | cut -f1 | grep -qx 'store/play-service-account'; then
+  ok "ci: the env-less passthrough still resolves the Play row (put.sh prod store/… needs it)"
+else
+  bad "ci: the env-less passthrough lost the Play row" "put.sh/get.sh resolve ci rows through it"
+fi
+mreader="$(mutate $'    environments: [prod]\x1f    environments: [prod]\n    required: [dev]')"
+if python3 "$mreader" dev --namespace all --consumer all >/dev/null 2>"${TMPDIR:-/tmp}/mt.err"; then
+  bad "a row required where it is not declared is accepted" "exit 0"
+elif grep -q "required in dev but declared only in prod" "${TMPDIR:-/tmp}/mt.err"; then
+  ok "required outside environments: makes the reader refuse the manifest"
+else
+  bad "the reader refused required-outside-environments for the wrong reason" "$(cat "${TMPDIR:-/tmp}/mt.err")"
+fi
+rm -rf "$MUT"
+mreader="$(mutate $'  - path: github/agent-app-id\n    namespace: tools\n\x1f  - path: github/agent-app-id\n    namespace: tools\n    environments: [dev]\n')"
+if python3 "$mreader" tools --consumer all >/dev/null 2>"${TMPDIR:-/tmp}/mt.err"; then
+  bad "a tools row carrying environments: is accepted" "exit 0"
+elif grep -q "belongs to no environment" "${TMPDIR:-/tmp}/mt.err"; then
+  ok "environments: on a tools row makes the reader refuse the manifest"
+else
+  bad "the reader refused environments-on-tools for the wrong reason" "$(cat "${TMPDIR:-/tmp}/mt.err")"
+fi
+rm -rf "$MUT"
+mreader="$(mutate $'    lifecycle: parked\n    description: Prometheus query endpoint\x1f    lifecycle: retired\n    description: Prometheus query endpoint')"
+if python3 "$mreader" dev --namespace all --consumer all >/dev/null 2>"${TMPDIR:-/tmp}/mt.err"; then
+  bad "an unknown lifecycle value is accepted" "exit 0"
+elif grep -q "lifecycle must be one of" "${TMPDIR:-/tmp}/mt.err"; then
+  ok "an unknown lifecycle value makes the reader refuse the manifest"
+else
+  bad "the reader refused an unknown lifecycle for the wrong reason" "$(cat "${TMPDIR:-/tmp}/mt.err")"
+fi
+rm -rf "$MUT"
+rm -f "${TMPDIR:-/tmp}/mt.err"
 
 echo
 if [[ "$failures" -gt 0 ]]; then

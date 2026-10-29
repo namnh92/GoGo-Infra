@@ -24,6 +24,7 @@
 # question is what the key is denied, not what it is allowed.
 
 source "$(dirname "${BASH_SOURCE[0]}")/../secrets/common.sh"
+manifest_check
 
 ENVIRONMENT="${1:-}"
 require_env_arg "$ENVIRONMENT"

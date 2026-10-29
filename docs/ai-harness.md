@@ -29,7 +29,7 @@ JEV_MODE=mock node harness/src/cli.ts decide --input harness/test/fixtures/task-
   --fixture harness/test/fixtures/mock-intake.json
 
 node harness/src/cli.ts status                     # budgets per account + decision metrics
-node harness/src/cli.ts billing --mode interactive # refuses if ANTHROPIC_API_KEY is in this shell
+node harness/src/cli.ts billing --mode interactive # refuses an ANTHROPIC_API_KEY in this shell — in both modes
 ```
 
 Exit codes: `0` AUTO_EXECUTE · `10` RESEARCH_AND_CONTINUE · `20` HUMAN_APPROVAL · `2` usage or
@@ -147,19 +147,19 @@ an allowlist, and of this table only `passed` rows reach it from the owner's she
 | `JEV_TIMEOUT_MS` | `5000` | 100…15000 | passed |
 | `HARNESS_STATE_DIR` | `~/.gogo-harness` | ledger, decision log and per-task state `tasks/<task>-<hash>.json` (loop counters + decision cache, so limits hold across separate `decide` calls) — per machine, not committed | set by the hook (same directory) |
 | `HARNESS_JEV_MONTHLY_USD` | `2` | local JEV target | passed |
-| `HARNESS_ANTHROPIC_MONTHLY_USD` / `_RESERVE_USD` | `100` / `10` | local Anthropic API target | not passed (unused by the child) |
 | `HARNESS_CONCURRENCY` | `1` | checkpoint serialization only; only `1` is accepted — `decide` holds `HARNESS_STATE_DIR/harness.lock` across load, limits, inference and save, so overlapping `decide` calls queue instead of losing counters or charges. The lock ends when `decide` returns: it does not limit how many Claude sessions or automation jobs run (not enforced here) | not passed (the child is one call) |
 | `JEV_PRIVACY_REVIEWED` | — | must be `yes` for `live`: the privacy review + DPA for the outbound data contract are recorded | set by the hook (the opt-in) |
 | `OPENROUTER_API_KEY` | — | from `exec-with.sh tools ai-harness/openrouter-api-key` (`/gogo/tools/`, GoGo-Infra#294) | from the installed `exec-with.sh` only |
 
 ## Cost controls and monitoring
 
-Three accounts, never summed (ADR-0013 D-7):
+Two accounts, never summed (ADR-0013 D-7, amended 2026-10-29 by GoGo-Infra#308 — there is no
+Anthropic account: the harness has no Anthropic path, and `ANTHROPIC_API_KEY` is the GoGo AI
+assistant's key through OpenRouter BYOK, ADR-0014, refused by `billing` in both modes):
 
 | Account | Billing | Local control | Provider-side control (owner) |
 | --- | --- | --- | --- |
-| `claude_max` | Max 5x subscription, interactive Claude Code | `billing --mode interactive` refuses an `ANTHROPIC_API_KEY` in the shell | — |
-| `anthropic_api` | Anthropic API, headless automation | **not integrated**: the harness runs and records no Anthropic call, so it enforces no target; `status` reports `not_integrated`, usage UNKNOWN. The $100 target / $10 reserve are configured for when a recorder is approved | workspace spend limit, auto top-up off — the only cap today |
+| `claude_max` | Max 5x subscription, interactive Claude Code | `billing --mode interactive` refuses an `ANTHROPIC_API_KEY` in the shell (the Max-billing reason); `--mode automation` refuses it too (no Anthropic path) — the modes differ in the reason given only | — |
 | `openrouter_jev` | OpenRouter, JEV decisions | $2 target; budget checked before every call | key-level credit limit |
 
 Amounts: `reported` (provider `usage.cost`) > `estimated` > `unknown`. An unknown cost (timeout,

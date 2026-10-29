@@ -15,6 +15,21 @@
 # that no longer appear in the manifest (drift is how stale credentials survive).
 # Values are never read or printed, and no value is ever passed as an argument.
 #
+# THE CLASSES (GoGo-Infra#308 — "stored must equal declared", owner 2026-10-29)
+#
+#   MISSING              required here, absent            → fail, every mode
+#   DECLARED, NOT STORED optional here, declared, absent  → fail under --strict;
+#                        for `tools` fail in every mode (an empty /gogo/tools
+#                        printed OK on 2026-10-29 because every tools row is
+#                        optional — readiness could not tell declared from
+#                        stored); otherwise a note
+#   UNDECLARED           stored, in no manifest row       → fail, every mode
+#   PARKED, STORED       stored, row is lifecycle: parked → fail, every mode
+#   RETIRED, STILL STORED stored, path is under retired:  → fail, every mode
+#   WRONG TYPE, the infra-readable tag, capability prerequisites — below.
+#
+# The success line states stored against declared, never "N declared" alone.
+#
 # WHAT THIS PROVES, AND WHAT IT DOES NOT
 #
 # It proves a parameter exists at the declared path with the declared SSM type.
@@ -40,7 +55,8 @@
 # `--strict` is environment readiness: a SKIPPED namespace is a failure, because
 # "I could not look" and "it is fine" are the same output otherwise, and the
 # whole point of a readiness check is that it cannot pass by not looking. Strict
-# also enforces feature prerequisites.
+# also enforces feature prerequisites, and that every row declared for the
+# environment is stored — "lưu = khai báo".
 #
 # Every namespace the manifest declares is checked, not just `backend`. A
 # namespace this caller cannot list is reported as SKIPPED rather than passed
@@ -50,6 +66,7 @@
 # looked at.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+manifest_check
 
 ENVIRONMENT="${1:-}"
 require_env_arg "$ENVIRONMENT" allow-tools
@@ -85,11 +102,21 @@ require_aws
 
 status=0
 declared_total=0
+stored_total=0
+parked_total=0
+unread_declared=0
 skipped=()
 present_paths=""
 read_namespaces=()
 
-for namespace in $(manifest_namespaces "$ENVIRONMENT"); do
+# Every tree that can hold something to report: every namespace any row or
+# retired path names, whatever its lifecycle or environments: scope (tools stays
+# tools-only). A namespace whose rows were all parked, scoped to another
+# environment or retired would otherwise never be listed, and a value stored
+# there would never be found (Sol F-02, #308).
+validate_namespaces="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --all-namespaces)"
+
+for namespace in $validate_namespaces; do
   prefix="$(ssm_prefix "$ENVIRONMENT" "$namespace")"
 
   # --consumer all, not the default. This compares the manifest against what
@@ -98,7 +125,12 @@ for namespace in $(manifest_namespaces "$ENVIRONMENT"); do
   # and the fix a reader would reach for is deleting it.
   expected_all="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace "$namespace" --consumer all | cut -f1 | sort)"
   expected_required="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace "$namespace" --consumer all --required | cut -f1 | sort)"
-  declared_total=$(( declared_total + $(echo "$expected_all" | grep -c . || true) ))
+  # Parked rows are declared for no environment and retired paths must be
+  # absent; both are named here only to tell a stored one apart from a plain
+  # UNDECLARED, so the message says what to do with it.
+  expected_parked="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace "$namespace" --consumer all --include-parked --field lifecycle \
+    | awk -F'\t' '$7 == "parked" { print $1 }' | sort)"
+  retired_here="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --retired | awk -F'\t' -v ns="$namespace" '$2 == ns { print $1 }' | sort)"
 
   # stderr is kept: an AccessDenied here is the difference between "nothing is
   # stored under this prefix" and "this identity may not look", and those two
@@ -106,8 +138,14 @@ for namespace in $(manifest_namespaces "$ENVIRONMENT"); do
   if ! listing="$(aws ssm get-parameters-by-path --path "$prefix" --recursive \
     --query 'Parameters[].Name' --output text 2>&1)"; then
     skipped+=("${namespace}: cannot list ${prefix} — $(echo "$listing" | tail -1)")
+    # Not counted as declared-and-not-stored: nobody looked (Sol F-03, #308).
+    unread_declared=$(( unread_declared + $(echo "$expected_all" | grep -c . || true) ))
     continue
   fi
+  # Counted only for namespaces that were read, so "N stored of N declared"
+  # compares like with like.
+  declared_total=$(( declared_total + $(echo "$expected_all" | grep -c . || true) ))
+  parked_total=$(( parked_total + $(echo "$expected_parked" | grep -c . || true) ))
 
   actual="$(echo "$listing" | tr '\t' '\n' | sed "s|^${prefix}/||" | sort)"
   # Namespace-qualified: two trees can hold the same suffix, and a capability
@@ -117,12 +155,60 @@ for namespace in $(manifest_namespaces "$ENVIRONMENT"); do
   done <<< "$actual"
   read_namespaces+=("$namespace")
 
+  stored_total=$(( stored_total + $(comm -12 <(echo "$expected_all") <(echo "$actual") | grep -c . || true) ))
   missing="$(comm -23 <(echo "$expected_required") <(echo "$actual"))"
+  absent="$(comm -23 <(comm -23 <(echo "$expected_all") <(echo "$expected_required")) <(echo "$actual"))"
   unknown="$(comm -13 <(echo "$expected_all") <(echo "$actual"))"
+  retired_present="$(comm -12 <(echo "$retired_here") <(echo "$unknown"))"
+  parked_present="$(comm -12 <(echo "$expected_parked") <(echo "$unknown"))"
+  unknown="$(comm -23 <(echo "$unknown") <(sort -u <(echo "$retired_present") <(echo "$parked_present")))"
 
   if [[ -n "$missing" ]]; then
     echo "MISSING (required in ${ENVIRONMENT}, absent from ${prefix}):"
     echo "$missing" | sed 's/^/  - /'
+    status=1
+  fi
+
+  # Declared and optional, yet not stored. The manifest is the catalogue of what
+  # the environment runs; a row with no value is either a feature nobody
+  # switched on (write it, or park the row) or a row that belongs to another
+  # environment (scope it with environments:). Under tools there is no softer
+  # reading: those rows are the only way an agent session works at all.
+  if [[ -n "$absent" ]]; then
+    if [[ "$TOOLS" == "yes" ]]; then
+      echo "MISSING (declared under ${prefix}, absent — every tools row is optional in the manifest and mandatory here):"
+      echo "$absent" | sed 's/^/  - /'
+      echo "  The tools rows are the only way an agent session can push, comment or read its provider"
+      echo "  keys (GoGo-Infra#294). Re-create each from the owner's SSO session, value on stdin:"
+      echo "      ./scripts/secrets/put.sh tools <path>"
+      status=1
+    elif [[ "$STRICT" == "yes" ]]; then
+      echo "DECLARED, NOT STORED (optional in ${ENVIRONMENT}, declared for it, absent from ${prefix}):"
+      echo "$absent" | sed 's/^/  - /'
+      echo "  Stored must equal declared (owner 2026-10-29). Write each value with put.sh, park the row"
+      echo "  (lifecycle: parked) while its feature has no owner, or scope it with environments:."
+      status=1
+    else
+      echo "DECLARED, NOT STORED (optional in ${ENVIRONMENT}, absent from ${prefix}):"
+      echo "$absent" | sed 's/^/  - /'
+      echo "  Not a failure here; --strict measures it."
+    fi
+  fi
+
+  if [[ -n "$retired_present" ]]; then
+    echo "RETIRED, STILL STORED (in ${prefix}, listed under retired: in secrets.manifest.yaml):"
+    echo "$retired_present" | sed 's/^/  - /'
+    echo "  The path was renamed, moved or withdrawn. Delete it from the owner's session with the"
+    echo "  aws CLI (delete-parameter on ${prefix}/<path>); never add it back to parameters:."
+    status=1
+  fi
+
+  if [[ -n "$parked_present" ]]; then
+    echo "PARKED, STORED (in ${prefix}, lifecycle: parked in secrets.manifest.yaml):"
+    echo "$parked_present" | sed 's/^/  - /'
+    echo "  A parked row is declared for no environment. Either un-park it (delete the lifecycle:"
+    echo "  line, then validate again) or delete the parameter with the aws CLI (delete-parameter on"
+    echo "  ${prefix}/<path>) — delete.sh resolves paths through the manifest and refuses a parked one."
     status=1
   fi
 
@@ -265,6 +351,8 @@ if [[ "$STRICT" == "yes" && "$TOOLS" == "no" ]]; then
   fi
 
   cap_gaps=""
+  parked_requirements="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --namespace all --consumer all --include-parked --field lifecycle \
+    | awk -F'\t' '$7 == "parked" { print $5 ":" $1 }')"
   env_namespaces="$(manifest_namespaces "$ENVIRONMENT")"
   while IFS=$'\t' read -r capability namespace path; do
     [[ -n "$capability" ]] || continue
@@ -280,6 +368,13 @@ if [[ "$STRICT" == "yes" && "$TOOLS" == "no" ]]; then
     # not satisfied. The SKIPPED block below is what fails the run; naming it
     # here as well would report the same gap twice.
     if [[ " ${read_namespaces[*]-} " != *" ${namespace} "* ]]; then
+      continue
+    fi
+    # A parked dependency is never satisfied, stored or not: the row is
+    # declared for no environment (Astra A-F-01, #308; #309 D-1
+    # `dependency-parked`). The capability keeps its intent and is not ready.
+    if grep -qxF "${namespace}:${path}" <<< "$parked_requirements"; then
+      cap_gaps+="  - ${capability} needs ${namespace}:${path} — parked: un-park the row, or take ${ENVIRONMENT} out of the capability"$'\n'
       continue
     fi
     if ! grep -qxF "${namespace}:${path}" <<< "$present_paths"; then
@@ -329,7 +424,8 @@ if [[ "$status" -eq 0 ]]; then
     [[ "$INCLUDE_PLANNED" == "yes" ]] && scope_label="running today and planned"
 
     echo "METADATA READY: ${ENVIRONMENT}"
-    echo "  ${declared_total} parameter(s) across ${namespaces} namespace(s) exist with the declared SSM type."
+    echo "  ${stored_total} stored of ${declared_total} declared parameter(s) across ${namespaces} namespace(s), each with the"
+    echo "  declared SSM type; ${parked_total} parked (declared for no environment)."
     planned_note=""
     [[ "$planned_count" -gt 0 ]] && planned_note=" — ${planned_count} of them planned, not yet in service"
     echo "  ${cap_count} capability/capabilities (${scope_label}) have every credential they name${planned_note}."
@@ -344,7 +440,9 @@ if [[ "$status" -eq 0 ]]; then
     echo "      ./scripts/ops/check-cf-token-scopes.sh ${ENVIRONMENT}"
     echo "      ./scripts/ops/check-provider-keys.sh ${ENVIRONMENT}"
   else
-    echo "OK: ${ENVIRONMENT} matches secrets.manifest.yaml (${declared_total} declared across ${namespaces} namespace(s), names and types)."
+    unread_note=""
+    [[ "$unread_declared" -gt 0 ]] && unread_note="; ${unread_declared} declared in unread namespace(s), not counted"
+    echo "OK: ${ENVIRONMENT} — nothing undeclared, nothing required missing in what was read (${stored_total} stored of ${declared_total} declared, ${parked_total} parked, ${namespaces} namespace(s)${unread_note}; names and types)."
   fi
 fi
 

@@ -225,7 +225,7 @@ request leaves; a process killed in flight leaves an unknown-cost call, never a 
 The decision cache is keyed by provider mode and model, and disabled mode never reads it. Shell
 commands: D-3b.
 
-**D-7 Billing separation and budgets.** Three accounts, never summed:
+**D-7 Billing separation and budgets.** *(Amended 2026-10-29 — see the amendment at the end: two accounts, no Anthropic key for the harness.)* Three accounts, never summed:
 `claude_max` (interactive Claude Code, subscription, not metered in USD), `anthropic_api`
 (headless automation, target $100/month with a $10 reserve), `openrouter_jev` (target $2/month).
 Interactive sessions must not carry `ANTHROPIC_API_KEY` (`cli.ts billing --mode interactive`);
@@ -264,8 +264,9 @@ it the same day: the harness key is now `gogo_ai_harness_dev`; the backend POC g
 
 1. Authorize, or not, paid JEV inference: create the OpenRouter key `gogo_ai_harness_dev` with a
    key-level credit limit ($2), then `put.sh dev ai-harness/openrouter-api-key`.
-2. Create the Anthropic workspace for automation with a spend limit and auto top-up off before
-   `put.sh dev ai-harness/anthropic-api-key`.
+2. ~~Create the Anthropic workspace for automation with a spend limit and auto top-up off before
+   `put.sh dev ai-harness/anthropic-api-key`.~~ — withdrawn 2026-10-29 (GoGo-Infra#308 amendment:
+   the harness has no Anthropic path; the row is retired).
 3. Decide whether to install the harness as a Claude Code hook (e.g. a `UserPromptSubmit` or
    `Stop` hook calling the installed `bin/harness decide`). That edits `.claude/settings.json` — a
    permission-policy change this ADR deliberately does not make. `docs/ai-harness.md` has the
@@ -306,3 +307,25 @@ ai-harness/…` or "two more `ci` rows", read `put.sh tools ai-harness/…` and 
 capability `ai_harness_live_decisions` leaves the dev profile (`validate.sh tools` checks the
 row instead). Cutover order and the transitional fallback: `docs/secrets.md` → *Namespace
 `tools`*.
+
+## Amendment 2026-10-29 — no Anthropic key for the harness (GoGo-Infra#308)
+
+The owner ruled that the harness never calls Anthropic directly. The only Anthropic-bound key GoGo
+holds is the AI assistant's, used through OpenRouter BYOK (`backend/openrouter/assistant-api-key`,
+ADR-0014); `ANTHROPIC_API_KEY` belongs to no harness environment, interactive or automation. The
+tools row `ai-harness/anthropic-api-key` had been written with an OpenRouter key by mistake
+(`budget.ts` refused it) and was deleted in the new AWS account the same day.
+
+- **D-7 as amended:** two accounts, never summed — `claude_max` and `openrouter_jev`. The
+  `anthropic_api` account, its `not_integrated` state, the `HARNESS_ANTHROPIC_*` targets and the
+  `automation needs ANTHROPIC_API_KEY` check are removed. `cli.ts billing` refuses an
+  `ANTHROPIC_API_KEY` in **both** modes (interactive: Max-subscription reason; automation: no
+  Anthropic path), and still refuses an `ANTHROPIC_BASE_URL` that points at OpenRouter. The two
+  modes now differ only in the reason they print.
+- **Owner action 2** (Anthropic workspace for automation) is withdrawn. The consequence "two more
+  rows to rotate" reads "one tools row".
+- The manifest lists `tools:ai-harness/anthropic-api-key` under `retired:` so `validate.sh tools`
+  fails if it is ever stored again; the five `/gogo/ci/dev/` paths of the 2026-10-28 amendment are
+  retired the same way (cutover step 4 is now measured, not remembered).
+- Should a headless Anthropic path ever be wanted, it needs its own decision and its own row — not
+  this one back.

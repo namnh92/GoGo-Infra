@@ -19,7 +19,7 @@ import { parseAnswers } from '../src/decisions/validate.ts';
 import { classifyEdit, evaluatePolicy } from '../src/policy/policy.ts';
 import { questionsFor } from '../src/router/questions.ts';
 import { DecisionRouter } from '../src/router/router.ts';
-import { BudgetLedger } from '../src/runtime/budget.ts';
+import { BudgetLedger, DEFAULT_BUDGETS } from '../src/runtime/budget.ts';
 import { LoopController } from '../src/runtime/loop.ts';
 import { MemorySink, summarize } from '../src/runtime/metrics.ts';
 import { redact, sanitizeSummary } from '../src/runtime/sanitize.ts';
@@ -231,9 +231,11 @@ describe('A-F-08 [P2] docs and status do not claim controls the harness does not
   it('concurrency is described as checkpoint serialization', () => {
     assert.match(docs, /checkpoint serialization/i);
   });
-  it('status reports the Anthropic account as not integrated, not ok', () => {
-    const state = new BudgetLedger({ stateDir: null }).status('anthropic_api').state as string;
-    assert.equal(state, 'not_integrated');
+  it('status claims no Anthropic account at all (GoGo-Infra#308 replaced "not integrated" with absence)', () => {
+    const ledger = new BudgetLedger({ stateDir: null });
+    assert.equal('anthropic_api' in DEFAULT_BUDGETS, false);
+    assert.equal(ledger.status('openrouter_jev').state, 'ok');
+    assert.equal(/not_integrated|anthropic_api/.test(JSON.stringify(ledger.status('claude_max'))), false);
   });
 });
 

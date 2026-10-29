@@ -41,7 +41,6 @@ caller that predates the field keeps exactly the scope it was written with.
 
 /gogo/tools/                      developer tooling — belongs to no environment (#294)
 ├── ai-harness/openrouter-api-key OpenRouter key for JEV decisions only (ADR-0013), credit-limited
-├── ai-harness/anthropic-api-key  Anthropic API key for headless automation only — never interactive
 ├── github/agent-app-private-key  the agent GitHub App's signing key (#250)
 ├── github/agent-app-id
 └── github/agent-app-installation-id
@@ -80,7 +79,7 @@ SSO session (`gogobootstrap`) does. Other scripts (`pull.sh`, `setup-env.sh`, �
    newline `--output text` adds, which is exactly what the original `put.sh dev … < file` stored.
 
    ```bash
-   for p in ai-harness/openrouter-api-key ai-harness/anthropic-api-key \
+   for p in ai-harness/openrouter-api-key \
             github/agent-app-private-key github/agent-app-id github/agent-app-installation-id; do
      aws ssm get-parameter --name "/gogo/ci/dev/${p}" --with-decryption \
        --query 'Parameter.Value' --output text \
@@ -89,8 +88,8 @@ SSO session (`gogobootstrap`) does. Other scripts (`pull.sh`, `setup-env.sh`, �
    ./scripts/secrets/validate.sh tools
    ```
 
-   A row never provisioned at the old path (`ai-harness/anthropic-api-key` until ADR-0013's owner
-   action) stops the loop at `get-parameter`; skip it and re-run the rest.
+   A row never provisioned at the old path stops the loop at `get-parameter`; skip it and re-run
+   the rest. (The loop once listed `ai-harness/anthropic-api-key`; that row is retired, #308.)
 3. Prove every reader is on the new path **before** anything is deleted. A `#jev` turn that
    works proves nothing here: the hook keeps the wrapper's stderr only when the wrapper fails
    (`harness/src/shadow/prompt-observation.ts`, `runChild`), so a turn served through the
@@ -123,12 +122,17 @@ SSO session (`gogobootstrap`) does. Other scripts (`pull.sh`, `setup-env.sh`, �
    OK.
 5. A follow-up PR removes the fallback (`LEGACY_TOOLS_PREFIX` in `common.sh`).
 
-`ai-harness/*` (GoGo-Infra#241, [`adr/0013`](adr/0013-ai-harness-jev-decision-router.md)) follow the
-`sentry/mobile-auth-token` pattern: `consumer: pipeline`, handed to one command through
-`exec-with.sh tools`, never rendered into any env file. Two keys for two bills: the OpenRouter key is
-never used as the Anthropic key, and the Anthropic key never reaches an interactive Claude Code
-session (that would move it from the Max subscription to API billing). Neither is set yet; both
-wait on the owner (ADR-0013 "Owner actions").
+The cutover's step 4 is now pinned by the manifest itself (GoGo-Infra#308): the five old
+`/gogo/ci/dev/` paths are listed under `retired:`, so `validate.sh dev` fails while any of them is
+still stored, in every mode.
+
+`ai-harness/openrouter-api-key` (GoGo-Infra#241, [`adr/0013`](adr/0013-ai-harness-jev-decision-router.md))
+follows the `sentry/mobile-auth-token` pattern: `consumer: pipeline`, handed to one command through
+`exec-with.sh tools`, never rendered into any env file. One key, one bill: the harness has no
+Anthropic path. `ANTHROPIC_API_KEY` is the GoGo AI assistant's key (OpenRouter BYOK,
+`backend/openrouter/assistant-api-key`, ADR-0014) and is refused by `cli.ts billing` in both
+harness modes; the former row `ai-harness/anthropic-api-key` is retired (owner 2026-10-29,
+GoGo-Infra#308, ADR-0013 amendment).
 
 `sentry/mobile-auth-token` has no workflow yet (GoGo-Infra#222, ADR-0011 D-5 phase 2): the mobile
 release build runs on a workstation, from the operator session, through
@@ -181,9 +185,7 @@ open a pull request — see `docs/adr/0001`.
 /gogo/<env>/backend/observability/sentry-dsn
 /gogo/<env>/backend/observability/metrics-token
 /gogo/<env>/backend/openrouter/assistant-api-key  GoGo AI assistant key gogo_ai_anthropic_<env> (ADR-0014)
-/gogo/<env>/backend/assistant/{model,fallback-model}   String — OpenRouter model ids
 /gogo/<env>/backend/budget/assistant-{monthly-max-usd,user-daily-max-messages}   String — limits
-/gogo/<env>/backend/flags/assistant             String — kill-switch seed
 /gogo/<env>/backend/cms/super-admin-email      String, tagged gogo:infra-readable — API + Terraform
 /gogo/<env>/backend/cms/access-staff-emails    String (JSON array), tagged — Terraform only, never rendered
 
@@ -274,6 +276,43 @@ consumer (`render-env.sh` and `pull.sh` also skip the reader's `-` placeholder, 
 `infra_readable: true` is the field that goes with it — see "Values Terraform reads from SSM" below.
 No row is `consumer: seed` any more: the CMS bootstrap rows were retired by the same change.
 
+### Row lifecycle: active, parked, retired (GoGo-Infra#308)
+
+Owner rule, 2026-10-29: **what is stored must equal what is declared** — nothing missing, nothing
+extra — and the manifest has the words to say which is which.
+
+- **active** (default, nothing written). The row is declared for every environment in its
+  `environments:` list (default: all three). `validate.sh --strict` demands a value for it,
+  required or not.
+- **`lifecycle: parked`**. The row keeps its place and its documentation, but is declared for
+  *no* environment: no listing emits it, nothing validates, writes (`put.sh`), hands out
+  (`exec-with.sh`), renders or rotates it — `put.sh` refuses it even with an explicit type or
+  `GOGO_ALLOW_UNDECLARED=1`; both SSM writers check the resolved full name (including
+  environment-qualified `ci` paths), refusing parked or retired destinations unless that
+  same full name has an active declaration. A capability that
+  `requires:` a parked row keeps its `enabled`/`planned` state and is **not ready**:
+  `validate.sh --strict` names the dependency as parked (#309 D-1 `dependency-parked`). A parked
+  row is never `required` (the reader refuses the manifest). For a feature
+  that has no owner on the roadmap — the spec it comes from keeps requirement precedence; this is
+  deployment state. Un-park = delete the line. A value stored for a parked row is a finding
+  (`PARKED, STORED`): un-park, or delete it with the aws CLI — `delete.sh` resolves paths through
+  the reader and refuses it. 16 rows are parked today (cost observability ×10, place refresh
+  ×6, owner 2026-10-29; the Cost Explorer pair stays active — GoGo-BE reads it); `manifest.py <env> --include-parked --field lifecycle` lists them.
+- **`retired:`** — a separate top-level block (bottom of the file) of paths that must be
+  **absent**: renames, moves, withdrawals, and rows no code reads (owner 2026-10-29: a row is
+  declared only while something reads it; the task that needs one adds it back). `validate.sh` fails in every mode while SSM holds one
+  (`RETIRED, STILL STORED`). A path cannot be both retired and declared; the reader refuses the
+  manifest. `manifest.py <env> --retired` lists the entries for the env's trees.
+- **`environments: [...]`** on a row — the environments the row is declared in at all. Elsewhere
+  it does not exist: neither missing nor absent, and `UNDECLARED` if stored. `required:` must be
+  a subset. `ci:store/play-service-account` is `[prod]`: the Play upload exists nowhere else, so
+  dev's readiness never asks for it. Never on a `tools` row.
+
+The reader checks the vocabulary (`lifecycle` value, `environments` names, `required ⊆
+environments`, no retired+declared path) and exits 2 on a contradiction instead of guessing.
+`scripts/lib/manifest.test.sh` pins every rule above on the shipped manifest and on mutated
+copies.
+
 ## Validating an environment
 
 Two commands, two different questions.
@@ -301,6 +340,16 @@ bootstrapping or enabling a feature. It differs in three ways:
   failing the first time somebody runs it.
 - it says `METADATA READY` rather than `OK`, and states what that does and does not cover. The
   wording is deliberate: readiness here is about names and types, never permissions.
+- a row **declared for the environment and not stored** fails, required or not
+  (`DECLARED, NOT STORED`, GoGo-Infra#308). Stored must equal declared: write the value, park the
+  row, or scope it with `environments:`. In the default mode the same rows are printed as a note
+  and the run still passes.
+
+Every mode reports `UNDECLARED` (stored, in no row), `PARKED, STORED` and `RETIRED, STILL STORED`
+as failures, and `validate.sh tools` fails on any absent row in every mode: the tools rows are
+all optional in the manifest and all mandatory in practice, which is how an empty `/gogo/tools/`
+printed OK on 2026-10-29. The success line states stored against declared (`N stored of N
+declared, P parked`) rather than a count of declared rows.
 
 Per environment:
 

@@ -24,6 +24,15 @@ esac
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MANIFEST_READER="${REPO_ROOT}/scripts/lib/manifest.py"
+# The row loop below reads the reader through process substitution, which
+# discards its exit status: a manifest the reader refuses (exit 2,
+# GoGo-Infra#308) would render as an env file with no rows. Check it once, up
+# front — the check is global (Sol F-01).
+if ! manifest_error="$(python3 "$MANIFEST_READER" "$ENVIRONMENT" --check 2>&1)"; then
+  echo "deploy aborted: config/secrets.manifest.yml is not usable" >&2
+  echo "$manifest_error" >&2
+  exit 2
+fi
 # shellcheck source=../lib/place-refresh-budget.sh
 source "${REPO_ROOT}/scripts/lib/place-refresh-budget.sh"
 # shellcheck source=../lib/env-file.sh

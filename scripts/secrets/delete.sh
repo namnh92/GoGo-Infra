@@ -8,6 +8,7 @@
 # and record it in docs/secrets.md, then delete here.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+manifest_check
 
 ENVIRONMENT="${1:-}"
 PARAM_PATH="${2:-}"

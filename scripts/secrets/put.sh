@@ -28,6 +28,7 @@
 # them in plaintext inside Terraform state (GoGo-Infrastructure-Plan-Spec §13).
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+manifest_check
 
 INFRA_READABLE=no
 positional=()
@@ -48,6 +49,12 @@ require_env_arg "$ENVIRONMENT" allow-ci allow-tools
 # Path is validated before authenticating: a typo should not wait on an SSO
 # round trip to be reported.
 PARAM_TYPE="${positional[2]:-}"
+
+# Resolve before checking lifecycle: `ci dev/<path>` writes an env-qualified
+# name, and an active row in another namespace does not make that name writable.
+PARAM_NAMESPACE="$(param_namespace "$PARAM_PATH" "$ENVIRONMENT")"
+full_path="$(ssm_prefix "$ENVIRONMENT" "${PARAM_NAMESPACE:-backend}")/${PARAM_PATH}"
+require_writable_destination "$full_path"
 
 # Eligibility comes from the manifest only. GOGO_ALLOW_UNDECLARED below never
 # grants it: an undeclared path has no `infra_readable: true` to read.
@@ -110,13 +117,6 @@ fi
 # a call aimed at the wrong one is stopped before a secret has been typed into
 # it. The answer comes from the terminal, not from stdin (common.sh).
 confirm_prod "$ENVIRONMENT" "write ${PARAM_PATH}"
-
-# The manifest decides which namespace this path lives in, not the caller.
-# An undeclared path falls back to `backend`, which is where it would have gone
-# before namespaces existed and is the only namespace the confirmation above
-# describes.
-PARAM_NAMESPACE="$(param_namespace "$PARAM_PATH" "$ENVIRONMENT")"
-full_path="$(ssm_prefix "$ENVIRONMENT" "${PARAM_NAMESPACE:-backend}")/${PARAM_PATH}"
 
 hint="$(param_hint "$PARAM_PATH")"
 [[ -n "$hint" ]] && echo "       ${hint}"

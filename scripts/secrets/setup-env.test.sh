@@ -23,6 +23,7 @@ ok() { printf '  ok    %s\n' "$1"; }
 bad() { printf '  FAIL  %s\n        %s\n' "$1" "$2"; failures=$((failures + 1)); }
 
 TREE="$(mktemp -d)"
+export AWS_CALLS="${TREE}/aws.calls"
 trap 'rm -rf "$TREE"' EXIT
 mkdir -p "${TREE}/bin" "${TREE}/repo/config" "${TREE}/repo/scripts"
 cp -R "${ROOT}/scripts/." "${TREE}/repo/scripts/"
@@ -31,6 +32,7 @@ cp "${ROOT}/config/bootstrap.env.example" "${TREE}/repo/config/bootstrap.env"
 
 cat >"${TREE}/bin/aws" <<'STUB'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >>"${AWS_CALLS:?}"
 if [[ "$1" == "ssm" && "$2" == "get-parameter" ]]; then
   echo "An error occurred (ParameterNotFound) when calling the GetParameter operation" >&2
   exit 254
@@ -88,6 +90,35 @@ if [[ "$line" == *"✗ ANDROID_SIGNING_SHA256"* ]]; then
 else
   bad "--check refuses a malformed fingerprint entry" "${line:-<no line>}"
 fi
+
+# The normal listing excludes parked and retired rows. Source a dry run to load
+# the real writer without credentials, then hand it those destinations directly.
+# Clear the stub log after sourcing so only put_param's calls are measured.
+for lifecycle in parked retired active; do
+  case "$lifecycle" in
+    parked) destination=cost/ledger-enabled ;;
+    retired) destination=assistant/model ;;
+    active) destination=r2/bucket ;;
+  esac
+  out="$(PATH="${TREE}/bin:${PATH}" bash -c '
+    source "$1" dev --dry-run >/dev/null
+    : >"$AWS_CALLS"
+    DRY_RUN=no
+    put_param "$2" String regression-value
+  ' bash "${TREE}/repo/scripts/secrets/setup-env.sh" "$destination" </dev/null 2>&1)"
+  status=$?
+  if [[ "$lifecycle" == active ]]; then
+    if [[ $status -eq 0 ]] && grep -qF 'ssm put-parameter --name /gogo/dev/backend/r2/bucket' "$AWS_CALLS"; then
+      ok "put_param writes an active destination through the stub"
+    else
+      bad "put_param writes an active destination through the stub" "exit ${status}: ${out}"
+    fi
+  elif [[ $status -ne 0 && "$out" == *"'/gogo/dev/backend/${destination}' is ${lifecycle} in config/secrets.manifest.yml"* && ! -s "$AWS_CALLS" ]]; then
+    ok "put_param refuses a ${lifecycle} destination before any AWS call"
+  else
+    bad "put_param refuses a ${lifecycle} destination before any AWS call" "exit ${status}: ${out}; calls: $(cat "$AWS_CALLS")"
+  fi
+done
 
 echo
 if [[ "$failures" -gt 0 ]]; then

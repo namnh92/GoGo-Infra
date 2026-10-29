@@ -92,7 +92,6 @@ Two different `.env` files exist here and they are not the same thing:
 | --- | --- | --- |
 | `observability/prometheus-remote-write-url` | Alloy, and the API by default | where samples are written |
 | `observability/metrics-query-url` | the API, `check-observability.sh` | the query endpoint when it differs |
-| `observability/grafana-url` | operators | where to look at a graph |
 | `observability/prometheus-basic-auth-user` / `-password` | Alloy, the API, the probe | the credential this stack checks |
 
 That split is deliberate, and ADR-0006 named the reason: moving the samples

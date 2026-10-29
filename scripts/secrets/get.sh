@@ -10,6 +10,7 @@
 # answers "is it set, and when did it change" without exposing the value.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+manifest_check
 
 ENVIRONMENT="${1:-}"
 PARAM_PATH="${2:-}"

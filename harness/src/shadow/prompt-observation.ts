@@ -115,7 +115,7 @@ export const WRAPPER_CLOSURE = ['scripts/secrets/exec-with.sh', 'scripts/secrets
  * Configuration the child reads, passed verbatim (I7b); its loadConfig()
  * validates them — malformed is `child_failed`, `0` is an exhausted budget.
  * Not passed, on purpose: JEV_MODEL (the model is pinned, ADR-0013 D-2),
- * HARNESS_CONCURRENCY (the child is one call), HARNESS_ANTHROPIC_* (unused).
+ * HARNESS_CONCURRENCY (the child is one call).
  */
 export const CHILD_CONFIG_PASSTHROUGH = ['HARNESS_JEV_MONTHLY_USD', 'JEV_TIMEOUT_MS'] as const;
 
