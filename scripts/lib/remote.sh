@@ -204,3 +204,24 @@ refresh_alloy() {
   remote "printf '%s' '${want}' > '${DEPLOY_PATH}/${ALLOY_MARKER}'" ||
     echo "::warning::could not record ${ALLOY_MARKER}; the next deploy recreates Alloy again" >&2
 }
+
+# GoGo-Infra#309 D-6-B (ADR-0016) — the deploy-time readiness projection.
+#
+# READINESS_FILE is what the API reads (the directory ops/ is bind-mounted
+# read-only, so a rename is visible without a restart). PAIRS_DIR keeps, per
+# deploy id, the env file the containers were started with and the report that
+# describes it — the current deploy and the previous one, nothing older — so a
+# rollback restores both together. Relative to DEPLOY_PATH.
+# shellcheck disable=SC2034  # consumed by the scripts that source this file
+READINESS_FILE="ops/secrets-readiness.deploy.json"
+PAIRS_DIR="ops/deploys"
+
+# Keeps the pairs .deployed-id and .previous-id name; removes every other one.
+# Never fatal: the deploy is verified by the time this runs.
+prune_pairs() {
+  # shellcheck disable=SC2016 # expanded on the host
+  remote "cd '${DEPLOY_PATH}' && keep=\" \$(cat .deployed-id 2>/dev/null) \$(cat .previous-id 2>/dev/null) \" \
+    && for d in '${PAIRS_DIR}'/*/; do [ -d \"\$d\" ] || continue; id=\$(basename \"\$d\"); \
+         case \"\$keep\" in *\" \$id \"*) ;; *) rm -rf \"\$d\" ;; esac; done" ||
+    echo "::warning::could not prune ${PAIRS_DIR}; older env/report pairs remain on the host" >&2
+}

@@ -81,8 +81,26 @@ if [[ ! "$target" =~ ^[0-9a-f]{40}$ ]]; then
 fi
 echo "    ${TARGET_REF} -> ${target}"
 
-# The environment file is left alone. It is rendered from SSM and is not
-# versioned with the code; rolling it back would silently undo a secret rotation.
+# GoGo-Infra#309 D-6-B (ADR-0016). When this commit is the previous deploy
+# recorded with its env/report pair, the env file it was started with goes back
+# with it, and its readiness report with that: the report on the host never
+# describes a configuration other than the one the containers run. Restoring an
+# env file can undo a secret rotation made since; the deploy after the
+# incident renders SSM again.
+#
+# Otherwise — an explicit ref, a host deployed before the pairs existed — the
+# environment file is left alone, as it always was: it is rendered from SSM and
+# not versioned with the code. No report describes that combination, so the
+# projection is removed instead of left describing the deploy rolled back from.
+restore_id="$(remote "cat '${DEPLOY_PATH}/.previous-id' 2>/dev/null || true" | tail -n 1 | tr -d '[:space:]')"
+if [[ "$restore_id" =~ ^[0-9a-f]{40}-[0-9]+$ && "${restore_id%%-*}" == "$target" ]] \
+  && remote "test -s '${DEPLOY_PATH}/${PAIRS_DIR}/${restore_id}/env' && test -s '${DEPLOY_PATH}/${PAIRS_DIR}/${restore_id}/secrets-readiness.json'"; then
+  echo "==> Restoring the env file of deploy ${restore_id}"
+  remote "cd '${DEPLOY_PATH}' && install -m 600 '${PAIRS_DIR}/${restore_id}/env' '${REMOTE_ENV_FILE}'"
+else
+  restore_id=""
+fi
+
 echo "==> Rebuilding and restarting"
 #
 # No --remove-orphans: it deletes every container outside this compose set — the
@@ -114,11 +132,19 @@ refresh_alloy
 # its rollback target. Left unwritten, that deploy would record the revision
 # this rollback just backed away from.
 remote "cd '${DEPLOY_PATH}' && git rev-parse HEAD > .deployed-revision"
+if [[ -n "$restore_id" ]]; then
+  remote "cd '${DEPLOY_PATH}' && install -m 644 '${PAIRS_DIR}/${restore_id}/secrets-readiness.json' 'ops/.secrets-readiness.deploy.json.new' \
+    && mv -f 'ops/.secrets-readiness.deploy.json.new' '${READINESS_FILE}' && printf '%s' '${restore_id}' > .deployed-id"
+  readiness_note="The env file and readiness report of deploy ${restore_id} were restored with it."
+else
+  remote "cd '${DEPLOY_PATH}' && rm -f '${READINESS_FILE}' .deployed-id"
+  readiness_note="No recorded env/report pair matches ${target}: ${REMOTE_ENV_FILE} was left as it is and the readiness projection removed."
+fi
 
 cat <<EOM
 
 Rolled back to ${TARGET_REF}.
 
-The database was NOT rolled back, and ${REMOTE_ENV_FILE} was left as it is. Confirm the
-schema is compatible with this revision before declaring the incident closed.
+The database was NOT rolled back. ${readiness_note}
+Confirm the schema is compatible with this revision before declaring the incident closed.
 EOM

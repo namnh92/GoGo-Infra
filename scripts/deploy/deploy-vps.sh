@@ -12,14 +12,46 @@
 #
 # Required environment is listed in scripts/lib/remote.sh, which owns the SSH
 # options, the compose invocation and remote().
+#
+# THE DEPLOY-TIME READINESS PROJECTION (GoGo-Infra#309 D-6-B, ADR-0016)
+#
+# With READINESS_REPORT set to the D-1 report of this deploy's
+# `validate.sh <env> --report` (and GITHUB_RUN_ID, which Actions sets), the
+# deploy also leaves on the host what the API reports about its own
+# configuration:
+#
+#   deploy_id = <release commit>-<run id>: one deploy of one commit with one
+#   rendered configuration. Written into the env file as APP_DEPLOY_ID, so the
+#   API holds it, and into the projection — the backend runtime rows of the
+#   report, by allowlist (scripts/lib/manifest.py --project-deploy).
+#
+#   ${DEPLOY_PATH}/ops/secrets-readiness.deploy.json   the current projection
+#   ${DEPLOY_PATH}/ops/deploys/<deploy_id>/{env,secrets-readiness.json}
+#                                                     the pair, last two kept
+#   ${DEPLOY_PATH}/.deployed-id, .previous-id          beside the revision markers
+#
+# All of it is written in the step that writes .deployed-revision — after the
+# services are verified running and the management path answers — so a failed
+# deploy leaves the previous projection, with the previous deploy_id, in place.
+# Its own rollback restores the previous pair's env file with the code. Without
+# READINESS_REPORT (deploy-production.yml) no projection is written and any
+# earlier one is removed: a report on the host never describes a configuration
+# other than the one the containers were started with.
 
 set -euo pipefail
 
 RELEASE_REF="${1:?usage: deploy-vps.sh <ref> <env-file>}"
 ENV_FILE="${2:?usage: deploy-vps.sh <ref> <env-file>}"
 
+LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)"
 # shellcheck source=scripts/lib/remote.sh
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/remote.sh"
+source "${LIB}/remote.sh"
+
+READINESS_REPORT="${READINESS_REPORT:-}"
+if [[ -n "$READINESS_REPORT" ]]; then
+  [[ -s "$READINESS_REPORT" ]] || { echo "READINESS_REPORT ${READINESS_REPORT} is missing or empty — refusing to deploy." >&2; exit 1; }
+  [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ ]] || { echo "READINESS_REPORT needs GITHUB_RUN_ID (the deploy_id is <commit>-<run id>) — refusing to deploy." >&2; exit 1; }
+fi
 
 echo "==> Recording the running revision for rollback"
 # Captured before anything changes. Without it a rollback has to guess, and
@@ -139,6 +171,22 @@ if [[ -n "$previous" ]]; then
   remote "printf '%s' '${previous}' > '${DEPLOY_PATH}/.previous-revision'"
 fi
 
+# The pair that goes with the running revision (#309 D-6-B), recorded beside it
+# so the rollback below and rollback.sh restore the env file it was started
+# with. None on a host deployed before the projection existed.
+previous_id="$(read_remote "the last deploy id" \
+  "{ if [ -s .deployed-id ]; then cat .deployed-id; else echo __NONE__; fi; }")"
+if [[ "$previous_id" == "__NONE__" || -z "$previous" ]]; then
+  previous_id=""
+  remote "rm -f '${DEPLOY_PATH}/.previous-id'"
+elif [[ ! "$previous_id" =~ ^[0-9a-f]{40}-[0-9]+$ ]]; then
+  echo "the last deploy id read succeeded but is not <commit>-<run id> — refusing to deploy." >&2
+  echo "  got: '${previous_id}'" >&2
+  exit 1
+else
+  remote "printf '%s' '${previous_id}' > '${DEPLOY_PATH}/.previous-id'"
+fi
+
 echo "==> Fetching ${RELEASE_REF}"
 # The ref is resolved to a commit before checkout.
 #
@@ -159,10 +207,38 @@ if [[ -z "$target" ]]; then
 fi
 
 echo "    ${RELEASE_REF} -> ${target}"
+
+# Built before anything on the host changes: a report that cannot be projected
+# (aborted, backend unread) stops the deploy here, with the previous revision
+# untouched.
+deploy_id=""
+if [[ -n "$READINESS_REPORT" ]]; then
+  deploy_id="${target}-${GITHUB_RUN_ID}"
+  scratch="$(mktemp -d)"
+  trap 'rm -rf "$scratch"' EXIT
+  if ! python3 -I "${LIB}/manifest.py" "$ENVIRONMENT_NAME" --project-deploy "$READINESS_REPORT" \
+      --release-sha "$target" --run-id "$GITHUB_RUN_ID" >"${scratch}/projection.json"; then
+    echo "the readiness report cannot be projected — refusing to deploy." >&2
+    exit 1
+  fi
+  # The rendered file plus the shared identifier; the caller's file is left as
+  # it is. umask: the copy carries every value the original does.
+  (umask 077 && cp "$ENV_FILE" "${scratch}/env" && printf 'APP_DEPLOY_ID=%s\n' "$deploy_id" >>"${scratch}/env")
+  ENV_FILE="${scratch}/env"
+  echo "    deploy id ${deploy_id}"
+fi
+
 remote "cd '${DEPLOY_PATH}' && git checkout --detach '${target}'"
 
 echo "==> Shipping the environment file"
 scp "${scp_opts[@]}" "$ENV_FILE" "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/${REMOTE_ENV_FILE}.new"
+if [[ -n "$deploy_id" ]]; then
+  # Staged only. It becomes the current projection when this revision becomes
+  # the deployed one, below; a staged file from a deploy that never got there
+  # is cleared by the next one.
+  remote "mkdir -p '${DEPLOY_PATH}/ops' && rm -f '${DEPLOY_PATH}'/ops/.incoming-*.json"
+  scp "${scp_opts[@]}" "${scratch}/projection.json" "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/ops/.incoming-${deploy_id}.json"
+fi
 # install(1) renames into place: a process restarting mid-copy would otherwise
 # read half a file and fail on a config error that looks like a code bug.
 remote "cd '${DEPLOY_PATH}' && install -m 600 '${REMOTE_ENV_FILE}.new' '${REMOTE_ENV_FILE}' && rm -f '${REMOTE_ENV_FILE}.new'"
@@ -238,6 +314,10 @@ if [[ -n "$not_running" ]]; then
   if [[ -n "${previous:-}" ]]; then
     echo "==> Rolling back to ${previous}"
     remote "cd '${DEPLOY_PATH}' && git checkout --detach '${previous}'"
+    # With the env file it was started with (#309 D-6-B), when the pair exists.
+    if [[ -n "$previous_id" ]]; then
+      remote "cd '${DEPLOY_PATH}' && if [ -s '${PAIRS_DIR}/${previous_id}/env' ]; then install -m 600 '${PAIRS_DIR}/${previous_id}/env' '${REMOTE_ENV_FILE}'; else echo '    no env pair for ${previous_id} — keeping the new env file' >&2; fi"
+    fi
     remote "cd '${DEPLOY_PATH}' && ${COMPOSE} build api worker migrate"
     # The revision this `up` starts is the previous one, so that is what its
     # boot-time audit rows must say (GoGo-BE#687 F-06).
@@ -272,8 +352,21 @@ fi
 echo "    ok"
 
 # Only now — running and reachable — does this revision become the one a later
-# deploy records as its rollback target (INF-148).
-remote "printf '%s' '${target}' > '${DEPLOY_PATH}/.deployed-revision'"
+# deploy records as its rollback target (INF-148). The readiness projection and
+# the env/report pair move with it, in the same remote command (#309 D-6-B).
+if [[ -n "$deploy_id" ]]; then
+  remote "cd '${DEPLOY_PATH}' && set -e && umask 027 && mkdir -p '${PAIRS_DIR}' \
+    && rm -rf '${PAIRS_DIR}/${deploy_id}' && mkdir '${PAIRS_DIR}/${deploy_id}' \
+    && install -m 640 '${REMOTE_ENV_FILE}' '${PAIRS_DIR}/${deploy_id}/env' \
+    && install -m 640 'ops/.incoming-${deploy_id}.json' '${PAIRS_DIR}/${deploy_id}/secrets-readiness.json' \
+    && install -m 644 'ops/.incoming-${deploy_id}.json' 'ops/.secrets-readiness.deploy.json.new' \
+    && mv -f 'ops/.secrets-readiness.deploy.json.new' '${READINESS_FILE}' && rm -f 'ops/.incoming-${deploy_id}.json' \
+    && printf '%s' '${target}' > .deployed-revision && printf '%s' '${deploy_id}' > .deployed-id"
+  prune_pairs
+  echo "    readiness projection ${READINESS_FILE} — deploy id ${deploy_id}"
+else
+  remote "cd '${DEPLOY_PATH}' && printf '%s' '${target}' > .deployed-revision && rm -f '${READINESS_FILE}' .deployed-id"
+fi
 
 # Alloy is not in DEPLOY_SERVICES (it depends on api and worker, not the other
 # way round), so `up -d ${DEPLOY_SERVICES}` never touches it (GoGo-BE#408).
