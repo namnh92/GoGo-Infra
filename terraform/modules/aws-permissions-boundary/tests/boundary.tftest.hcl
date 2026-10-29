@@ -65,10 +65,31 @@ variables {
   iam_scope_prefix = "gogo-dev"
   ssm_env          = "dev"
   known_role_names = ["gogo-dev-plan", "gogo-dev-apply", "gogo-dev-deploy"]
+
+  metadata_only_principal_arns = ["arn:aws:iam::111122223333:role/gogo-dev-readiness"]
+  ssm_kms_key_arn              = "arn:aws:kms:ap-southeast-1:111122223333:key/0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0"
 }
 
 run "boundary_document" {
   command = plan
+
+  # GoGo-Infra#309 D-4 — the readiness role never decrypts and never reads a
+  # parameter, whatever its own (apply-editable) policy says. Conditioned on
+  # that role alone; kms:Decrypt on the resolved key ARN, never the alias.
+  assert {
+    condition = length([
+      for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
+      if s.Sid == "MetadataOnlyNeverReadsOrDecrypts"
+      && s.Effect == "Deny"
+      && toset(flatten([try(s.Action, [])])) == toset(["kms:Decrypt", "ssm:GetParameter*"])
+      && toset(flatten([try(s.Resource, [])])) == toset([
+        "arn:aws:kms:ap-southeast-1:111122223333:key/0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0",
+        "arn:aws:ssm:*:111122223333:parameter/*",
+      ])
+      && jsonencode(try(s.Condition, {})) == jsonencode({ ArnEquals = { "aws:PrincipalArn" = "arn:aws:iam::111122223333:role/gogo-dev-readiness" } })
+    ]) == 1
+    error_message = "MetadataOnlyNeverReadsOrDecrypts must be exactly one Deny of kms:Decrypt and ssm:GetParameter* on the SSM key ARN and every parameter, conditioned on the readiness role alone"
+  }
 
   # GoGo-Infra#196 — RequireThisBoundary: CreateRole and
   # PutRolePermissionsBoundary denied unless the boundary is this exact policy.
@@ -324,17 +345,46 @@ run "boundary_document" {
 # (IAM quotas). Every string in this document is whitespace-free, so stripping
 # all whitespace is exactly what IAM counts. Measured with every role dev
 # declares (local.boundary_role_keys in environments/dev, developer included),
-# because each known role costs two ARNs; the failure otherwise surfaces as a
+# because each known role costs two ARNs, with the #309 metadata-only
+# statements on (the file's variables set them); the failure otherwise surfaces as a
 # bootstrap apply error after the statement that pushed it over was reviewed.
 run "document_fits_the_managed_policy_limit_with_every_dev_role" {
   command = plan
   variables {
-    known_role_names = ["gogo-dev-plan", "gogo-dev-apply", "gogo-dev-monitor", "gogo-dev-deploy", "gogo-dev-cms-deploy", "gogo-dev-developer"]
+    known_role_names = ["gogo-dev-plan", "gogo-dev-apply", "gogo-dev-monitor", "gogo-dev-deploy", "gogo-dev-cms-deploy", "gogo-dev-readiness", "gogo-dev-developer"]
   }
   assert {
     condition     = length(replace(data.aws_iam_policy_document.boundary.json, "/\\s/", "")) < 6144
     error_message = "the rendered boundary is ${length(replace(data.aws_iam_policy_document.boundary.json, "/\\s/", ""))} characters without whitespace; IAM's managed-policy limit is 6,144"
   }
+}
+
+run "no_metadata_only_role_means_no_309_statements" {
+  command = plan
+  variables {
+    metadata_only_principal_arns = []
+    ssm_kms_key_arn              = ""
+  }
+  assert {
+    condition     = !strcontains(data.aws_iam_policy_document.boundary.json, "MetadataOnly")
+    error_message = "the #309 statements must be off without a metadata-only role"
+  }
+}
+
+run "a_metadata_only_role_with_the_alias_is_refused" {
+  command = plan
+  variables {
+    ssm_kms_key_arn = "arn:aws:kms:ap-southeast-1:111122223333:alias/aws/ssm"
+  }
+  expect_failures = [var.ssm_kms_key_arn]
+}
+
+run "a_wildcard_metadata_only_role_is_refused" {
+  command = plan
+  variables {
+    metadata_only_principal_arns = ["arn:aws:iam::111122223333:role/gogo-dev-*"]
+  }
+  expect_failures = [var.metadata_only_principal_arns]
 }
 
 run "no_known_roles_means_no_196_statements_and_project_scope" {

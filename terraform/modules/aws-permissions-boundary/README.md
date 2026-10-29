@@ -66,6 +66,17 @@ Optional inputs, set by every environment:
 `tests/boundary.tftest.hcl` renders the real document offline (`terraform test`, no AWS call) and
 asserts on it; CI runs it.
 
+## Metadata-only roles (GoGo-Infra#309, ADR-0016)
+
+- `metadata_only_principal_arns` — roles that may see parameter metadata and never a value: the
+  readiness role `gogo-<env>-readiness`. One statement, `MetadataOnlyNeverReadsOrDecrypts`,
+  denies them `kms:Decrypt` on `ssm_kms_key_arn` and `ssm:GetParameter*` on every parameter,
+  conditioned on `aws:PrincipalArn` — never a blanket Deny on every GoGo role. The role's own
+  policy says the same, but the apply role can rewrite a `gogo-*` policy; it cannot rewrite this.
+- `ssm_kms_key_arn` — the resolved key ARN (`data.aws_kms_key.ssm.arn`), required when the list is
+  set. Never the alias: `kms:Decrypt` is authorized against the key, so a Deny naming
+  `alias/aws/ssm` matches nothing.
+
 ## Consequence worth knowing
 
 Because the boundary denies edits to itself, `terraform apply` running as the apply role
@@ -118,7 +129,10 @@ that, the provider exception is exactly the catalogue's two reads, and every non
 matched by an unconditional Deny on a probe resource of each of its types outside the
 environment. A failed download fails the test. `tests/boundary.tftest.hcl` also measures the
 rendered document against IAM's 6,144-character managed-policy limit with every role dev declares
-(5,924 at the time of writing; each known role costs two ARNs, about 100 characters).
+(6,076 with the seven dev roles and the #309 statement below; each known role costs two ARNs,
+about 100 characters). To stay under it, the four statements that deny the four parameter reads
+write them as `ssm:GetParameter*`, which matches exactly `GetParameter`, `GetParameters`,
+`GetParametersByPath` and `GetParameterHistory` (GoGo-Infra#309).
 
 With `ssm_env` set, `SsmReadsStayInEnvironment` limits reads to `/gogo/<env>/*` and
 `/gogo/ci/<env>/*`, and `SsmWritesAreBootstrapOnly` denies every parameter write to every capped
