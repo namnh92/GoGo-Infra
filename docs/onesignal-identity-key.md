@@ -33,7 +33,7 @@ cd GoGo-Infra
 ```
 
 Writes `/gogo/dev/backend/onesignal/identity-verification-key` as a
-`SecureString` in `ap-southeast-1`, in account `477020169756`. Path, type and
+`SecureString` in `ap-southeast-1`, in account `665333092935` (moved from `477020169756` on 2026-10-29, GoGo-Infra#307). Path, type and
 `ONESIGNAL_IDENTITY_VERIFICATION_KEY` come from
 `config/secrets.manifest.yml`; account and region from `config/global.tfvars` —
 the script reads both rather than restating them.
