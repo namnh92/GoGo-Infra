@@ -262,6 +262,7 @@ param_exists() {
 # put_param <path> <type> <value>
 put_param() {
   local path="$1" type="$2" value="$3"
+  require_writable_destination "${PREFIX}/${path}"
 
   if [[ "$DRY_RUN" == "yes" ]]; then
     echo "    would write ${PREFIX}/${path} (${type})"
