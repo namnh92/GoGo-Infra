@@ -57,10 +57,37 @@ FINGERPRINT="$(require ANDROID_SIGNING_SHA256)"
 # not claiming one it does handle breaks that link.
 PATHS=("/l/*" "/r/*" "/plans/*" "/places/*" "/room/*")
 
-if [[ "$FINGERPRINT" =~ ^([0-9A-F]{2}:){31}[0-9A-F]{2}$ ]]; then :; else
-  die "ANDROID_SIGNING_SHA256 for ${ENVIRONMENT} is not 32 colon-separated hex pairs:
-       ${FINGERPRINT}"
-fi
+# One flavour can be signed by more than one certificate: dev is signed by the
+# debug keystore on local builds and by its own keystore on Firebase builds
+# (GoGo-Infra#271), and assetlinks.json must name every one of them or links
+# from the other build open in the browser. The value is therefore a
+# comma-separated list; each entry is checked on its own.
+split_fingerprints() {
+  local raw="$1" item
+  local -a parts
+  IFS=',' read -r -a parts <<<"$raw"
+  for item in "${parts[@]}"; do
+    item="${item#"${item%%[![:space:]]*}"}"
+    item="${item%"${item##*[![:space:]]}"}"
+    printf '%s\n' "$item"
+  done
+}
+
+# `read -a` drops a trailing empty field, so "A," would pass as "A".
+[[ "$FINGERPRINT" =~ ,[[:space:]]*$ ]] && die "ANDROID_SIGNING_SHA256 for ${ENVIRONMENT} ends with a comma: an entry is missing."
+
+FINGERPRINTS=()
+while IFS= read -r fp; do
+  FINGERPRINTS+=("$fp")
+done < <(split_fingerprints "$FINGERPRINT")
+
+for fp in "${FINGERPRINTS[@]}"; do
+  if [[ "$fp" =~ ^([0-9A-F]{2}:){31}[0-9A-F]{2}$ ]]; then :; else
+    die "ANDROID_SIGNING_SHA256 for ${ENVIRONMENT} has an entry that is not 32 colon-separated hex pairs:
+       '${fp}'
+       Separate several fingerprints with a comma."
+  fi
+done
 
 # A shared signing key across dev and stag is fine: the two entries stay
 # distinct because assetlinks matches on package name AND fingerprint, and the
@@ -70,14 +97,23 @@ if [[ "$ENVIRONMENT" != "prod" && "$BUNDLE_ID" == "$(env_get IOS_BUNDLE_ID_PROD)
        Each flavour needs its own, or the files claim the wrong app."
 fi
 
-if [[ "$ENVIRONMENT" == "prod" && "$FINGERPRINT" == "$(env_get ANDROID_SIGNING_SHA256_DEV)" ]]; then
-  die "the prod fingerprint equals the dev one.
+# Compared case-insensitively: hex is the same certificate in either case, and the
+# dev list is not held to the uppercase rule above (it is not this run's input).
+if [[ "$ENVIRONMENT" == "prod" ]]; then
+  dev_fingerprints="$(split_fingerprints "$(env_get ANDROID_SIGNING_SHA256_DEV)" | tr '[:lower:]' '[:upper:]')"
+  for fp in "${FINGERPRINTS[@]}"; do
+    if grep -qxF -- "$fp" <<<"$dev_fingerprints"; then
+      die "the prod fingerprint equals a dev one (${fp}).
        With Play App Signing the value that verifies App Links is the app signing
        certificate from Play Console → Setup → App signing, not the upload key
        and not the debug keystore. Shipping the wrong one fails silently."
+    fi
+  done
 fi
 
 mkdir -p "$OUT_DIR"
+
+fingerprints_json="$(printf '"%s", ' "${FINGERPRINTS[@]}" | sed 's/, $//')"
 
 components="$(printf '{"/": "%s", "comment": "GoGo share link"},' "${PATHS[@]}" | sed 's/,$//')"
 cat >"${OUT_DIR}/apple-app-site-association" <<JSON
@@ -100,7 +136,7 @@ cat >"${OUT_DIR}/assetlinks.json" <<JSON
     "target": {
       "namespace": "android_app",
       "package_name": "${PACKAGE_NAME}",
-      "sha256_cert_fingerprints": ["${FINGERPRINT}"]
+      "sha256_cert_fingerprints": [${fingerprints_json}]
     }
   }
 ]

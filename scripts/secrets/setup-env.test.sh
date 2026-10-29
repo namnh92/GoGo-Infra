@@ -62,6 +62,33 @@ while IFS=$'\t' read -r path env_var; do
   fi
 done < <(python3 "${ROOT}/scripts/lib/manifest.py" dev --field infra_readable | awk -F'\t' '$7 == "true" { print $1 "\t" $2 }')
 
+# GoGo-Infra#271 (Sol F-02 on PR #306): --check accepts the fingerprint list in the
+# same shapes render-well-known.sh accepts — one entry, or several separated by a
+# comma with optional spaces — and still refuses a malformed entry.
+FP1="FA:C6:17:45:DC:09:03:78:6F:B9:ED:E6:2A:96:2B:39:9F:73:48:F0:BB:6F:89:9B:83:32:66:75:91:03:3B:9C"
+FP2="E9:E1:0F:54:1D:48:4F:78:9F:96:A6:0C:13:AD:F5:5C:C7:3D:68:34:7B:74:DB:5D:BE:0C:EA:B2:93:E7:13:3D"
+check_fp() {
+  local value="$1"
+  sed -E "s|^ANDROID_SIGNING_SHA256_DEV=.*$|ANDROID_SIGNING_SHA256_DEV=${value}|" \
+    "${ROOT}/config/bootstrap.env.example" >"${TREE}/repo/config/bootstrap.env"
+  PATH="${TREE}/bin:${PATH}" "${TREE}/repo/scripts/secrets/setup-env.sh" dev --check </dev/null 2>&1 \
+    | grep -E "ANDROID_SIGNING_SHA256 " | head -1
+}
+for case_value in "${FP1}" "${FP1},${FP2}" "${FP1}, ${FP2}"; do
+  line="$(check_fp "$case_value")"
+  if [[ "$line" == *"✓ ANDROID_SIGNING_SHA256"* ]]; then
+    ok "--check accepts ANDROID_SIGNING_SHA256='${case_value:0:8}…' (${#case_value} chars)"
+  else
+    bad "--check accepts ANDROID_SIGNING_SHA256='${case_value:0:8}…' (${#case_value} chars)" "${line:-<no line>}"
+  fi
+done
+line="$(check_fp "${FP1},E9:E1:0F")"
+if [[ "$line" == *"✗ ANDROID_SIGNING_SHA256"* ]]; then
+  ok "--check refuses a malformed fingerprint entry"
+else
+  bad "--check refuses a malformed fingerprint entry" "${line:-<no line>}"
+fi
+
 echo
 if [[ "$failures" -gt 0 ]]; then
   echo "${failures} setup-env test(s) failed."
