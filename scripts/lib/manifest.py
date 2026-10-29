@@ -68,7 +68,7 @@ Usage:
     manifest.py <env> --summary <report.json>
                                          Markdown run summary: one line per
                                          capability, then the core group
-    manifest.py <env> --project-deploy <report.json> --release-sha <sha> --run-id <id>
+    manifest.py <env> --project-deploy <report.json> --release-sha <sha> --run-id <id> --run-attempt <n>
                                          The backend runtime projection a
                                          deploy leaves on the host (D-6-B)
     manifest.py <env> --validator-classes
@@ -771,7 +771,7 @@ def summary(report):
     return "\n".join(lines) + "\n"
 
 
-def project_deploy(report, release_sha, run_id):
+def project_deploy(report, release_sha, run_id, run_attempt):
     """D-6-B: the backend runtime slice of a report, for the deploy host. An
     allowlist, so a field added to the report never reaches the host by
     default (A-F-05)."""
@@ -779,6 +779,10 @@ def project_deploy(report, release_sha, run_id):
         raise ReportError(f"release sha must be a full commit id (got {release_sha!r})")
     if not re.fullmatch(r"[0-9]+", run_id or ""):
         raise ReportError(f"run id must be a GitHub run id (got {run_id!r})")
+    # "Re-run jobs" keeps the run id and renders SSM again: the attempt is what
+    # makes a re-run a deploy of its own (GoGo-Infra#309 review).
+    if not re.fullmatch(r"[0-9]+", run_attempt or ""):
+        raise ReportError(f"run attempt must be a GitHub run attempt (got {run_attempt!r})")
     if any(e.startswith(("aborted:", "validator-disagreement:")) for e in report["collection"]["errors"]):
         raise ReportError("the report did not complete; a deploy does not carry it")
     rows = [
@@ -801,9 +805,10 @@ def project_deploy(report, release_sha, run_id):
         "env": report["env"],
         "generated_at": report["generated_at"],
         "manifest_sha": report["manifest_sha"],
-        "deploy_id": f"{release_sha}-{run_id}",
+        "deploy_id": f"{release_sha}-{run_id}-{run_attempt}",
         "release_sha": release_sha,
         "run_id": run_id,
+        "run_attempt": run_attempt,
         "rows": projected_rows,
         "capabilities": [{field: c[field] for field in PROJECTION_CAPABILITY_FIELDS} for c in caps],
     }
@@ -876,6 +881,7 @@ def main():
                 load_report(value_of("--project-deploy"), env),
                 value_of("--release-sha"),
                 value_of("--run-id"),
+                value_of("--run-attempt"),
             )
             sys.stdout.write(json.dumps(projection, indent=2) + "\n")
             return 0

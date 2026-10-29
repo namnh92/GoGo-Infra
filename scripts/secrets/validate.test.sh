@@ -846,33 +846,36 @@ else ok "#309: --summary refuses a report for another environment"; fi
 # The deploy projection (D-6-B): backend runtime rows, allowlisted fields.
 SHA="$(printf '%040d' 7 | tr 0 a)"
 proj="${REPORTS}/projection.json"
-if python3 "${ROOT}/scripts/lib/manifest.py" dev --project-deploy "${REPORTS}/deploy.json" --release-sha "$SHA" --run-id 4242 > "$proj"; then
+if python3 "${ROOT}/scripts/lib/manifest.py" dev --project-deploy "${REPORTS}/deploy.json" --release-sha "$SHA" --run-id 4242 --run-attempt 3 > "$proj"; then
   ok "#309 D-6-B: the deploy role's partial report projects (backend was read)"
 else bad "#309 D-6-B: projection of the deploy report failed" "$(cat "$proj")"; fi
 pk="$(rq "$proj" 'sorted(r), sorted({k for x in r["rows"] for k in x}), sorted({k for c in r["capabilities"] for k in c})')"
-want_pk="(['capabilities', 'deploy_id', 'env', 'generated_at', 'manifest_sha', 'release_sha', 'rows', 'run_id', 'schema_version'], ['capabilities', 'env_var', 'findings', 'lifecycle', 'path', 'presence', 'verdict'], ['missing', 'name', 'ready', 'status', 'verdict'])"
+want_pk="(['capabilities', 'deploy_id', 'env', 'generated_at', 'manifest_sha', 'release_sha', 'rows', 'run_attempt', 'run_id', 'schema_version'], ['capabilities', 'env_var', 'findings', 'lifecycle', 'path', 'presence', 'verdict'], ['missing', 'name', 'ready', 'status', 'verdict'])"
 if [[ "$pk" == "$want_pk" ]]; then
   ok "#309 D-6-B: projection fields are exactly the allowlist (no parameter_age_days, no namespace)"
 else bad "#309 D-6-B: projection fields drifted" "$pk"; fi
 backend_runtime="$(python3 "${ROOT}/scripts/lib/manifest.py" dev --namespace backend --consumer runtime --include-parked | cut -f1 | sed 's#^#/gogo/dev/backend/#' | sort)"
 if [[ "$(rq "$proj" '"\n".join(sorted(x["path"] for x in r["rows"]))')" == "$backend_runtime" \
-   && "$(rq "$proj" 'r["deploy_id"]')" == "${SHA}-4242" \
+   && "$(rq "$proj" 'r["deploy_id"]')" == "${SHA}-4242-3" \
    && "$(rq "$proj" '[c["name"] for c in r["capabilities"]]')" == "['public_catalogue_uploads', 'avatar_cache_purge', 'share_link_edge', 'secure_export', 'ai_assistant']" ]]; then
-  ok "#309 D-6-B: the projection is exactly the backend runtime rows and the capabilities they form; deploy_id = <sha>-<run id>"
+  ok "#309 D-6-B: the projection is exactly the backend runtime rows and the capabilities they form; deploy_id = <sha>-<run id>-<attempt>"
 else bad "#309 D-6-B: projection content is wrong" "$(rq "$proj" '[c["name"] for c in r["capabilities"]], r["deploy_id"], len(r["rows"])')"; fi
 if grep -qE '/gogo/(ci|tools)/|/mobile/' "$proj"; then
   bad "#309 D-6-B: no ci, tools or mobile name may reach the host" "$(grep -E '/gogo/(ci|tools)/|/mobile/' "$proj" | head -3)"
 else ok "#309 D-6-B: no ci, tools or mobile name reaches the projection"; fi
-if python3 "${ROOT}/scripts/lib/manifest.py" dev --project-deploy "${REPORTS}/aborted.json" --release-sha "$SHA" --run-id 1 >/dev/null 2>&1; then
+if python3 "${ROOT}/scripts/lib/manifest.py" dev --project-deploy "${REPORTS}/aborted.json" --release-sha "$SHA" --run-id 1 --run-attempt 1 >/dev/null 2>&1; then
   bad "#309 D-6-B: an aborted report must not project" "it projected"
 else ok "#309 D-6-B: an aborted report does not project"; fi
-if python3 "${ROOT}/scripts/lib/manifest.py" dev --project-deploy "${REPORTS}/ok.json" --release-sha develop --run-id 1 >/dev/null 2>&1; then
+if python3 "${ROOT}/scripts/lib/manifest.py" dev --project-deploy "${REPORTS}/ok.json" --release-sha develop --run-id 1 --run-attempt 1 >/dev/null 2>&1; then
   bad "#309 D-6-B: a ref is not a release sha" "it projected"
 else ok "#309 D-6-B: a mutable ref is refused as release_sha"; fi
+if python3 "${ROOT}/scripts/lib/manifest.py" dev --project-deploy "${REPORTS}/deploy.json" --release-sha "$SHA" --run-id 1 >/dev/null 2>&1; then
+  bad "#309 review: a projection without a run attempt must be refused" "it projected"
+else ok "#309 review: a projection needs the run attempt (a re-run keeps the run id)"; fi
 echo "/gogo/dev/backend" > "${WORK}/deny"
 report_run nobackend dev
 : > "${WORK}/deny"
-if python3 "${ROOT}/scripts/lib/manifest.py" dev --project-deploy "${REPORTS}/nobackend.json" --release-sha "$SHA" --run-id 1 >/dev/null 2>&1; then
+if python3 "${ROOT}/scripts/lib/manifest.py" dev --project-deploy "${REPORTS}/nobackend.json" --release-sha "$SHA" --run-id 1 --run-attempt 1 >/dev/null 2>&1; then
   bad "#309 D-6-B: a report that never read backend must not project" "it projected"
 else ok "#309 D-6-B: a report that never read backend does not project"; fi
 

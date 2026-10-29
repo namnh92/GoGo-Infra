@@ -19,44 +19,6 @@ LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)"
 # shellcheck source=scripts/lib/remote.sh
 source "${LIB}/remote.sh"
 
-# GoGo-BE#408 F-01 — the collector overlay, derived the way deploy-dev derives it.
-#
-# deploy-dev.yml adds docker/docker-compose.observability.yml only when the env
-# file it rendered carries PROMETHEUS_REMOTE_WRITE_URL. A rollback is run by
-# hand (the workflow's hint says plain `rollback.sh`), so without this the
-# overlay is never set, Alloy is never refreshed, and it keeps the
-# configuration being rolled back from — silently.
-#
-# DEV only. deploy-production.yml never sets the overlay, and a rollback must
-# not start a collector the production deploy does not run. Read from the env
-# file already on the host, the one the running containers were started with.
-if [[ -z "$COMPOSE_OBSERVABILITY" && "$ENVIRONMENT_NAME" == dev ]]; then
-  code=0
-  remote "grep -qE '^PROMETHEUS_REMOTE_WRITE_URL=.+' '${DEPLOY_PATH}/${REMOTE_ENV_FILE}'" || code=$?
-  case "$code" in
-    0)
-      export COMPOSE_OBSERVABILITY=docker/docker-compose.observability.yml
-      # COMPOSE is assembled when remote.sh is sourced; assemble it again.
-      # shellcheck source=scripts/lib/remote.sh
-      source "${LIB}/remote.sh"
-      echo "==> metrics collector enabled (PROMETHEUS_REMOTE_WRITE_URL is in ${REMOTE_ENV_FILE})"
-      ;;
-    1) ;;
-    *) echo "::warning::could not read ${REMOTE_ENV_FILE} on the host (exit ${code}) — Alloy will not be refreshed" >&2 ;;
-  esac
-fi
-
-# The overlay is off, but a collector from an earlier deploy may still be
-# running its old configuration. Say so, with the command, rather than nothing.
-# DEV only, like the derivation above: production rollback stays as it was.
-if [[ -z "$COMPOSE_OBSERVABILITY" && "$ENVIRONMENT_NAME" == dev ]]; then
-  alloy_id="$(remote "docker ps -aq --filter label=com.docker.compose.project=gogo-${ENVIRONMENT_NAME} --filter label=com.docker.compose.service=alloy" 2>/dev/null || true)"
-  if [[ -n "$(printf '%s' "$alloy_id" | tr -d '[:space:]')" ]]; then
-    echo "::warning::an Alloy container exists in gogo-${ENVIRONMENT_NAME} but the observability overlay is not set; it was NOT refreshed and may run the configuration being rolled back from (GoGo-BE#408). To recreate it, on the host:" >&2
-    echo "  cd ${DEPLOY_PATH} && ${COMPOSE} -f docker/docker-compose.observability.yml up -d --no-deps --force-recreate alloy" >&2
-  fi
-fi
-
 if [[ -z "$TARGET_REF" ]]; then
   TARGET_REF="$(remote "cat '${DEPLOY_PATH}/.previous-revision' 2>/dev/null || true")"
   [[ -n "$TARGET_REF" ]] || {
@@ -93,12 +55,52 @@ echo "    ${TARGET_REF} -> ${target}"
 # not versioned with the code. No report describes that combination, so the
 # projection is removed instead of left describing the deploy rolled back from.
 restore_id="$(remote "cat '${DEPLOY_PATH}/.previous-id' 2>/dev/null || true" | tail -n 1 | tr -d '[:space:]')"
-if [[ "$restore_id" =~ ^[0-9a-f]{40}-[0-9]+$ && "${restore_id%%-*}" == "$target" ]] \
+if [[ "$restore_id" =~ ^[0-9a-f]{40}-[0-9]+-[0-9]+$ && "${restore_id%%-*}" == "$target" ]] \
   && remote "test -s '${DEPLOY_PATH}/${PAIRS_DIR}/${restore_id}/env' && test -s '${DEPLOY_PATH}/${PAIRS_DIR}/${restore_id}/secrets-readiness.json'"; then
   echo "==> Restoring the env file of deploy ${restore_id}"
   remote "cd '${DEPLOY_PATH}' && install -m 600 '${PAIRS_DIR}/${restore_id}/env' '${REMOTE_ENV_FILE}'"
 else
   restore_id=""
+fi
+
+# GoGo-BE#408 F-01 — the collector overlay, derived the way deploy-dev derives it.
+#
+# deploy-dev.yml adds docker/docker-compose.observability.yml only when the env
+# file it rendered carries PROMETHEUS_REMOTE_WRITE_URL. A rollback is run by
+# hand (the workflow's hint says plain `rollback.sh`), so without this the
+# overlay is never set, Alloy is never refreshed, and it keeps the
+# configuration being rolled back from — silently.
+#
+# DEV only. deploy-production.yml never sets the overlay, and a rollback must
+# not start a collector the production deploy does not run. Read from the env
+# file on the host — after the restore above, so it is the env file the
+# rolled-back containers are started with, not the one being rolled back from
+# (GoGo-Infra#309 review: an overlay chosen from B's env kept Alloy on for A).
+if [[ -z "$COMPOSE_OBSERVABILITY" && "$ENVIRONMENT_NAME" == dev ]]; then
+  code=0
+  remote "grep -qE '^PROMETHEUS_REMOTE_WRITE_URL=.+' '${DEPLOY_PATH}/${REMOTE_ENV_FILE}'" || code=$?
+  case "$code" in
+    0)
+      export COMPOSE_OBSERVABILITY=docker/docker-compose.observability.yml
+      # COMPOSE is assembled when remote.sh is sourced; assemble it again.
+      # shellcheck source=scripts/lib/remote.sh
+      source "${LIB}/remote.sh"
+      echo "==> metrics collector enabled (PROMETHEUS_REMOTE_WRITE_URL is in ${REMOTE_ENV_FILE})"
+      ;;
+    1) ;;
+    *) echo "::warning::could not read ${REMOTE_ENV_FILE} on the host (exit ${code}) — Alloy will not be refreshed" >&2 ;;
+  esac
+fi
+
+# The overlay is off, but a collector from an earlier deploy may still be
+# running its old configuration. Say so, with the command, rather than nothing.
+# DEV only, like the derivation above: production rollback stays as it was.
+if [[ -z "$COMPOSE_OBSERVABILITY" && "$ENVIRONMENT_NAME" == dev ]]; then
+  alloy_id="$(remote "docker ps -aq --filter label=com.docker.compose.project=gogo-${ENVIRONMENT_NAME} --filter label=com.docker.compose.service=alloy" 2>/dev/null || true)"
+  if [[ -n "$(printf '%s' "$alloy_id" | tr -d '[:space:]')" ]]; then
+    echo "::warning::an Alloy container exists in gogo-${ENVIRONMENT_NAME} but the observability overlay is not set; it was NOT refreshed and may run the configuration being rolled back from (GoGo-BE#408). To recreate it, on the host:" >&2
+    echo "  cd ${DEPLOY_PATH} && ${COMPOSE} -f docker/docker-compose.observability.yml up -d --no-deps --force-recreate alloy" >&2
+  fi
 fi
 
 echo "==> Rebuilding and restarting"

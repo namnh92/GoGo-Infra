@@ -157,27 +157,33 @@ The DEV Prometheus is LAN-only (ADR-0007), so nothing is pushed from CI. `deploy
 the report in its own validate step (the deploy role reads `backend` only: the report is partial,
 exit 2, which the step accepts) and `deploy-vps.sh` projects it:
 
-- `deploy_id = <release commit>-<run id>` (A-F-05 r3): one deploy of one commit with one rendered
-  configuration; redeploying a commit gets a new one. `release_sha` is the commit `deploy-vps.sh`
-  resolves, never the `release_ref` input. It is appended to the shipped env file as
-  `APP_DEPLOY_ID`.
+- `deploy_id = <release commit>-<run id>-<run attempt>` (A-F-05 r3): one deploy of one commit with
+  one rendered configuration; redeploying a commit gets a new one, and so does "Re-run jobs", which
+  keeps `GITHUB_RUN_ID` and renders SSM again (review of #315). A deploy whose id is the one
+  already deployed is refused rather than overwrite its pair. `release_sha` is the commit
+  `deploy-vps.sh` resolves, never the `release_ref` input. It is appended to the shipped env file
+  as `APP_DEPLOY_ID`.
 - The projection is an allowlist (`manifest.py --project-deploy`): `schema_version, env,
-  generated_at, manifest_sha, deploy_id, release_sha, run_id, rows[path, env_var, lifecycle,
+  generated_at, manifest_sha, deploy_id, release_sha, run_id, run_attempt, rows[path, env_var, lifecycle,
   presence, findings, verdict, capabilities], capabilities[name, status, verdict, ready, missing]`
   — `namespace: backend`, `consumer: runtime` rows only (the API's variables and the host-level
   ones in the same file, `DOMAIN`, `ACME_EMAIL`, `TUNNEL_TOKEN`), and the capabilities made of
   those rows alone. No `parameter_age_days`, nothing from ci, tools or mobile. A report that is
   aborted, disagrees with itself or never read `backend` is refused before anything on the host
   changes.
-- Files: `${DEPLOY_PATH}/ops/secrets-readiness.deploy.json` (0644, names only), the pair
-  `${DEPLOY_PATH}/ops/deploys/<deploy_id>/{env,secrets-readiness.json}` (0640; current and
-  previous kept), and `.deployed-id` / `.previous-id` beside `.deployed-revision` /
+- Files: `${DEPLOY_PATH}/ops/secrets-readiness.deploy.json` (0644, names only — the only file
+  `ops/` keeps), the pair `${DEPLOY_PATH}/.deploys/<deploy_id>/{env,secrets-readiness.json}`
+  (0640; current and previous kept; host-only, outside `ops/`, because the env copies carry every
+  value, including credentials since rotated out, and `ops/` is the tree mounted into the API —
+  review of #315, open question 2), and `.deployed-id` / `.previous-id` beside `.deployed-revision` /
   `.previous-revision`. All of it is written in the remote command that writes
   `.deployed-revision`, after the services are verified running and the management path answers;
   a failed deploy leaves the previous projection and `deploy_id`, and its own rollback restores the
   previous pair's env file with the code. `rollback.sh` restores env and report together when the
   target is the recorded previous deploy; otherwise it keeps the env file, as before, and removes
-  the projection. A deploy without a report (`deploy-production.yml`) removes any earlier one.
+  the projection. Either rollback derives the observability overlay from the env file it restored,
+  so the collector follows the configuration the containers are started with (review of #315). A
+  deploy without a report (`deploy-production.yml`) removes any earlier one.
 - The API (phase 2) reads the projection through a read-only bind mount of the directory `ops/`
   and compares its `deploy_id` with its own `APP_DEPLOY_ID` (`infra.deploy_match`). The projection
   is a dated deployment snapshot: equality proves neither current SSM state nor credential

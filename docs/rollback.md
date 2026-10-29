@@ -29,7 +29,8 @@ The deploy workflow runs this automatically when the health check fails.
 
 GoGo-Infra#309 (ADR-0016): when the target is the recorded previous deploy, `rollback.sh` also puts
 back the env file that deploy was started with and its readiness report
-(`ops/deploys/<deploy_id>/`), and rewrites `.deployed-id`. A secret rotated since is undone until
+(`.deploys/<deploy_id>/`), derives the collector overlay from that env file, and rewrites
+`.deployed-id`. A secret rotated since is undone until
 the next deploy renders SSM again. For any other target the env file is left as it is and the
 readiness projection is removed, since no report describes that combination.
 

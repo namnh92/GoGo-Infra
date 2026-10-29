@@ -16,24 +16,28 @@
 # THE DEPLOY-TIME READINESS PROJECTION (GoGo-Infra#309 D-6-B, ADR-0016)
 #
 # With READINESS_REPORT set to the D-1 report of this deploy's
-# `validate.sh <env> --report` (and GITHUB_RUN_ID, which Actions sets), the
+# `validate.sh <env> --report` (and GITHUB_RUN_ID / GITHUB_RUN_ATTEMPT, which
+# Actions sets), the
 # deploy also leaves on the host what the API reports about its own
 # configuration:
 #
-#   deploy_id = <release commit>-<run id>: one deploy of one commit with one
-#   rendered configuration. Written into the env file as APP_DEPLOY_ID, so the
+#   deploy_id = <release commit>-<run id>-<run attempt>: one deploy of one
+#   commit with one rendered configuration. The attempt is part of it because
+#   "Re-run jobs" keeps the run id and renders SSM again. Written into the env file as APP_DEPLOY_ID, so the
 #   API holds it, and into the projection — the backend runtime rows of the
 #   report, by allowlist (scripts/lib/manifest.py --project-deploy).
 #
 #   ${DEPLOY_PATH}/ops/secrets-readiness.deploy.json   the current projection
-#   ${DEPLOY_PATH}/ops/deploys/<deploy_id>/{env,secrets-readiness.json}
-#                                                     the pair, last two kept
+#   ${DEPLOY_PATH}/.deploys/<deploy_id>/{env,secrets-readiness.json}
+#                                                     the pair, last two kept,
+#                                                     host-only (never under ops/)
 #   ${DEPLOY_PATH}/.deployed-id, .previous-id          beside the revision markers
 #
 # All of it is written in the step that writes .deployed-revision — after the
 # services are verified running and the management path answers — so a failed
 # deploy leaves the previous projection, with the previous deploy_id, in place.
-# Its own rollback restores the previous pair's env file with the code. Without
+# Its own rollback restores the previous pair's env file with the code, and the
+# observability overlay that env file implies. Without
 # READINESS_REPORT (deploy-production.yml) no projection is written and any
 # earlier one is removed: a report on the host never describes a configuration
 # other than the one the containers were started with.
@@ -50,7 +54,10 @@ source "${LIB}/remote.sh"
 READINESS_REPORT="${READINESS_REPORT:-}"
 if [[ -n "$READINESS_REPORT" ]]; then
   [[ -s "$READINESS_REPORT" ]] || { echo "READINESS_REPORT ${READINESS_REPORT} is missing or empty — refusing to deploy." >&2; exit 1; }
-  [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ ]] || { echo "READINESS_REPORT needs GITHUB_RUN_ID (the deploy_id is <commit>-<run id>) — refusing to deploy." >&2; exit 1; }
+  [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ && "${GITHUB_RUN_ATTEMPT:-}" =~ ^[0-9]+$ ]] || {
+    echo "READINESS_REPORT needs GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT (the deploy_id is <commit>-<run id>-<attempt>) — refusing to deploy." >&2
+    exit 1
+  }
 fi
 
 echo "==> Recording the running revision for rollback"
@@ -179,8 +186,8 @@ previous_id="$(read_remote "the last deploy id" \
 if [[ "$previous_id" == "__NONE__" || -z "$previous" ]]; then
   previous_id=""
   remote "rm -f '${DEPLOY_PATH}/.previous-id'"
-elif [[ ! "$previous_id" =~ ^[0-9a-f]{40}-[0-9]+$ ]]; then
-  echo "the last deploy id read succeeded but is not <commit>-<run id> — refusing to deploy." >&2
+elif [[ ! "$previous_id" =~ ^[0-9a-f]{40}-[0-9]+-[0-9]+$ ]]; then
+  echo "the last deploy id read succeeded but is not <commit>-<run id>-<attempt> — refusing to deploy." >&2
   echo "  got: '${previous_id}'" >&2
   exit 1
 else
@@ -213,11 +220,17 @@ echo "    ${RELEASE_REF} -> ${target}"
 # untouched.
 deploy_id=""
 if [[ -n "$READINESS_REPORT" ]]; then
-  deploy_id="${target}-${GITHUB_RUN_ID}"
+  deploy_id="${target}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+  # One id, one deploy: reusing the running one would overwrite the pair the
+  # rollback returns to.
+  if [[ "$deploy_id" == "$previous_id" ]]; then
+    echo "deploy id ${deploy_id} is the one already deployed — refusing to overwrite its env/report pair." >&2
+    exit 1
+  fi
   scratch="$(mktemp -d)"
   trap 'rm -rf "$scratch"' EXIT
   if ! python3 -I "${LIB}/manifest.py" "$ENVIRONMENT_NAME" --project-deploy "$READINESS_REPORT" \
-      --release-sha "$target" --run-id "$GITHUB_RUN_ID" >"${scratch}/projection.json"; then
+      --release-sha "$target" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" >"${scratch}/projection.json"; then
     echo "the readiness report cannot be projected — refusing to deploy." >&2
     exit 1
   fi
@@ -315,8 +328,13 @@ if [[ -n "$not_running" ]]; then
     echo "==> Rolling back to ${previous}"
     remote "cd '${DEPLOY_PATH}' && git checkout --detach '${previous}'"
     # With the env file it was started with (#309 D-6-B), when the pair exists.
-    if [[ -n "$previous_id" ]]; then
-      remote "cd '${DEPLOY_PATH}' && if [ -s '${PAIRS_DIR}/${previous_id}/env' ]; then install -m 600 '${PAIRS_DIR}/${previous_id}/env' '${REMOTE_ENV_FILE}'; else echo '    no env pair for ${previous_id} — keeping the new env file' >&2; fi"
+    # The overlay follows the restored env file, not the one this deploy
+    # rendered: a collector the previous configuration never ran stays off.
+    if [[ -n "$previous_id" ]] && remote "test -s '${DEPLOY_PATH}/${PAIRS_DIR}/${previous_id}/env'"; then
+      remote "cd '${DEPLOY_PATH}' && install -m 600 '${PAIRS_DIR}/${previous_id}/env' '${REMOTE_ENV_FILE}'"
+      overlay_from_host_env
+    elif [[ -n "$previous_id" ]]; then
+      echo "    no env pair for ${previous_id} — keeping the new env file" >&2
     fi
     remote "cd '${DEPLOY_PATH}' && ${COMPOSE} build api worker migrate"
     # The revision this `up` starts is the previous one, so that is what its

@@ -493,9 +493,11 @@ cannot be scoped); ADR-0016 records that as accepted.
 **On the deploy host.** `deploy-dev.yml` writes the same report from the deploy role (backend only,
 so UNKNOWN by design) and `deploy-vps.sh` leaves a projection of it — the backend runtime rows,
 fields by allowlist — at `${DEPLOY_PATH}/ops/secrets-readiness.deploy.json`, with
-`deploy_id = <commit>-<run id>`, the same value it writes into the env file as `APP_DEPLOY_ID`.
-The env file and the report are kept as a pair per deploy under `ops/deploys/<deploy_id>/`, the
-current and the previous one; a rollback restores both. The ci, tools and mobile inventory never
+`deploy_id = <commit>-<run id>-<run attempt>`, the same value it writes into the env file as
+`APP_DEPLOY_ID`. The env file and the report are kept as a pair per deploy under
+`${DEPLOY_PATH}/.deploys/<deploy_id>/` — host-only, never under the `ops/` the API mounts — the
+current and the previous one; a rollback restores both, and the collector overlay follows the
+restored env file. The ci, tools and mobile inventory never
 leaves GitHub. The projection is a dated snapshot of one deploy, not a live view of SSM.
 
 ## Generated values
