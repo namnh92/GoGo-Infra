@@ -440,8 +440,10 @@ else
 fi
 # Absent must degrade the assistant, never stop a deploy (ADR-0014 D-6): no
 # assistant row is required in any environment until BE#713 reads it.
-for path in openrouter/assistant-api-key assistant/model assistant/fallback-model \
-            budget/assistant-monthly-max-usd budget/assistant-user-daily-max-messages flags/assistant; do
+# assistant/model, assistant/fallback-model and flags/assistant were retired by
+# GoGo-Infra#308 (owner 2026-10-29: GoGo-BE reads none of them).
+for path in openrouter/assistant-api-key \
+            budget/assistant-monthly-max-usd budget/assistant-user-daily-max-messages; do
   row="$(python3 "$READER" dev --namespace backend --consumer runtime | awk -F'\t' -v p="$path" '$1 == p')"
   if [[ -z "$row" ]]; then
     bad "${path} is not a backend runtime row" "ADR-0014 declares it for the API"
@@ -452,11 +454,11 @@ for path in openrouter/assistant-api-key assistant/model assistant/fallback-mode
   fi
 done
 assistant_cap="$(python3 "$READER" dev --capability-requires --include-planned | awk -F'\t' '$1 == "ai_assistant" { print $2 ":" $3 }' | sort | tr '\n' ' ')"
-if [[ "$assistant_cap" == "backend:assistant/model backend:budget/assistant-monthly-max-usd backend:budget/assistant-user-daily-max-messages backend:openrouter/assistant-api-key " ]]; then
-  ok "capability ai_assistant names the key, the model and both limits"
+if [[ "$assistant_cap" == "backend:budget/assistant-monthly-max-usd backend:budget/assistant-user-daily-max-messages backend:openrouter/assistant-api-key " ]]; then
+  ok "capability ai_assistant names the key and both limits (the model row is retired, #308)"
 else
   bad "capability ai_assistant requires '${assistant_cap}'" \
-      "readiness must report the assistant missing its key, model or a limit (ADR-0014 D-4/D-5)"
+      "readiness must report the assistant missing its key or a limit (ADR-0014 D-4/D-5)"
 fi
 
 count_runtime=$(python3 "$READER" dev --namespace all | wc -l | tr -d ' ')
@@ -735,9 +737,7 @@ fi
 # readiness check asks dev for a value nobody is going to write. A path that
 # must be absent is retired. A row that exists in one environment only says so
 # with `environments:`. The vocabulary is what #309's report is built on.
-PARKED_PATHS="aws/cost-explorer-access-key-id
-aws/cost-explorer-secret-access-key
-budget/place-refresh-daily-max-units-google-details-core
+PARKED_PATHS="budget/place-refresh-daily-max-units-google-details-core
 budget/place-refresh-daily-max-units-google-details-quality
 cost/collector-poll-ms
 cost/collectors-enabled
@@ -773,9 +773,9 @@ for env in dev stag prod; do
   parked_seen="$(python3 "$READER" "$env" --namespace all --consumer all --include-parked --field lifecycle \
     | awk -F'\t' '$7 == "parked" { print $1 }' | sort)"
   if [[ "$parked_seen" == "$PARKED_PATHS" ]]; then
-    ok "${env}: --include-parked --field lifecycle lists exactly the 18 parked rows"
+    ok "${env}: --include-parked --field lifecycle lists exactly the 16 parked rows"
   else
-    bad "${env}: --include-parked lists a different set than the 18 parked rows" \
+    bad "${env}: --include-parked lists a different set than the 16 parked rows" \
         "$(comm -3 <(echo "$PARKED_PATHS") <(echo "$parked_seen") | tr '\n' ' ')"
   fi
 done
@@ -860,11 +860,17 @@ ai-harness/openrouter-api-key
 github/agent-app-id
 github/agent-app-installation-id
 github/agent-app-private-key"
+# Owner 2026-10-29: rows no code reads are removed and listed here until the
+# stored values are deleted.
+RETIRED_BACKEND="backend:assistant/fallback-model
+backend:assistant/model
+backend:flags/assistant
+backend:observability/grafana-url"
 for env in dev stag prod ci; do
   seen="$(python3 "$READER" "$env" --retired | awk -F'\t' '$2 == "ci" { print $1 }' | sort)"
-  other="$(python3 "$READER" "$env" --retired | awk -F'\t' '$2 != "ci"')"
-  if [[ "$seen" == "$RETIRED_CI" && -z "$other" ]]; then
-    ok "${env}: --retired lists the five /gogo/ci/<env>/ rows of the #294 cutover and no tools row"
+  other="$(python3 "$READER" "$env" --retired | awk -F'\t' '$2 != "ci" { print $2 ":" $1 }' | sort)"
+  if [[ "$seen" == "$RETIRED_CI" && "$other" == "$RETIRED_BACKEND" ]]; then
+    ok "${env}: --retired lists the five #294 ci rows, the four unread backend rows (#308) and no tools row"
   else
     bad "${env}: --retired differs" "$(python3 "$READER" "$env" --retired | tr '\n' ' ')"
   fi

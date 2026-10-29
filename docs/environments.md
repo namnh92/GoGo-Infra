@@ -332,7 +332,8 @@ allowed to make, or allowed to make spend it is not measuring.
 | `cost/ledger-flush-ms` | `COST_LEDGER_FLUSH_MS` | `5000` | flushes every 5s anyway |
 
 Both rows are **parked** since 2026-10-29 (GoGo-Infra#308, owner decision: cost observability has
-no owner on the roadmap), with the other ten cost-observability rows — declared for no
+no owner on the roadmap), with the other eight cost-observability rows (the Cost Explorer pair
+stays active: GoGo-BE reads it) — declared for no
 environment until the feature is scheduled; the code defaults above are what runs. Cost-Spec
 keeps requirement precedence.
 
@@ -433,11 +434,15 @@ missing.
 | Parameter | Env var | Proposed value (owner sets) | Absent means |
 | --- | --- | --- | --- |
 | `openrouter/assistant-api-key` | `OPENROUTER_ASSISTANT_API_KEY` | key `gogo_ai_anthropic_<env>` | assistant unavailable |
-| `assistant/model` | `ASSISTANT_MODEL` | `anthropic/claude-sonnet-5.5` | assistant unavailable |
-| `assistant/fallback-model` | `ASSISTANT_FALLBACK_MODEL` | `anthropic/claude-haiku-5.5` | no fallback |
 | `budget/assistant-monthly-max-usd` | `ASSISTANT_MONTHLY_MAX_USD` | dev 20 · stag 20 · prod 150 | **refuse** (default-deny) |
 | `budget/assistant-user-daily-max-messages` | `ASSISTANT_USER_DAILY_MAX_MESSAGES` | 30 | **refuse**, never unlimited |
-| `flags/assistant` | `FLAG_ASSISTANT` | dev `true` · prod `false` until launch | seed only, see below |
+
+`assistant/model`, `assistant/fallback-model` and `flags/assistant` were removed on 2026-10-29
+(GoGo-Infra#308, owner: rows no code reads leave the manifest): GoGo-BE reads none of
+`ASSISTANT_MODEL`, `ASSISTANT_FALLBACK_MODEL` or `FLAG_ASSISTANT` — it answers with Jev
+(Decisions API) and Claude Haiku over BYOK, and reads `assistant.enabled` from `FEATURE_FLAGS`
+only (default off). They are listed under `retired:`; the task that makes GoGo-BE read one adds
+its row back.
 
 **The budget is enforced in three places** (ADR-0014 D-4): the credit limit on the OpenRouter key
 (monthly reset, same figure as `ASSISTANT_MONTHLY_MAX_USD`), GoGo-BE's own refusal, and the
@@ -448,7 +453,8 @@ request, and the Anthropic limit is shared with every other BYOK use on the acco
 assistant stays off until ADR-0014's *Launch gate* is recorded on GoGo-BE#713.
 
 **Kill switch, no redeploy:** the `assistant.enabled` row in `FEATURE_FLAGS`, changed through the
-CMS and audited. `FLAG_ASSISTANT` only seeds it when the row does not exist, so a deploy never
+CMS and audited. *(ADR-0014 planned a `FLAG_ASSISTANT` seed; GoGo-BE never read it and the row is
+retired, #308 — a missing row reads as off.)* A seed would only create the row when absent, so a deploy never
 turns an operator's off back on. Off answers "unavailable" without calling OpenRouter, on every
 API instance within 60 s (ADR-0014 D-6); a flag that cannot be read counts as off; streams
 already started finish within their `max_tokens`. **Hard stop that does not depend on

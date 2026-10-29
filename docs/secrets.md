@@ -185,9 +185,7 @@ open a pull request — see `docs/adr/0001`.
 /gogo/<env>/backend/observability/sentry-dsn
 /gogo/<env>/backend/observability/metrics-token
 /gogo/<env>/backend/openrouter/assistant-api-key  GoGo AI assistant key gogo_ai_anthropic_<env> (ADR-0014)
-/gogo/<env>/backend/assistant/{model,fallback-model}   String — OpenRouter model ids
 /gogo/<env>/backend/budget/assistant-{monthly-max-usd,user-daily-max-messages}   String — limits
-/gogo/<env>/backend/flags/assistant             String — kill-switch seed
 /gogo/<env>/backend/cms/super-admin-email      String, tagged gogo:infra-readable — API + Terraform
 /gogo/<env>/backend/cms/access-staff-emails    String (JSON array), tagged — Terraform only, never rendered
 
@@ -293,10 +291,11 @@ extra — and the manifest has the words to say which is which.
   that has no owner on the roadmap — the spec it comes from keeps requirement precedence; this is
   deployment state. Un-park = delete the line. A value stored for a parked row is a finding
   (`PARKED, STORED`): un-park, or delete it with the aws CLI — `delete.sh` resolves paths through
-  the reader and refuses it. 18 rows are parked today (cost observability ×12, place refresh
-  ×6, owner 2026-10-29); `manifest.py <env> --include-parked --field lifecycle` lists them.
+  the reader and refuses it. 16 rows are parked today (cost observability ×10, place refresh
+  ×6, owner 2026-10-29; the Cost Explorer pair stays active — GoGo-BE reads it); `manifest.py <env> --include-parked --field lifecycle` lists them.
 - **`retired:`** — a separate top-level block (bottom of the file) of paths that must be
-  **absent**: renames, moves, withdrawals. `validate.sh` fails in every mode while SSM holds one
+  **absent**: renames, moves, withdrawals, and rows no code reads (owner 2026-10-29: a row is
+  declared only while something reads it; the task that needs one adds it back). `validate.sh` fails in every mode while SSM holds one
   (`RETIRED, STILL STORED`). A path cannot be both retired and declared; the reader refuses the
   manifest. `manifest.py <env> --retired` lists the entries for the env's trees.
 - **`environments: [...]`** on a row — the environments the row is declared in at all. Elsewhere
