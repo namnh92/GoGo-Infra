@@ -331,6 +331,11 @@ allowed to make, or allowed to make spend it is not measuring.
 | `cost/ledger-enabled` | `COST_LEDGER_ENABLED` | `true` | ledger writes anyway |
 | `cost/ledger-flush-ms` | `COST_LEDGER_FLUSH_MS` | `5000` | flushes every 5s anyway |
 
+Both rows are **parked** since 2026-10-29 (GoGo-Infra#308, owner decision: cost observability has
+no owner on the roadmap), with the other ten cost-observability rows — declared for no
+environment until the feature is scheduled; the code defaults above are what runs. Cost-Spec
+keeps requirement precedence.
+
 DEV has been writing `provider_usage_daily` since GoGo-BE#335 merged, without a parameter in
 this repository. Declaring them changes nothing about that. It makes the running values
 **visible and changeable without a code deploy**, and gives the PR2 rollback — stop writing the
@@ -350,8 +355,8 @@ still owed. If the answer moves the number, it moves a parameter rather than a c
 | `budget/place-refresh-daily-max-calls` | `PLACE_REFRESH_DAILY_MAX_CALLS` |
 | `budget/place-refresh-daily-max-list-cost-usd` | `PLACE_REFRESH_DAILY_MAX_LIST_COST_USD` |
 | `budget/place-refresh-daily-max-units-google-details-liveness` | `PLACE_REFRESH_DAILY_MAX_UNITS_GOOGLE_DETAILS_LIVENESS` |
-| `budget/place-refresh-daily-max-units-google-details-core` | `PLACE_REFRESH_DAILY_MAX_UNITS_GOOGLE_DETAILS_CORE` |
-| `budget/place-refresh-daily-max-units-google-details-quality` | `PLACE_REFRESH_DAILY_MAX_UNITS_GOOGLE_DETAILS_QUALITY` |
+| `budget/place-refresh-daily-max-units-google-details-core` | `PLACE_REFRESH_DAILY_MAX_UNITS_GOOGLE_DETAILS_CORE` (parked, #308) |
+| `budget/place-refresh-daily-max-units-google-details-quality` | `PLACE_REFRESH_DAILY_MAX_UNITS_GOOGLE_DETAILS_QUALITY` (parked, #308) |
 
 **Unset means refuse. It does not mean unlimited.** GoGo-BE's guard is default-deny
 (`libs/modules/cost/application/provider-budget.service.ts`): a missing ceiling returns
@@ -403,6 +408,11 @@ intended shape, not a half-finished one.
 | `flags/place-refresh` | `FLAG_PLACE_REFRESH` | deploy-time default only | plan §2.5 — the audited `FEATURE_FLAGS` row is authoritative |
 | `places/resolution-attestation-secret` | `PLACE_RESOLUTION_ATTESTATION_SECRET` | generated, see `docs/secrets.md` | plan §2.8 |
 | `places/resolution-ttl-s` | `PLACE_RESOLUTION_TTL_S` | 600 | plan §2.8 default |
+
+All four, and the core/quality ceilings above, are **parked** since 2026-10-29 (GoGo-Infra#308):
+place refresh and the resolve attestation have no owner on the roadmap, so the rows are declared
+for no environment and the application defaults apply. The place-ingestion spec keeps
+requirement precedence; un-parking is deleting the `lifecycle:` line.
 
 None of these four names is read by GoGo-BE on `develop` yet, so all four are optional in every
 environment. Each becomes `required` in an environment on the day its value lands there — the
@@ -506,6 +516,9 @@ The bucket is private. State is sensitive: treat a leaked state file as a creden
 1. Copy `terraform/environments/dev` and change `local.environment`, the backend key and the
    OIDC subjects.
 2. Set `create_oidc_provider = false` — the provider is account-wide and is created once.
-3. Add the environment to the `required` lists in `secrets.manifest.yaml`.
+3. In `secrets.manifest.yaml`, list the environment under the capabilities it will run
+   (`planned:` first, `enabled:` once provisioned) and under `environments:` of any row scoped to
+   fewer than all three. `required:` lists are per row and rarely change; parked rows stay parked.
+   `validate.sh <env> --strict --include-planned` then prints the credentials to create.
 4. Create the matching GitHub Environment with its approval rules.
 5. Run `scripts/bootstrap/validate-services.sh <env>` before pointing anything at it.

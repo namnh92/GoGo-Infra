@@ -649,7 +649,7 @@ describe('I10: consent box and docs state the D5 grammar, the closure and the co
     const row = (name: string) => docs.split('\n').find((l) => l.startsWith(`| \`${name}\``)) ?? '';
     for (const name of passed!) assert.match(row(name), /\| passed \|$/, name);
     for (const name of ['JEV_MODEL', 'HARNESS_CONCURRENCY']) assert.match(row(name), /\| not passed[^|]*\|$/, name);
-    assert.match(row('HARNESS_ANTHROPIC_MONTHLY_USD'), /\| not passed[^|]*\|$/);
+    assert.equal(row('HARNESS_ANTHROPIC_MONTHLY_USD'), '', 'no Anthropic budget variable is documented (GoGo-Infra#308)');
     for (const text of [docs, adr]) {
       assert.equal(/first or last/.test(text), false, 'old grammar');
       assert.equal(text.includes('--wrapper'), false, 'old flag');

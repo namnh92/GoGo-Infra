@@ -1,17 +1,20 @@
 /**
  * Budget ledger and billing separation (ADR-0013 D-7).
  *
- * Three accounts that never share a number:
+ * Two accounts that never share a number (ADR-0013 D-7 as amended 2026-10-29,
+ * GoGo-Infra#308):
  *   claude_max     — the interactive Claude Code subscription. Not metered in
  *                    USD here; counted in sessions so it is visible, never
  *                    summed with an API bill.
- *   anthropic_api  — headless automation on ANTHROPIC_API_KEY.
  *   openrouter_jev — JEV decisions on OPENROUTER_API_KEY.
+ * There is no Anthropic account: the harness has no Anthropic path, and
+ * ANTHROPIC_API_KEY is the GoGo AI assistant's key (OpenRouter BYOK, ADR-0014),
+ * refused in every harness mode by checkBillingSeparation below.
  *
  * The limits are local targets, not provider-side caps: a promotional credit
- * is not a hard stop, and OpenRouter/Anthropic spend limits are set at their
- * consoles by a person (ADR-0013 "Owner actions"). The ledger stops this
- * harness from spending past its target; it cannot stop anything else.
+ * is not a hard stop, and the OpenRouter spend limit is set at its console by
+ * a person (ADR-0013 "Owner actions"). The ledger stops this harness from
+ * spending past its target; it cannot stop anything else.
  *
  * Amount precedence: reported > estimated > unknown. An unknown amount is
  * counted at the per-call ceiling against the budget (so it can only make the
@@ -20,17 +23,13 @@
  * A call is reserved on disk before it is sent and settled after (PR #242
  * A-F-05). A reservation that is never settled — the process died in flight —
  * stays an unknown-cost call: counted at the ceiling, never forgotten.
- *
- * `anthropic_api` is declared but not integrated: nothing in the harness runs
- * or meters Anthropic calls, so its status is `not_integrated`, never `ok`
- * (PR #242 A-F-08). The workspace spend limit at Anthropic is the only cap.
  */
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DecisionUsage } from '../decisions/types.ts';
 
-export type Account = 'claude_max' | 'anthropic_api' | 'openrouter_jev';
+export type Account = 'claude_max' | 'openrouter_jev';
 
 export type AccountBudget = {
   /** Monthly target in USD; `null` for an account not metered in USD. */
@@ -39,13 +38,10 @@ export type AccountBudget = {
   reserveUsd: number;
   /** What one call is counted at when its cost is unknown. */
   unknownCallCeilingUsd: number;
-  /** False when no harness code records this account's calls; the status says so instead of `ok`. */
-  integrated?: boolean;
 };
 
 export const DEFAULT_BUDGETS: Record<Account, AccountBudget> = {
   claude_max: { limitUsd: null, reserveUsd: 0, unknownCallCeilingUsd: 0 },
-  anthropic_api: { limitUsd: 100, reserveUsd: 10, unknownCallCeilingUsd: 1, integrated: false },
   // $0.042 per 1M input tokens, output free (OpenRouter model page, 2026-10-22):
   // an 8k-char state is ~3k tokens ≈ $0.00013. The ceiling is ~8× that.
   openrouter_jev: { limitUsd: 2, reserveUsd: 0, unknownCallCeilingUsd: 0.001 },
@@ -61,7 +57,7 @@ export type LedgerEntry = {
   reservation?: string;
 };
 
-export type BudgetState = 'ok' | 'warning' | 'exhausted' | 'not_metered' | 'not_integrated';
+export type BudgetState = 'ok' | 'warning' | 'exhausted' | 'not_metered';
 
 export type BudgetStatus = {
   account: Account;
@@ -108,9 +104,6 @@ export class BudgetLedger {
     const calls = mine.filter((e) => e.costStatus !== 'not_sent').length;
     if (budget.limitUsd === null) {
       return { account, month: this.month, limitUsd: null, reserveUsd: 0, reportedUsd, estimatedUsd, unknownCount, committedUsd, remainingUsd: null, state: 'not_metered', calls };
-    }
-    if (budget.integrated === false) {
-      return { account, month: this.month, limitUsd: budget.limitUsd, reserveUsd: budget.reserveUsd, reportedUsd, estimatedUsd, unknownCount, committedUsd, remainingUsd: null, state: 'not_integrated', calls };
     }
     const spendable = budget.limitUsd - budget.reserveUsd;
     const remainingUsd = spendable - committedUsd;
@@ -176,23 +169,25 @@ export type BillingMode = 'interactive' | 'automation';
 export type BillingCheck = { ok: boolean; problems: string[] };
 
 /**
- * Keep the three billing paths apart (ADR-0013 D-7).
+ * Keep the billing paths apart (ADR-0013 D-7, amended 2026-10-29 — GoGo-Infra#308).
  *
  * Interactive Claude Code runs on the Max subscription; an ANTHROPIC_API_KEY in
  * that environment can move the session onto API billing, so it is refused
- * there. Automation must have its own key, and must not reach Anthropic
- * through OpenRouter or reuse the OpenRouter key.
+ * there. Automation has no Anthropic path either: the harness never calls
+ * Anthropic, and the only Anthropic-bound key GoGo holds serves the AI
+ * assistant through OpenRouter BYOK (owner 2026-10-29). The variable is
+ * therefore refused in both modes; the modes differ in the reason given.
+ * Neither mode may route Anthropic traffic through OpenRouter.
  */
 export function checkBillingSeparation(mode: BillingMode, env: Record<string, string | undefined>): BillingCheck {
   const problems: string[] = [];
-  const anthropic = env.ANTHROPIC_API_KEY;
-  const openrouter = env.OPENROUTER_API_KEY;
-  if (mode === 'interactive' && anthropic) {
-    problems.push('ANTHROPIC_API_KEY is set in an interactive session: Claude Code may bill the API instead of the Max subscription');
+  if (env.ANTHROPIC_API_KEY) {
+    problems.push(
+      mode === 'interactive'
+        ? 'ANTHROPIC_API_KEY is set in an interactive session: Claude Code may bill the API instead of the Max subscription'
+        : 'ANTHROPIC_API_KEY is set: the harness has no Anthropic path — that key serves the GoGo assistant through OpenRouter BYOK only (owner 2026-10-29)',
+    );
   }
-  if (mode === 'automation' && !anthropic) problems.push('automation needs ANTHROPIC_API_KEY (via exec-with.sh), none is set');
-  if (anthropic && openrouter && anthropic === openrouter) problems.push('ANTHROPIC_API_KEY and OPENROUTER_API_KEY hold the same value');
-  if (anthropic?.startsWith('sk-or-')) problems.push('ANTHROPIC_API_KEY holds an OpenRouter key');
   if (/openrouter\.ai/i.test(env.ANTHROPIC_BASE_URL ?? '')) {
     problems.push('ANTHROPIC_BASE_URL routes Anthropic traffic through OpenRouter; not the default and not authorized');
   }

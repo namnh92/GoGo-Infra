@@ -34,6 +34,8 @@ trap 'rm -rf "$WORK"' EXIT
 #   $WORK/untagged        full names of infra_readable rows stored WITHOUT the tag
 #   $WORK/extra_tagged    "name<TAB>Type" of other parameters that carry the tag
 #   $WORK/tag_deny        non-empty → tag reads answer AccessDenied
+#   $WORK/extra_present   full parameter names stored beyond the declared rows
+#                         (a retired, parked or undeclared parameter)
 make_stub() {
   cat > "${WORK}/aws" <<'STUB'
 #!/usr/bin/env bash
@@ -59,11 +61,14 @@ if [[ "$1" == "ssm" && "$2" == "get-parameters-by-path" ]]; then
     */mobile)        ns=mobile ;;
     *)               ns=backend ;;
   esac
-  python3 "${MANIFEST_READER}" "$env" --namespace "$ns" --consumer all \
-    | cut -f1 | while read -r p; do
-        grep -qxF "$p" "${WORK}/absent" && continue
-        printf '%s/%s\n' "$prefix" "$p"
-      done | paste -sd'\t' -
+  {
+    python3 "${MANIFEST_READER}" "$env" --namespace "$ns" --consumer all \
+      | cut -f1 | while read -r p; do
+          grep -qxF "$p" "${WORK}/absent" && continue
+          printf '%s/%s\n' "$prefix" "$p"
+        done
+    grep "^${prefix}/" "${WORK}/extra_present" 2>/dev/null || true
+  } | paste -sd'\t' -
   exit 0
 fi
 # Tags (GoGo-Infra#194). By default every present infra_readable row is tagged
@@ -123,6 +128,7 @@ STUB
   chmod +x "${WORK}/aws"
   : > "${WORK}/deny"; : > "${WORK}/absent"; : > "${WORK}/type_override"
   : > "${WORK}/untagged"; : > "${WORK}/extra_tagged"; : > "${WORK}/tag_deny"
+  : > "${WORK}/extra_present"
   printf 'stag\nprod\n' > "${WORK}/empty_envs"
 }
 
@@ -190,7 +196,9 @@ else bad "type drift must fail" "rc=$rc $out"; fi
 : > "${WORK}/type_override"
 
 # --- undeclared parameters are reported, never deleted ----------------------
-if grep -q "aws ssm delete-parameter" "$VALIDATE"; then
+# The help text may name delete-parameter (GoGo-Infra#308 tells the operator
+# what to run for a retired or parked value); a call to it may not exist.
+if grep -vE '^\s*(#|echo )' "$VALIDATE" | grep -q "delete-parameter"; then
   bad "validate.sh must never delete" "it calls delete-parameter"
 else ok "undeclared parameters are reported, never deleted"; fi
 
@@ -330,9 +338,9 @@ else bad "R1a state must read MISSING for both rows" "rc=$rc $out"; fi
 # its own so the five tool rows are still checked by somebody after they leave
 # /gogo/ci/dev/.
 out="$(run tools)"; rc=$?
-if [[ $rc -eq 0 && "$out" == *"OK: tools"* && "$out" == *"5 declared across 1 namespace"* ]]; then
-  ok "tools: the five tool rows validate under /gogo/tools/"
-else bad "tools: validate.sh tools should pass with the five rows present" "rc=$rc $out"; fi
+if [[ $rc -eq 0 && "$out" == *"OK: tools"* && "$out" == *"4 stored of 4 declared, 0 parked, 1 namespace"* ]]; then
+  ok "tools: the four tool rows validate under /gogo/tools/, stored equal to declared"
+else bad "tools: validate.sh tools should pass with the four rows present" "rc=$rc $out"; fi
 
 out="$(run dev)"; rc=$?
 if [[ $rc -eq 0 && "$out" != *"/gogo/tools"* && "$out" != *"agent-app"* ]]; then
@@ -402,6 +410,98 @@ if [[ $rc -ne 0 && "$out" == *"tags: cannot search tags under /gogo/tools/"* && 
   ok "F-04: unreadable tool tags fail as incomplete, without claiming nothing was checked"
 else bad "F-04: the tools tag-only SKIPPED text is wrong" "rc=$rc $out"; fi
 : > "${WORK}/tag_deny"
+
+# --- GoGo-Infra#308: stored must equal declared ------------------------------
+#
+# Owner 2026-10-29. The 2026-10-29 incident: /gogo/tools/ was empty and
+# `validate.sh tools` printed OK, because every tools row is `required: []` and
+# readiness could not tell "declared" from "stored". From here on a declared row
+# with no value is its own class: MISSING for tools in every mode, DECLARED NOT
+# STORED under --strict, a note otherwise.
+
+# tools: one row absent — the shape the incident had, after a partial recovery.
+echo "github/agent-app-id" > "${WORK}/absent"
+out="$(run tools)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"MISSING (declared under /gogo/tools"* && "$out" == *"github/agent-app-id"* && "$out" != *"OK: tools"* ]]; then
+  ok "tools: an absent tool row fails without --strict, even though the row is required: []"
+else bad "tools: an absent tool row must fail" "rc=$rc $out"; fi
+out="$(run tools --strict)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"github/agent-app-id"* ]]; then
+  ok "tools: the same absence fails under --strict"
+else bad "tools: an absent tool row must fail under --strict" "rc=$rc $out"; fi
+: > "${WORK}/absent"
+
+# tools: the empty tree itself.
+printf 'stag\nprod\ntools\n' > "${WORK}/empty_envs"
+out="$(run tools)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"MISSING (declared under /gogo/tools"* && "$out" == *"ai-harness/openrouter-api-key"* \
+      && "$out" == *"github/agent-app-private-key"* && "$out" != *"OK: tools"* ]]; then
+  ok "tools: an empty /gogo/tools/ tree fails and names every row (the 2026-10-29 incident)"
+else bad "tools: an empty /gogo/tools/ must fail" "rc=$rc $out"; fi
+printf 'stag\nprod\n' > "${WORK}/empty_envs"
+
+# dev: an optional row declared for dev and not stored.
+echo "assistant/fallback-model" > "${WORK}/absent"
+out="$(run dev --strict)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"DECLARED, NOT STORED"* && "$out" == *"assistant/fallback-model"* && "$out" != *"READY:"* ]]; then
+  ok "dev --strict: a declared optional row with no value is DECLARED, NOT STORED and fails"
+else bad "dev --strict must fail on a declared-absent optional row" "rc=$rc $out"; fi
+out="$(run dev)"; rc=$?
+if [[ $rc -eq 0 && "$out" == *"DECLARED, NOT STORED"* && "$out" == *"Not a failure here"* && "$out" == *"OK: dev"* ]]; then
+  ok "dev default mode: the same row is reported as a note and the deploy check still passes"
+else bad "default mode must report declared-absent without failing" "rc=$rc $out"; fi
+stored_declared="$(grep -oE '[0-9]+ stored of [0-9]+ declared' <<< "$out")"
+stored_n="${stored_declared%% *}"; declared_n="$(awk '{print $4}' <<< "$stored_declared")"
+if [[ -n "$stored_declared" && "$stored_n" -eq $(( declared_n - 1 )) ]]; then
+  ok "the success line states stored against declared (${stored_declared})"
+else bad "the success line must show stored < declared by exactly the absent row" "$stored_declared"; fi
+: > "${WORK}/absent"
+out="$(run dev --strict)"; rc=$?
+if [[ $rc -eq 0 && "$out" == *"stored of"* && "$out" == *"parked (declared for no environment)"* ]]; then
+  stored_declared="$(grep -oE '[0-9]+ stored of [0-9]+ declared' <<< "$out")"
+  if [[ "${stored_declared%% *}" == "$(awk '{print $4}' <<< "$stored_declared")" ]]; then
+    ok "READY states stored = declared and the parked count (${stored_declared})"
+  else bad "READY printed stored != declared" "$stored_declared"; fi
+else bad "READY must state stored, declared and parked" "rc=$rc $out"; fi
+
+# retired, still stored: the hygiene check for renames and deletions.
+printf '/gogo/tools/ai-harness/anthropic-api-key\n' > "${WORK}/extra_present"
+out="$(run tools)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"RETIRED, STILL STORED"* && "$out" == *"ai-harness/anthropic-api-key"* && "$out" != *"UNDECLARED"* ]]; then
+  ok "tools: the withdrawn Anthropic row still stored is RETIRED, not UNDECLARED"
+else bad "a stored retired row must fail as RETIRED" "rc=$rc $out"; fi
+printf '/gogo/ci/dev/github/agent-app-id\n' > "${WORK}/extra_present"
+out="$(run dev)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"RETIRED, STILL STORED"* && "$out" == *"github/agent-app-id"* && "$out" != *"UNDECLARED"* ]]; then
+  ok "dev: a #294 row left under /gogo/ci/dev/ is RETIRED, in default mode too"
+else bad "a stored retired ci row must fail as RETIRED" "rc=$rc $out"; fi
+
+# parked, stored: declared for no environment, so a value is a finding that
+# says what to do — not a plain UNDECLARED.
+printf '/gogo/dev/backend/cost/ledger-enabled\n' > "${WORK}/extra_present"
+out="$(run dev)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"PARKED, STORED"* && "$out" == *"cost/ledger-enabled"* && "$out" != *"UNDECLARED"* && "$out" == *"un-park"* ]]; then
+  ok "dev: a value stored for a parked row is PARKED, STORED and says how to resolve it"
+else bad "a stored parked row must fail as PARKED" "rc=$rc $out"; fi
+
+# ...and a path in no row at all still reads UNDECLARED.
+printf '/gogo/dev/backend/nothing/declared-here\n' > "${WORK}/extra_present"
+out="$(run dev)"; rc=$?
+if [[ $rc -ne 0 && "$out" == *"UNDECLARED"* && "$out" == *"nothing/declared-here"* && "$out" != *"PARKED"* && "$out" != *"RETIRED"* ]]; then
+  ok "dev: a path in no row is still UNDECLARED"
+else bad "an undeclared path must still read UNDECLARED" "rc=$rc $out"; fi
+: > "${WORK}/extra_present"
+
+# environments: the Play service account exists for prod only, so dev's
+# readiness never asks for it, and prod's planned readiness does.
+out="$(run dev --strict)"
+if [[ "$out" != *"store/play-service-account"* ]]; then
+  ok "dev --strict never names the prod-only Play row"
+else bad "a prod-only row was demanded of dev" "$out"; fi
+out="$(run prod --strict --include-planned)"
+if [[ "$out" == *"ci:store/play-service-account"* ]]; then
+  ok "prod --include-planned still names the Play row through store_release_android"
+else bad "prod must still name the Play row" "$out"; fi
 
 printf '\n'
 if [[ "$failures" -eq 0 ]]; then echo "validate.sh: all checks passed"; else echo "validate.sh: ${failures} failure(s)"; fi

@@ -59,11 +59,6 @@ export function loadConfig(env: Env): HarnessConfig {
     budgets: {
       ...DEFAULT_BUDGETS,
       openrouter_jev: { ...DEFAULT_BUDGETS.openrouter_jev, limitUsd: num(env.HARNESS_JEV_MONTHLY_USD, 2) },
-      anthropic_api: {
-        ...DEFAULT_BUDGETS.anthropic_api,
-        limitUsd: num(env.HARNESS_ANTHROPIC_MONTHLY_USD, 100),
-        reserveUsd: num(env.HARNESS_ANTHROPIC_RESERVE_USD, 10),
-      },
     },
   };
 }

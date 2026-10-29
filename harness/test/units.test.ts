@@ -117,13 +117,16 @@ describe('budget ledger', () => {
   });
 
   it('accounts are separate and Claude Max is not metered in USD', () => {
-    // The ledger math, once something records Anthropic calls; today nothing does (PR #242 A-F-08).
-    const l = new BudgetLedger({ stateDir: null, budgets: { anthropic_api: { ...DEFAULT_BUDGETS.anthropic_api, integrated: true } } });
-    l.record('anthropic_api', { costUsd: 95, costStatus: 'reported' }, 'big');
-    assert.equal(l.status('anthropic_api').state, 'exhausted', '$95 of $100 with a $10 reserve');
-    assert.equal(l.status('openrouter_jev').state, 'ok');
+    const l = new BudgetLedger({ stateDir: null, budgets: { openrouter_jev: { ...DEFAULT_BUDGETS.openrouter_jev, limitUsd: 100, reserveUsd: 10 } } });
+    l.record('openrouter_jev', { costUsd: 95, costStatus: 'reported' }, 'big');
+    assert.equal(l.status('openrouter_jev').state, 'exhausted', '$95 of $100 with a $10 reserve');
     assert.equal(l.status('claude_max').state, 'not_metered');
     assert.equal(l.status('claude_max').remainingUsd, null);
+    assert.equal(l.status('claude_max').calls, 0, 'a charge on one account never reaches the other');
+  });
+
+  it('there is no Anthropic account (GoGo-Infra#308, owner 2026-10-29)', () => {
+    assert.deepEqual(Object.keys(DEFAULT_BUDGETS).sort(), ['claude_max', 'openrouter_jev']);
   });
 
   it('warns at 80 % and persists across instances', () => {
@@ -146,14 +149,22 @@ describe('budget ledger', () => {
 describe('billing separation', () => {
   it('interactive Claude Code must not carry ANTHROPIC_API_KEY', () => {
     assert.equal(checkBillingSeparation('interactive', {}).ok, true);
-    assert.equal(checkBillingSeparation('interactive', { ANTHROPIC_API_KEY: 'sk-ant-x' }).ok, false);
+    const r = checkBillingSeparation('interactive', { ANTHROPIC_API_KEY: 'sk-ant-x' });
+    assert.equal(r.ok, false);
+    assert.match(r.problems[0]!, /Max subscription/);
   });
-  it('automation needs its own key, not the OpenRouter one, not routed through OpenRouter', () => {
-    assert.equal(checkBillingSeparation('automation', {}).ok, false);
-    assert.equal(checkBillingSeparation('automation', { ANTHROPIC_API_KEY: 'sk-ant-x', OPENROUTER_API_KEY: 'sk-or-v1-y' }).ok, true);
-    assert.equal(checkBillingSeparation('automation', { ANTHROPIC_API_KEY: 'sk-or-v1-y' }).ok, false);
-    assert.equal(checkBillingSeparation('automation', { ANTHROPIC_API_KEY: 'k', OPENROUTER_API_KEY: 'k' }).ok, false);
-    assert.equal(checkBillingSeparation('automation', { ANTHROPIC_API_KEY: 'sk-ant-x', ANTHROPIC_BASE_URL: 'https://openrouter.ai/api' }).ok, false);
+  it('automation has no Anthropic path either: the key is refused, with the assistant reason (GoGo-Infra#308)', () => {
+    assert.equal(checkBillingSeparation('automation', {}).ok, true, 'automation needs no Anthropic key');
+    assert.equal(checkBillingSeparation('automation', { OPENROUTER_API_KEY: 'sk-or-v1-y' }).ok, true);
+    const r = checkBillingSeparation('automation', { ANTHROPIC_API_KEY: 'sk-ant-x', OPENROUTER_API_KEY: 'sk-or-v1-y' });
+    assert.equal(r.ok, false);
+    assert.match(r.problems[0]!, /GoGo assistant through OpenRouter BYOK/);
+    assert.equal(checkBillingSeparation('automation', { ANTHROPIC_API_KEY: 'sk-or-v1-y' }).ok, false, 'any value is refused, whatever it holds');
+  });
+  it('Anthropic traffic is never routed through OpenRouter, in either mode', () => {
+    for (const mode of ['interactive', 'automation'] as const) {
+      assert.equal(checkBillingSeparation(mode, { ANTHROPIC_BASE_URL: 'https://openrouter.ai/api' }).ok, false, mode);
+    }
   });
 });
 
@@ -278,7 +289,7 @@ describe('config', () => {
     assert.equal(c.timeoutMs, 5000);
     assert.equal(c.concurrency, 1);
     assert.equal(c.budgets.openrouter_jev.limitUsd, 2);
-    assert.equal(c.budgets.anthropic_api.reserveUsd, 10);
+    assert.equal('anthropic_api' in c.budgets, false, 'no Anthropic budget line (GoGo-Infra#308)');
     assert.equal(createProvider(c, {}).mode, 'disabled');
   });
   it('live needs an explicit authorization and a key; unknown modes are errors', () => {
