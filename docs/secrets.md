@@ -882,9 +882,11 @@ command can use, because the command does not inherit your environment (shape re
   refusal removes it at once. A `HUP`/`INT`/`TERM` before the exec is handled when the synchronous
   step then running ends (one of the wrapper's own checks, its start-time lookup, the mint — the
   signal interrupts none of them): the command is never started, the wrapper exits with the
-  signal's status, the directory goes (#260, #281 retro-review, #304, #311). One is left behind
-  when no trap can run: the wrapper killed outright (`SIGKILL`, or any other fatal signal it does
-  not handle) between `mktemp` and the fork of the watcher, or the watcher itself killed that way.
+  signal's status, the directory goes (#260, #281 retro-review, #304, #311). One can be left
+  behind only when no trap can run: the wrapper killed outright (`SIGKILL`, or any other fatal
+  signal it does not handle) between `mktemp` and the fork of the watcher, or the watcher killed
+  that way once the wrapper has exec'd into the command (before that, the wrapper's own `EXIT`
+  trap still removes it).
   Directories left by versions before #260 can be removed by hand once no `as-agent.sh` runs:
   `find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'as-agent.*' -type d -user "$(id -u)" -mmin +60 -exec rm -rf {} +`.
 - **One credential.** Process-only git configuration (`GIT_CONFIG_*`, read after every file):

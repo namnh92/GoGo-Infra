@@ -1133,18 +1133,31 @@ left="$(sealed_left)"
 [[ "$rc" == 143 && "$took" -le 4 && -z "$left" ]] && ! grep -q 'gh-child:' "${SANDBOX}/8h.out" \
   && ok "T8h: TERM during the mint: the command never starts, exit 143 once the mint ends (${took}s), sealed home gone" || bad "T8h TERM during mint" "rc=$rc took=${took}s left=$left out=$(cat "${SANDBOX}/8h.out")"
 
-# 8i. #304 Sol r3 F-06 / #311 Sol r4 F-09: the watcher must reach cleanup even when its first look
-# at the wrapper's pid comes after the command has exited and been reaped. The order is made
-# certain by a handshake, not by timing: the `ps` the watcher calls blocks its first lstart/stat
-# lookup until the caller (python's subprocess.run, which reaps at once) has written a marker
-# after run() returned. Under `set -e` an unguarded first lookup killed the watcher and left the home.
+# 8i. #304 Sol r3 F-06 / #311 Sol r4-r5 F-09: the watcher must reach cleanup even when its first look
+# at the wrapper's pid comes after the command has exited and been reaped. The order is made certain
+# by a handshake, not by timing: the `ps` the watcher calls blocks its lstart/stat lookups until the
+# caller (python's subprocess.run, which reaps at once) has written a marker after run() returned;
+# a lookup that waits too long writes a timeout marker and fails, never falls through to the real
+# ps. The wrapper's own synchronous start-time lookup is told apart from the watcher's by a
+# property only the watcher has: it ignores TERM (`trap ''`), and that disposition is inherited by
+# the ps it runs. Under `set -e` an unguarded first lookup killed the old watcher and left the home.
 mkdir -p "${SANDBOX}/slowps"
 cat >"${SANDBOX}/slowps/ps" <<STUB
 #!/bin/sh
-case "\$*" in *lstart*|*stat*) i=0; while [ ! -e "${SANDBOX}/ctl/reaped" ] && [ \$i -lt 100 ]; do sleep 0.1; i=\$((i+1)); done ;; esac
+case "\$*" in
+  *lstart*|*stat*)
+    if [ "\$(/bin/sh -c 'kill -TERM \$\$ 2>/dev/null; echo alive')" = alive ]; then
+      i=0
+      while [ ! -e "${CTL}/reaped" ]; do
+        [ \$i -lt 150 ] || { : >"${CTL}/handshake-timeout"; exit 1; }
+        sleep 0.1; i=\$((i+1))
+      done
+    fi ;;
+esac
 exec $(command -v ps) "\$@"
 STUB
 chmod +x "${SANDBOX}/slowps/ps"
+unctl handshake-timeout
 unctl reaped
 left="$(sealed_left)"; [[ -z "$left" ]] || bad "T8i setup" "sealed homes left by an earlier check: $left"
 out="$(python3 -I - "$AS" "$REPO" "$TMPDIR" "${SANDBOX}/slowps" "${CTL}/reaped" <<'PY'
@@ -1161,8 +1174,9 @@ print(f"rc={r.returncode} agent={'gh-child: GH_TOKEN agent' in r.stdout} left={l
 PY
 )"
 unctl reaped
-[[ "$out" == "rc=0 agent=True left=0 "* ]] \
-  && ok "T8i: a command reaped before the watcher's first lookup still gets its sealed home removed ($out)" || bad "T8i late watcher" "$out"
+[[ "$out" == "rc=0 agent=True left=0 "* && ! -e "${CTL}/handshake-timeout" ]] \
+  && ok "T8i: a command reaped before the watcher's first lookup still gets its sealed home removed ($out)" || bad "T8i late watcher" "$out timeout=$([[ -e "${CTL}/handshake-timeout" ]] && echo yes || echo no)"
+unctl handshake-timeout
 rm -rf "${TMPDIR}"/as-agent.*
 # A ps that cannot report the wrapper's start time: refused before the mint, exit 2, home removed.
 mkdir -p "${SANDBOX}/nops"; printf '#!/bin/sh\nexit 1\n' >"${SANDBOX}/nops/ps"; chmod +x "${SANDBOX}/nops/ps"

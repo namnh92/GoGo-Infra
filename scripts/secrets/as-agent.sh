@@ -32,9 +32,10 @@
 #      process — which becomes the command — has exited, however it ended, reaped or not (#260,
 #      #281 retro-review, #304). A HUP/INT/TERM before the exec is handled when the synchronous
 #      step then running (one of the checks below, the start-time lookup, the mint) ends: the
-#      command is never started and the directory goes. Left behind when no trap can run: this
-#      process killed outright (SIGKILL or any other unhandled fatal signal) between mktemp and
-#      the watcher's fork, or the watcher itself killed that way.
+#      command is never started and the directory goes. It can be left behind only when no trap
+#      can run: this process killed outright (SIGKILL or any other unhandled fatal signal) between
+#      mktemp and the watcher's fork, or the watcher killed that way once this process has exec'd
+#      (before that, this process's own EXIT trap still removes it).
 #  I3  One credential. Process-only git configuration (GIT_CONFIG_*, read last): an empty
 #      credential.helper resets every helper collected from any file, then one helper for
 #      https://github.com answers with GH_TOKEN, and only when asked for protocol=https,
