@@ -91,7 +91,7 @@ run "boundary_document" {
       for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
       if s.Sid == "OnlyKnownRolesReadSsm"
       && s.Effect == "Deny"
-      && toset(flatten([try(s.Action, [])])) == toset(["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"])
+      && toset(flatten([try(s.Action, [])])) == toset(["ssm:GetParameter*"])
       && toset(flatten([try(s.Resource, [])])) == toset(["*"])
       && keys(try(s.Condition, {})) == ["ArnNotEquals"]
       && toset(flatten([try(s.Condition.ArnNotEquals["aws:PrincipalArn"], [])])) == toset([
@@ -168,7 +168,7 @@ run "boundary_document" {
       for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
       if s.Sid == "SsmReadsStayInEnvironment"
       && s.Effect == "Deny"
-      && toset(flatten([try(s.Action, [])])) == toset(["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"])
+      && toset(flatten([try(s.Action, [])])) == toset(["ssm:GetParameter*"])
       && !contains(keys(s), "Resource")
       && !contains(keys(s), "Condition")
       && toset(flatten([try(s.NotResource, [])])) == toset([
@@ -202,7 +202,7 @@ run "boundary_document" {
       for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
       if s.Sid == "SsmReadCeilingPlan"
       && s.Effect == "Deny"
-      && toset(flatten([try(s.Action, [])])) == toset(["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"])
+      && toset(flatten([try(s.Action, [])])) == toset(["ssm:GetParameter*"])
       && !contains(keys(s), "Resource")
       && toset(flatten([try(s.NotResource, [])])) == toset([
         "arn:aws:ssm:ap-southeast-1:111122223333:parameter/gogo/dev/backend/cms/super-admin-email",
@@ -221,7 +221,7 @@ run "boundary_document" {
       for s in jsondecode(data.aws_iam_policy_document.boundary.json).Statement : s
       if s.Sid == "SsmReadCeilingApply"
       && s.Effect == "Deny"
-      && toset(flatten([try(s.Action, [])])) == toset(["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"])
+      && toset(flatten([try(s.Action, [])])) == toset(["ssm:GetParameter*"])
       && !contains(keys(s), "Resource")
       && toset(flatten([try(s.NotResource, [])])) == toset([
         "arn:aws:ssm:ap-southeast-1:111122223333:parameter/gogo/dev/backend/cms/super-admin-email",

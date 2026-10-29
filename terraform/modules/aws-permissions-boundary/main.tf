@@ -212,12 +212,10 @@ data "aws_iam_policy_document" "boundary" {
       sid    = "SsmReadCeiling${statement.key}"
       effect = "Deny"
 
-      actions = [
-        "ssm:GetParameter",
-        "ssm:GetParameters",
-        "ssm:GetParametersByPath",
-        "ssm:GetParameterHistory",
-      ]
+      # GetParameter, GetParameters, GetParametersByPath, GetParameterHistory —
+      # the only four SSM actions the wildcard matches. Written as one to keep
+      # the document under IAM's 6,144-character limit (GoGo-Infra#309).
+      actions = ["ssm:GetParameter*"]
 
       not_resources = statement.value.readable_arns
 
@@ -351,12 +349,10 @@ data "aws_iam_policy_document" "boundary" {
       sid    = "OnlyKnownRolesReadSsm"
       effect = "Deny"
 
-      actions = [
-        "ssm:GetParameter",
-        "ssm:GetParameters",
-        "ssm:GetParametersByPath",
-        "ssm:GetParameterHistory",
-      ]
+      # GetParameter, GetParameters, GetParametersByPath, GetParameterHistory —
+      # the only four SSM actions the wildcard matches. Written as one to keep
+      # the document under IAM's 6,144-character limit (GoGo-Infra#309).
+      actions = ["ssm:GetParameter*"]
 
       resources = ["*"]
 
@@ -400,12 +396,10 @@ data "aws_iam_policy_document" "boundary" {
       sid    = "SsmReadsStayInEnvironment"
       effect = "Deny"
 
-      actions = [
-        "ssm:GetParameter",
-        "ssm:GetParameters",
-        "ssm:GetParametersByPath",
-        "ssm:GetParameterHistory",
-      ]
+      # GetParameter, GetParameters, GetParametersByPath, GetParameterHistory —
+      # the only four SSM actions the wildcard matches. Written as one to keep
+      # the document under IAM's 6,144-character limit (GoGo-Infra#309).
+      actions = ["ssm:GetParameter*"]
 
       not_resources = [
         "arn:aws:ssm:*:${local.account}:parameter/gogo/${var.ssm_env}",
