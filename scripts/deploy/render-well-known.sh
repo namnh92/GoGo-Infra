@@ -97,8 +97,10 @@ if [[ "$ENVIRONMENT" != "prod" && "$BUNDLE_ID" == "$(env_get IOS_BUNDLE_ID_PROD)
        Each flavour needs its own, or the files claim the wrong app."
 fi
 
+# Compared case-insensitively: hex is the same certificate in either case, and the
+# dev list is not held to the uppercase rule above (it is not this run's input).
 if [[ "$ENVIRONMENT" == "prod" ]]; then
-  dev_fingerprints="$(split_fingerprints "$(env_get ANDROID_SIGNING_SHA256_DEV)")"
+  dev_fingerprints="$(split_fingerprints "$(env_get ANDROID_SIGNING_SHA256_DEV)" | tr '[:lower:]' '[:upper:]')"
   for fp in "${FINGERPRINTS[@]}"; do
     if grep -qxF -- "$fp" <<<"$dev_fingerprints"; then
       die "the prod fingerprint equals a dev one (${fp}).

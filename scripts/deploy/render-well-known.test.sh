@@ -114,6 +114,17 @@ else
   bad "prod reusing a dev fingerprint is refused" "$out"
 fi
 
+# 7b. The same certificate written in lowercase in the dev list is still caught (Sol F-01).
+lower_fp="$(printf '%s' "$FIREBASE_FP" | tr '[:upper:]' '[:lower:]')"
+r="$(tree prodlower "${DEBUG_FP},${lower_fp}" "$FIREBASE_FP")"
+if out="$(run "$r" prod)"; then
+  bad "prod reusing a lowercase dev fingerprint is refused" "$out"
+elif [[ "$out" == *"equals a dev one"* ]]; then
+  ok "prod reusing a lowercase dev fingerprint is refused"
+else
+  bad "prod reusing a lowercase dev fingerprint is refused" "$out"
+fi
+
 # 8. Prod with its own fingerprint still renders.
 r="$(tree prodok "${DEBUG_FP},${FIREBASE_FP}")"
 if out="$(run "$r" prod)" && [[ "$(fingerprints "$r" prod)" == "$PROD_FP" ]]; then

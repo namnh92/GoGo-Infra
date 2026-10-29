@@ -74,8 +74,9 @@ key_pattern() {
     APNS_KEY_ID)                 echo '^[A-Z0-9]{10}$' ;;
     IOS_BUNDLE_ID|ANDROID_PACKAGE_NAME)
                                  echo '^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)+$' ;;
-    # One or more, comma-separated: a flavour signed by several keystores (#271).
-    ANDROID_SIGNING_SHA256)      echo '^([0-9A-F]{2}:){31}[0-9A-F]{2}(,([0-9A-F]{2}:){31}[0-9A-F]{2})*$' ;;
+    # One or more, comma-separated (spaces after a comma allowed, as render-well-known.sh
+    # trims them): a flavour signed by several keystores (#271).
+    ANDROID_SIGNING_SHA256)      echo '^([0-9A-F]{2}:){31}[0-9A-F]{2}(,[[:space:]]*([0-9A-F]{2}:){31}[0-9A-F]{2})*$' ;;
     DEPLOY_PORT)                 echo '^[0-9]{1,5}$' ;;
     DEPLOY_HOST)                 echo '^[a-zA-Z0-9.-]+$' ;;
     HEALTH_URL|IOS_STORE_URL|ANDROID_STORE_URL)
