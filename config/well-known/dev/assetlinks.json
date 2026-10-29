@@ -4,7 +4,7 @@
     "target": {
       "namespace": "android_app",
       "package_name": "max.gogo.dev",
-      "sha256_cert_fingerprints": ["FA:C6:17:45:DC:09:03:78:6F:B9:ED:E6:2A:96:2B:39:9F:73:48:F0:BB:6F:89:9B:83:32:66:75:91:03:3B:9C", "E9:E1:0F:54:1D:48:4F:78:9F:96:A6:0C:13:AD:F5:5C:C7:3D:68:34:7B:74:DB:5D:BE:0C:EA:B2:93:E7:13:3D"]
+      "sha256_cert_fingerprints": ["96:9F:85:8A:4A:95:3B:3C:83:26:E4:25:40:1B:E3:33:08:B9:E3:6E:40:15:D0:10:2C:2B:21:EF:9C:4B:F6:C1", "E9:E1:0F:54:1D:48:4F:78:9F:96:A6:0C:13:AD:F5:5C:C7:3D:68:34:7B:74:DB:5D:BE:0C:EA:B2:93:E7:13:3D"]
     }
   }
 ]

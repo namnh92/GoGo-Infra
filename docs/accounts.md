@@ -487,8 +487,8 @@ generating each keystore (`docs/secrets.md` → Firebase App Distribution, step 
 
 | Flavour | Signed by | SHA-1 (Maps restriction) | SHA-256 (assetlinks) |
 | --- | --- | --- | --- |
-| dev | debug keystore (local builds) | _(registered for local builds; not recorded here)_ | `FA:C6:17:45:…:91:03:3B:9C` (in `config/well-known/dev`) |
-| dev | `signing/android-keystore` at dev (Firebase builds), keystore `gogo-dev.p12` alias `gogo-dev`, created 2026-10-28 | `22:8A:62:B9:37:57:47:A5:6F:43:80:7D:1F:3D:5F:D8:5C:08:94:BE` — Maps key `maps-android-dev` in `gogo-dev-16ded` (#305) | `E9:E1:0F:54:…:93:E7:13:3D` (in `config/well-known/dev`, beside the debug one) |
+| dev | debug keystore (local builds) on the owner's current workstation (`~/.android/debug.keystore`, read 2026-10-29) | `B6:E9:30:98:A4:EB:E3:18:89:9D:1E:13:DB:77:AF:34:B6:B8:DE:6F` — Maps key `maps-android-dev` (#305) | `96:9F:85:8A:…:9C:4B:F6:C1` (in `config/well-known/dev`). The earlier debug fingerprint `FA:C6:17:45:…:91:03:3B:9C` came from a keystore no machine uses any more and was removed (owner 2026-10-29) |
+| dev | `signing/android-keystore` at dev (Firebase builds), keystore `gogo-dev.p12` alias `gogo-dev`, created 2026-10-28 | `22:8A:62:B9:37:57:47:A5:6F:43:80:7D:1F:3D:5F:D8:5C:08:94:BE` — Maps key `maps-android-dev` in `gogo-dev-16ded` (#305) | `E9:E1:0F:54:…:93:E7:13:3D` (in `config/well-known/dev`, beside this workstation's debug one) |
 | stag | `signing/android-keystore` at stag (Firebase builds) | _(owner, after keytool; no stag Maps key yet)_ | n/a — stag claims no links |
 | prod | Play app signing key (Google) | _(Play Console → App integrity, #351)_ | _(same)_ |
 
