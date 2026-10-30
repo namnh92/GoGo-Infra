@@ -389,14 +389,22 @@ tag_trees=("$(ssm_prefix "$ENVIRONMENT" backend | sed 's#/backend$##')/" "$(ssm_
 [[ "$TOOLS" == "yes" ]] && tag_trees=("$(ssm_prefix tools)/")
 if [[ -z "$tag_skipped" ]]; then
   for tree in "${tag_trees[@]}"; do
-    if ! tagged="$(aws ssm describe-parameters \
-        --parameter-filters "Key=tag:${INFRA_TAG_KEY},Values=true" "Key=Name,Option=BeginsWith,Values=${tree}" \
+    # Let the CLI collect every page. A tag filter would also require the
+    # unscoped tag:GetResources action, outside the D-4 metadata policy.
+    if ! candidates="$(aws ssm describe-parameters \
+        --parameter-filters "Key=Name,Option=BeginsWith,Values=${tree}" \
         --query 'Parameters[].[Name,Type]' --output text 2>&1)"; then
-      tag_skipped="cannot search tags under ${tree} — $(echo "$tagged" | tail -1)"
+      tag_skipped="cannot search tags under ${tree} — $(echo "$candidates" | tail -1)"
       break
     fi
     while IFS=$'\t' read -r name type; do
       [[ -n "$name" && "$name" != "None" ]] || continue
+      if ! tag_value="$(aws ssm list-tags-for-resource --resource-type Parameter --resource-id "$name" \
+          --query "TagList[?Key=='${INFRA_TAG_KEY}'].Value" --output text 2>&1)"; then
+        tag_skipped="cannot search tags under ${tree} — $(echo "$tag_value" | tail -1)"
+        break
+      fi
+      [[ "$tag_value" == "true" ]] || continue
       declared=no
       while IFS=$'\t' read -r namespace path; do
         [[ -n "$path" ]] || continue
@@ -409,7 +417,8 @@ if [[ -z "$tag_skipped" ]]; then
         tag_misplaced+="  - ${name} (${type}): not declared infra_readable in the manifest"$'\n'
         fact finding tag-misplaced "$name"
       fi
-    done <<< "$tagged"
+    done <<< "$candidates"
+    [[ -n "$tag_skipped" ]] && break
   done
 fi
 

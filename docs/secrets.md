@@ -1239,6 +1239,10 @@ terraform -chdir=terraform/environments/dev apply -target=module.boundary \
   -var-file=../../../config/global.tfvars -var-file=../../../config/dev.tfvars
 ```
 
+Tag search uses CLI-auto-paginated `DescribeParameters` with `Name BeginsWith`, then
+`ListTagsForResource` per parameter; it needs no `tag:GetResources` and reads no values (GoGo-
+Infra#316).
+
 `validate.sh` is the detective half. It reports a declared row stored without the tag, and any
 tagged parameter in `/gogo/<env>/` or `/gogo/ci/<env>/` that is a `SecureString` or not declared
 `infra_readable`. The deploy role cannot read tags, so `deploy-dev` sees `TAGS SKIPPED` and carries
