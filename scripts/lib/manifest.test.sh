@@ -403,15 +403,22 @@ else
       "render-env.sh would write a bot token into the API and worker environment"
 fi
 
-# PR #242 A-F-07: the BE intent POC's OpenRouter inference key has one reader,
-# `pnpm eval:intent` through exec-with.sh. Nothing in GoGo-BE reads it at
-# runtime, so render-env.sh and pull.sh must not hand it to the API or worker.
-openrouter_runtime="$(python3 "$READER" dev --namespace backend --consumer runtime | cut -f1 | grep -x 'openrouter/api-key' || true)"
-if [[ -z "$openrouter_runtime" ]]; then
-  ok "the BE OpenRouter inference key is not a runtime row"
+# GoGo-Infra#323 (owner 2026-10-31, GoGo-BE#731): the assistant's Jev calls run
+# on the JEV key, so it is a runtime row render-env.sh hands to the API. It was
+# seed-only (PR #242 A-F-07) while `pnpm eval:intent` was its only reader.
+openrouter_runtime="$(python3 "$READER" dev --namespace backend --consumer runtime | awk -F'\t' '$1 == "openrouter/api-key"')"
+if [[ "$(cut -f2,3 <<< "$openrouter_runtime")" == $'OPENROUTER_API_KEY\tSecureString' ]]; then
+  ok "the JEV key is a backend runtime SecureString (OPENROUTER_API_KEY)"
 else
-  bad "openrouter/api-key reached the runtime consumer" \
-      "render-env.sh and pull.sh would export an eval-only inference key to the API and worker"
+  bad "openrouter/api-key is not a backend runtime SecureString" \
+      "got '${openrouter_runtime}'; render-env.sh would not hand the API its Jev key"
+fi
+jev_env="$(python3 "$READER" dev --namespace all --consumer all | awk -F'\t' '$2 == "OPENROUTER_API_KEY" { print $1 }' | sort | tr '\n' ' ')"
+if [[ "$jev_env" == "openrouter/api-key " ]]; then
+  ok "OPENROUTER_API_KEY is declared by exactly one row"
+else
+  bad "OPENROUTER_API_KEY is declared by '${jev_env}'" \
+      "the Jev key must not share its variable with the assistant's BYOK key or the harness key"
 fi
 if python3 "$READER" dev --namespace all --consumer all | cut -f1 | grep -qx 'openrouter/api-key'; then
   ok "the BE OpenRouter inference key is still declared (exec-with.sh, validate.sh, put.sh see it)"
@@ -421,9 +428,9 @@ fi
 
 # GoGo-Infra#257 / ADR-0014: the GoGo AI assistant has its OWN inference key
 # (OpenRouter key gogo_ai_anthropic_<env>), its own credit limit and its own
-# spend line. It is the opposite of openrouter/api-key above: the API serves the
-# assistant, so the key must be a runtime row render-env.sh hands to the API —
-# and it must never be the decisions key or the harness key under another name.
+# spend line. Like openrouter/api-key above, the API serves the assistant, so the
+# key must be a runtime row render-env.sh hands to the API — and it must never be
+# the Jev key or the harness key under another name.
 assistant_row="$(python3 "$READER" dev --namespace backend --consumer runtime | awk -F'\t' '$1 == "openrouter/assistant-api-key"')"
 if [[ "$(cut -f2,3 <<< "$assistant_row")" == $'OPENROUTER_ASSISTANT_API_KEY\tSecureString' ]]; then
   ok "the assistant inference key is a backend runtime SecureString (OPENROUTER_ASSISTANT_API_KEY)"
@@ -454,8 +461,8 @@ for path in openrouter/assistant-api-key \
   fi
 done
 assistant_cap="$(python3 "$READER" dev --capability-requires --include-planned | awk -F'\t' '$1 == "ai_assistant" { print $2 ":" $3 }' | sort | tr '\n' ' ')"
-if [[ "$assistant_cap" == "backend:budget/assistant-monthly-max-usd backend:budget/assistant-user-daily-max-messages backend:openrouter/assistant-api-key " ]]; then
-  ok "capability ai_assistant names the key and both limits (the model row is retired, #308)"
+if [[ "$assistant_cap" == "backend:budget/assistant-monthly-max-usd backend:budget/assistant-user-daily-max-messages backend:openrouter/api-key backend:openrouter/assistant-api-key " ]]; then
+  ok "capability ai_assistant names both keys (Haiku BYOK, Jev — #323) and both limits (the model row is retired, #308)"
 else
   bad "capability ai_assistant requires '${assistant_cap}'" \
       "readiness must report the assistant missing its key or a limit (ADR-0014 D-4/D-5)"

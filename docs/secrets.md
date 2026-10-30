@@ -220,16 +220,18 @@ none is declared — if GoGo-BE ever needs one it goes under `backend/adjust/*`,
 `openrouter/assistant-api-key` (GoGo-Infra#257, [`adr/0014`](adr/0014-gogo-ai-assistant-model-keys-budget.md))
 is the GoGo AI assistant's own OpenRouter inference key, named `gogo_ai_anthropic_<env>` in
 OpenRouter (DEV: `gogo_ai_anthropic_dev`; stag/prod are created by the owner with those
-environments). It is a `backend` **runtime** row, because the API serves the assistant. That is
-the opposite of `openrouter/api-key` (decisions POC, `consumer: seed`) and of
-`tools:ai-harness/openrouter-api-key` (harness, `pipeline`): three keys, three credit limits, three
-spend lines, and `manifest.test.sh` pins that `OPENROUTER_ASSISTANT_API_KEY` belongs to exactly
-one row. Write it only after the manifest row is on `develop`, and only with
+environments). It is a `backend` **runtime** row, because the API serves the assistant, and it
+carries **Haiku only** (Anthropic BYOK). Since GoGo-Infra#323 (owner 2026-10-31) every assistant
+Jev call runs on `openrouter/api-key` (`gogo_be_<env>`), also a runtime row; the harness stays on
+`tools:ai-harness/openrouter-api-key` (`pipeline`): three keys, three credit limits, three spend
+lines, and `manifest.test.sh` pins that `OPENROUTER_ASSISTANT_API_KEY` and `OPENROUTER_API_KEY`
+each belong to exactly one row. Write it only after the manifest row is on `develop`, and only with
 `put.sh <env> openrouter/assistant-api-key` (stdin, never an argument). **Rotate:** create a new
 key with the same name and credit limit in OpenRouter, `put.sh`, deploy, confirm one assistant
 turn, then delete the old key and add a row to the rotation register. **Kill switch:** the
-audited `assistant.enabled` feature flag in the CMS (no deploy). **Hard stop:** disable the key in
-OpenRouter. The limits and the flag are in `docs/environments.md` § GoGo AI assistant.
+audited `assistant.enabled` feature flag in the CMS (no deploy). **Hard stop:** disable **both**
+`gogo_ai_anthropic_<env>` and `gogo_be_<env>` in OpenRouter — disabling only the first leaves Jev
+spending (GoGo-Infra#323). Disabling `gogo_be_<env>` also stops `pnpm eval:intent`. The limits and the flag are in `docs/environments.md` § GoGo AI assistant.
 
 `SecureString`, Standard tier. One parameter per independently permissioned value — a single
 JSON blob would force every consumer to hold every secret.
