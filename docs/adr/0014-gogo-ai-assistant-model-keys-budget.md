@@ -236,3 +236,12 @@ none of `ASSISTANT_MODEL`, `ASSISTANT_FALLBACK_MODEL`, `FLAG_ASSISTANT`: it answ
 (Decisions API) and Claude Haiku over BYOK, and `assistant.enabled` comes from `FEATURE_FLAGS`
 only, default off. The decisions above stand as design; their SSM rows return with the code.
 
+
+## Amendment — Jev on `openrouter/api-key` (owner, 2026-10-31, GoGo-Infra#323)
+
+The assistant uses two keys, not one: Haiku stays on `openrouter/assistant-api-key`
+(`gogo_ai_anthropic_<env>`, the only key the workspace's Anthropic BYOK key applies to); every
+Jev call — intent and the `recommend_places` relevance judgment — moves to
+`openrouter/api-key` (`gogo_be_<env>`), which becomes a `runtime` row and joins capability
+`ai_assistant`. Three keys and three spend lines stand (D-3, ADR-0013 D-7/D-11): the change is
+which line Jev's spend lands on (`openrouter.decisions`). GoGo-BE ADR-0036 §9, GoGo-BE#731.
