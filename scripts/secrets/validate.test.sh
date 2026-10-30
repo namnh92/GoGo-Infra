@@ -40,7 +40,8 @@ trap 'rm -rf "$WORK"' EXIT
 #   $WORK/bypath_deny     non-empty → every GetParameter* answers AccessDenied
 #                         and every call to one is logged to $WORK/value_calls:
 #                         the readiness role (GoGo-Infra#309 D-4), which lists
-#                         through DescribeParameters only
+#                         through DescribeParameters only; tag-filtered searches
+#                         also fail because it lacks tag:GetResources
 #
 # A listing (by path or by DescribeParameters) answers one line per parameter:
 # name, type, last-modified date — the shape `--query
@@ -51,6 +52,7 @@ make_stub() {
 WORK="$(dirname "$0")"
 printf 'aws\n' >> "${WORK}/provider_calls"
 if [[ "$1" == "sts" ]]; then
+  rm -f "${WORK}"/tag_cache_*
   [[ -s "${WORK}/sts_fail" ]] && { echo "Unable to locate credentials" >&2; exit 255; }
   echo '{"Arn":"arn:aws:iam::0:user/test"}'; exit 0
 fi
@@ -67,6 +69,10 @@ if [[ "$1" == "ssm" && "$2" == "get-parameters-by-path" ]]; then
 fi
 if [[ "$1" == "ssm" && "$2" == "describe-parameters" ]]; then
   for arg in "$@"; do
+    if [[ "$arg" == Key=tag:* && -s "${WORK}/bypath_deny" ]]; then
+      echo "An error occurred (AccessDeniedException) when calling the DescribeParameters operation: not authorized to perform: tag:GetResources" >&2
+      exit 254
+    fi
     [[ "$arg" == Key=Path,Option=Recursive,Values=* ]] && { listing=yes; prefix="${arg#Key=Path,Option=Recursive,Values=}"; }
   done
 fi
@@ -114,7 +120,7 @@ tagged_set() {
   awk -F'\t' -v tr="$tree" 'index($1, tr) == 1' "${WORK}/extra_tagged"
 }
 if [[ "$1" == "ssm" && ( "$2" == "list-tags-for-resource" || "$2" == "describe-parameters" ) ]]; then
-  if [[ -s "${WORK}/tag_deny" ]]; then
+  if [[ "$2" == "list-tags-for-resource" && -s "${WORK}/tag_deny" ]]; then
     echo "An error occurred (AccessDeniedException) when calling the ListTagsForResource operation: not authorized" >&2
     exit 254
   fi
@@ -123,7 +129,12 @@ if [[ "$1" == "ssm" && "$2" == "list-tags-for-resource" ]]; then
   id=""
   for ((i=1;i<=$#;i++)); do [[ "${!i}" == "--resource-id" ]] && { j=$((i+1)); id="${!j}"; }; done
   env="$(cut -d/ -f3 <<< "$id")"
-  if tagged_set "$env" "/gogo/${env}/" | cut -f1 | grep -qxF "$id"; then echo "true"; else echo ""; fi
+  if [[ ! -f "${WORK}/tag_cache_${env}" ]]; then
+    tagged_set "$env" "/gogo/${env}/" > "${WORK}/tag_cache_${env}"
+    # CI names use /gogo/ci/<env>/, so include their explicit fixture tags too.
+    cat "${WORK}/extra_tagged" >> "${WORK}/tag_cache_${env}"
+  fi
+  if cut -f1 "${WORK}/tag_cache_${env}" | grep -qxF "$id"; then echo "true"; else echo ""; fi
   exit 0
 fi
 if [[ "$1" == "ssm" && "$2" == "describe-parameters" ]]; then
@@ -133,7 +144,25 @@ if [[ "$1" == "ssm" && "$2" == "describe-parameters" ]]; then
     /gogo/ci/*) env="$(cut -d/ -f4 <<< "$tree")" ;;
     *)          env="$(cut -d/ -f3 <<< "$tree")" ;;
   esac
-  tagged_set "$env" "$tree"
+  if [[ "$*" == *Key=tag:* ]]; then
+    tagged_set "$env" "$tree"
+  else
+    # Model CLI auto-pagination: all pages are returned unless disabled/capped.
+    inventory="$(python3 "${MANIFEST_READER}" "$env" --namespace all --consumer all | awk -F'\t' -v e="$env" '
+      $5 == "ci" { print "/gogo/ci/" e "/" $1 "\t" $3; next }
+      $5 == "tools" { print "/gogo/tools/" $1 "\t" $3; next }
+      { print "/gogo/" e "/" $5 "/" $1 "\t" $3 }')"
+    {
+      printf '%s\n' "$inventory"
+      awk '{ print $0 "\tSecureString" }' "${WORK}/extra_present"
+      cat "${WORK}/extra_tagged"
+    } | awk -F'\t' -v tr="$tree" 'index($1, tr) == 1 { types[$1]=$2 } END { for (n in types) print n "\t" types[n] }' | sort > "${WORK}/search_pages"
+    if [[ "$*" == *--no-paginate* || "$*" == *--max-items* ]]; then
+      head -1 "${WORK}/search_pages"
+    else
+      cat "${WORK}/search_pages"
+    fi
+  fi
   exit 0
 fi
 if [[ "$1" == "ssm" && "$2" == "get-parameter" ]]; then
@@ -162,6 +191,7 @@ STUB
 }
 
 run() { # run <env> [args...] -> output, sets RC
+  rm -f "${WORK}"/tag_cache_*
   MANIFEST_READER="${ROOT}/scripts/lib/manifest.py" \
   PATH="${WORK}:${PATH}" AWS_PROFILE=test "$VALIDATE" "$@" 2>&1
 }
@@ -702,6 +732,19 @@ report_run meta_type dev --strict
 if [[ $RC -eq 1 && "$OUT" == *"WRONG TYPE"* && "$(rq "${REPORTS}/meta_type.json" 'row["/gogo/dev/backend/auth/jwt-secret"]["findings"], row["/gogo/dev/backend/auth/jwt-secret"]["type_live"]')" == "(['wrong-type'], 'String')" ]]; then
   ok "#309 D-4: type drift is still caught through DescribeParameters"
 else bad "#309 D-4: the metadata path lost the type check" "rc=$RC $OUT"; fi
+# #316: D-4 also lacks tag:GetResources. Both trees must collect completely,
+# including misplaced tags on later CLI pages and outside declared namespaces.
+: > "${WORK}/type_override"
+for env in dev tools; do
+  printf '/gogo/%s/zzz-unmanaged/secret\tSecureString\n' "$env" > "${WORK}/extra_tagged"
+  report_run "tag_search_${env}" "$env" --strict
+  if [[ $RC -eq 1 && "$OUT" == *"/gogo/${env}/zzz-unmanaged/secret (SecureString)"* \
+     && "$(rq "${REPORTS}/tag_search_${env}.json" 'r["collection"]["status"]')" == complete \
+     && "$(rq "${REPORTS}/tag_search_${env}.json" 'row["/gogo/" + r["env"] + "/zzz-unmanaged/secret"]["findings"]')" == *tag-misplaced* ]]; then
+    ok "#316: ${env} finds misplaced tags across CLI pages without tag:GetResources"
+  else bad "#316: ${env} tag search must collect and classify with D-4 permissions" "rc=$RC $OUT"; fi
+done
+: > "${WORK}/extra_tagged"
 : > "${WORK}/type_override"; : > "${WORK}/bypath_deny"; : > "${WORK}/value_calls"
 
 # The deploy role (default mode): mobile and ci unread, tags unreadable.
