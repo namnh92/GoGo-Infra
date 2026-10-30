@@ -34,6 +34,7 @@ trap 'rm -rf "$WORK"' EXIT
 #   $WORK/untagged        full names of infra_readable rows stored WITHOUT the tag
 #   $WORK/extra_tagged    "name<TAB>Type" of other parameters that carry the tag
 #   $WORK/tag_deny        non-empty → tag reads answer AccessDenied
+#   $WORK/tag_deny_names  full parameter names whose tag reads answer AccessDenied
 #   $WORK/extra_present   full parameter names stored beyond the declared rows
 #                         (a retired, parked or undeclared parameter)
 #   $WORK/sts_fail        non-empty → no credentials (sts answers an error)
@@ -128,6 +129,10 @@ fi
 if [[ "$1" == "ssm" && "$2" == "list-tags-for-resource" ]]; then
   id=""
   for ((i=1;i<=$#;i++)); do [[ "${!i}" == "--resource-id" ]] && { j=$((i+1)); id="${!j}"; }; done
+  if grep -qxF "$id" "${WORK}/tag_deny_names"; then
+    echo "An error occurred (AccessDeniedException) when calling the ListTagsForResource operation: not authorized for ${id}" >&2
+    exit 254
+  fi
   env="$(cut -d/ -f3 <<< "$id")"
   if [[ ! -f "${WORK}/tag_cache_${env}" ]]; then
     tagged_set "$env" "/gogo/${env}/" > "${WORK}/tag_cache_${env}"
@@ -186,6 +191,7 @@ STUB
   chmod +x "${WORK}/aws"
   : > "${WORK}/deny"; : > "${WORK}/absent"; : > "${WORK}/type_override"
   : > "${WORK}/untagged"; : > "${WORK}/extra_tagged"; : > "${WORK}/tag_deny"
+  : > "${WORK}/tag_deny_names"
   : > "${WORK}/extra_present"; : > "${WORK}/bypath_deny"; : > "${WORK}/value_calls"; : > "${WORK}/sts_fail"
   printf 'stag\nprod\n' > "${WORK}/empty_envs"
 }
@@ -744,6 +750,18 @@ for env in dev tools; do
     ok "#316: ${env} finds misplaced tags across CLI pages without tag:GetResources"
   else bad "#316: ${env} tag search must collect and classify with D-4 permissions" "rc=$RC $OUT"; fi
 done
+# #317 / ADR-0016 D-1: keep an observed FAIL when a later candidate is unreadable.
+# The fake sorts candidates, so zzy is read successfully before zzz is denied.
+printf '/gogo/dev/zzy-unmanaged/secret\tSecureString\n/gogo/dev/zzz-unmanaged/secret\tString\n' > "${WORK}/extra_tagged"
+echo /gogo/dev/zzz-unmanaged/secret > "${WORK}/tag_deny_names"
+report_run tag_search_partial_fail dev
+if [[ $RC -eq 1 \
+   && "$(rq "${REPORTS}/tag_search_partial_fail.json" 'r["verdict"], r["collection"]["status"], row["/gogo/dev/zzy-unmanaged/secret"]["findings"]')" == "('FAIL', 'partial', ['tag-misplaced'])" \
+   && "$(rq "${REPORTS}/tag_search_partial_fail.json" 'any(e.startswith("tags: cannot search tags under /gogo/dev/") and "ListTagsForResource" in e and "AccessDeniedException" in e and "/gogo/dev/zzz-unmanaged/secret" in e for e in r["collection"]["errors"])')" == True ]] \
+   && no_disagreement "${REPORTS}/tag_search_partial_fail.json"; then
+  ok "#317: a misplaced tag outranks a later tag-read denial (FAIL > UNKNOWN), exit 1"
+else bad "#317: a partial tag search must retain tag-misplaced and FAIL without disagreement" "rc=$RC $OUT"; fi
+: > "${WORK}/tag_deny_names"
 : > "${WORK}/extra_tagged"
 : > "${WORK}/type_override"; : > "${WORK}/bypath_deny"; : > "${WORK}/value_calls"
 
