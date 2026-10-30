@@ -245,3 +245,15 @@ Jev call — intent and the `recommend_places` relevance judgment — moves to
 `openrouter/api-key` (`gogo_be_<env>`), which becomes a `runtime` row and joins capability
 `ai_assistant`. Three keys and three spend lines stand (D-3, ADR-0013 D-7/D-11): the change is
 which line Jev's spend lands on (`openrouter.decisions`). GoGo-BE ADR-0036 §9, GoGo-BE#731.
+
+- **D-6 hard stop, amended:** disable **both** `gogo_ai_anthropic_<env>` and `gogo_be_<env>` in
+  OpenRouter. Disabling only the first stops Haiku while Jev keeps spending. Disabling
+  `gogo_be_<env>` also stops `pnpm eval:intent`, which shares it.
+- **D-7 budget, amended:** the assistant's budget is the sum of **three** charges, each counted
+  once: the Haiku key's OpenRouter fee (`openrouter.assistant`), its Claude charge
+  (`anthropic.assistant`), and the assistant's Jev charge, which now lands on
+  `openrouter.decisions`. That line also carries `pnpm eval:intent` spend on the same key; the
+  Cost Center cannot split the two by key name, so the eval's spend counts against the
+  assistant budget (conservative — it can only warn sooner). GoGo-BE's own ledger (D-4) counts
+  assistant turns only and stays the enforcement point. The launch gate checks the budget scope
+  includes `openrouter.decisions`.
