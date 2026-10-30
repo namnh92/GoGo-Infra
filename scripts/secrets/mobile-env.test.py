@@ -50,7 +50,7 @@ class MobileEnvTest(unittest.TestCase):
 DSN = "https://0123456789abcdef0123456789abcdef@o0.ingest.us.sentry.io/1"
 
 
-SECURE_STRINGS = ("/mobile/adjust/",)
+SECURE_STRINGS = ("/mobile/adjust/", "/mobile/tenjin/", "/mobile/apple/")
 
 
 def ssm(values):
@@ -133,7 +133,9 @@ class AdjustTokenTest(unittest.TestCase):
                 module.adjust_token(environment, "android", None)
 
 
-class MainTest(unittest.TestCase):
+class MainRunner:
+    """Runs main() against a stand-in SSM; shared by the main() suites."""
+
     APP_ID = "00000000-0000-4000-8000-000000000001"
 
     def run_main(self, environment, parameters):
@@ -154,6 +156,16 @@ class MainTest(unittest.TestCase):
     def app_id(self, environment):
         return {f"/gogo/{environment}/backend/onesignal/app-id": self.APP_ID}
 
+    def adjust(self, environment, ios=TOKEN, android=TOKEN):
+        values = {}
+        if ios is not None:
+            values[f"/gogo/{environment}/mobile/adjust/ios-app-token"] = ios
+        if android is not None:
+            values[f"/gogo/{environment}/mobile/adjust/android-app-token"] = android
+        return values
+
+
+class MainTest(MainRunner, unittest.TestCase):
     def test_writes_the_dsn(self):
         code, text, _ = self.run_main("dev", {**self.app_id("dev"), "/gogo/dev/mobile/sentry/dsn": DSN})
         self.assertEqual(code, 0)
@@ -181,14 +193,6 @@ class MainTest(unittest.TestCase):
         code, text, _ = self.run_main("dev", {**self.app_id("dev"), "/gogo/dev/mobile/sentry/dsn": "OFF"})
         self.assertEqual(code, 1)
         self.assertIsNone(text)
-
-    def adjust(self, environment, ios=TOKEN, android=TOKEN):
-        values = {}
-        if ios is not None:
-            values[f"/gogo/{environment}/mobile/adjust/ios-app-token"] = ios
-        if android is not None:
-            values[f"/gogo/{environment}/mobile/adjust/android-app-token"] = android
-        return values
 
     def test_writes_both_adjust_tokens_and_the_environment(self):
         code, text, _ = self.run_main("dev", {**self.app_id("dev"), **self.adjust("dev")})
@@ -235,6 +239,75 @@ class MainTest(unittest.TestCase):
         code, text, _ = self.run_main("dev", {**self.app_id("dev"), **self.adjust("dev", android="OFF")})
         self.assertEqual(code, 1)
         self.assertIsNone(text)
+
+
+TENJIN_IOS = "tenjinIosKey_1"
+TENJIN_ANDROID = "tenjin-android-2"
+TEAM = "ABCDE12345"
+
+
+class TenjinAndTeamTest(MainRunner, unittest.TestCase):
+    """GoGo-Infra#291: Tenjin SDK keys and the Apple team id come from SSM."""
+
+    def rows(self, environment, ios=TENJIN_IOS, android=TENJIN_ANDROID, team=TEAM):
+        values = {**self.app_id(environment), f"/gogo/{environment}/mobile/sentry/dsn": DSN, **self.adjust(environment)}
+        for name, value in ((f"tenjin/ios-sdk-key", ios), (f"tenjin/android-sdk-key", android), ("apple/team-id", team)):
+            if value is not None:
+                values[f"/gogo/{environment}/mobile/{name}"] = value
+        return values
+
+    def test_writes_the_keys_the_config_env_and_the_team_without_bootstrap(self):
+        code, text, stderr = self.run_main("dev", self.rows("dev"))
+        self.assertEqual(code, 0)
+        self.assertIn(f"TENJIN_IOS_SDK_KEY={TENJIN_IOS}\n", text)
+        self.assertIn(f"TENJIN_ANDROID_SDK_KEY={TENJIN_ANDROID}\n", text)
+        self.assertIn("TENJIN_CONFIG_ENV=dev\n", text)
+        self.assertIn(f"APPLE_TEAM_ID={TEAM}\n", text)
+        self.assertNotIn("GoGo-Infra#291", stderr)
+
+    def test_reads_only_its_own_environment(self):
+        # The stag run is handed dev's rows only: nothing may cross over.
+        parameters = {**self.rows("stag", ios=None, android=None, team=None), **{
+            k: v for k, v in self.rows("dev").items() if "/tenjin/" in k or "/apple/" in k}}
+        code, text, stderr = self.run_main("stag", parameters)
+        self.assertEqual(code, 0)
+        self.assertNotIn("TENJIN_IOS_SDK_KEY", text)
+        self.assertNotIn("APPLE_TEAM_ID", text)
+        self.assertIn("no Tenjin SDK keys in SSM for stag", stderr)
+
+    def test_absent_rows_fall_back_with_a_warning(self):
+        code, text, stderr = self.run_main("dev", self.rows("dev", ios=None, android=None, team=None))
+        self.assertEqual(code, 0)
+        self.assertNotIn("TENJIN_", text)
+        self.assertIn("tenjin-mobile-env.py", stderr)
+        self.assertIn("no Apple team id", stderr)
+
+    def test_half_a_tenjin_pair_writes_nothing(self):
+        for missing in ("ios", "android"):
+            with self.subTest(missing=missing):
+                code, text, _ = self.run_main("dev", self.rows("dev", **{missing: None}))
+                self.assertEqual(code, 1)
+                self.assertIsNone(text)
+
+    def test_malformed_values_write_nothing(self):
+        for override in ({"ios": "bad key"}, {"android": "a$b"}, {"team": "abcde12345"}, {"team": "ABCDE1234"}):
+            with self.subTest(override=override):
+                code, text, _ = self.run_main("dev", self.rows("dev", **override))
+                self.assertEqual(code, 1)
+                self.assertIsNone(text)
+
+    def test_a_denied_read_is_not_treated_as_missing(self):
+        for override in ({"ios": "DENIED"}, {"team": "DENIED"}):
+            with self.subTest(override=override):
+                code, text, _ = self.run_main("dev", self.rows("dev", **override))
+                self.assertEqual(code, 1)
+                self.assertIsNone(text)
+
+    def test_never_prints_a_key(self):
+        code, _, stderr = self.run_main("dev", self.rows("dev"))
+        self.assertEqual(code, 0)
+        for value in (TENJIN_IOS, TENJIN_ANDROID):
+            self.assertNotIn(value, self.stdout.getvalue() + stderr)
 
 
 unittest.main()

@@ -76,6 +76,43 @@ def adjust_token(environment, platform, value):
     raise ValueError(f"ADJUST_{platform.upper()}_APP_TOKEN must be 8-32 letters and digits or the literal off")
 
 
+# GoGo-Infra#291 (INF-MOB-2). The Tenjin SDK key per app and the Apple team id
+# moved from config/bootstrap.env into SSM (mobile namespace). Same shape rules
+# tenjin-mobile-env.py applies. For one release cycle an absent row is not an
+# error: the file is written without it, a warning says so, and the old path
+# (tenjin-mobile-env.py over bootstrap.env) fills it in. Half a Tenjin pair is
+# a misconfiguration, not a fallback.
+TENJIN_KEY = re.compile(r"[A-Za-z0-9_-]+")
+TENJIN_PLATFORMS = ("ios", "android")
+APPLE_TEAM = re.compile(r"[A-Z0-9]{10}")
+
+
+def tenjin_values(environment, keys):
+    """TENJIN_* for the file, {} when neither row exists, or ValueError."""
+    present = {platform: value for platform, value in keys.items() if value is not None}
+    if not present:
+        return {}
+    missing = [platform for platform in TENJIN_PLATFORMS if platform not in present]
+    if missing:
+        raise ValueError(f"/gogo/{environment}/mobile/tenjin/{missing[0]}-sdk-key is missing while the other platform's key exists")
+    out = {}
+    for platform in TENJIN_PLATFORMS:
+        if not TENJIN_KEY.fullmatch(present[platform]):
+            raise ValueError(f"TENJIN_{platform.upper()}_SDK_KEY must be letters, digits, - and _")
+        out[f"TENJIN_{platform.upper()}_SDK_KEY"] = present[platform]
+    out["TENJIN_CONFIG_ENV"] = environment
+    return out
+
+
+def apple_team_id(value):
+    """APPLE_TEAM_ID for the file, {} when the row is absent, or ValueError."""
+    if value is None:
+        return {}
+    if not APPLE_TEAM.fullmatch(value):
+        raise ValueError("APPLE_TEAM_ID must be the 10-character Apple team id")
+    return {"APPLE_TEAM_ID": value}
+
+
 def https_url(value):
     parsed = urlparse(value)
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
@@ -166,10 +203,26 @@ def main():
             raw_adjust[platform] = None
         except (RuntimeError, ValueError, KeyError):
             parser.exit(1, "Cannot read this environment's Adjust app tokens from SSM; check AWS session/path.\n")
+    raw_tenjin = {}
+    for platform in TENJIN_PLATFORMS:
+        try:
+            raw_tenjin[platform] = read_parameter(args, f"/gogo/{args.environment}/mobile/tenjin/{platform}-sdk-key")
+        except ParameterMissing:
+            raw_tenjin[platform] = None
+        except (RuntimeError, ValueError, KeyError):
+            parser.exit(1, "Cannot read this environment's Tenjin SDK keys from SSM; check AWS session/path.\n")
+    try:
+        raw_team = read_parameter(args, f"/gogo/{args.environment}/mobile/apple/team-id")
+    except ParameterMissing:
+        raw_team = None
+    except (RuntimeError, ValueError, KeyError):
+        parser.exit(1, "Cannot read this environment's Apple team id from SSM; check AWS session/path.\n")
     try:
         dsn = sentry_dsn(args.environment, raw_dsn)
         adjust = {platform: adjust_token(args.environment, platform, value) for platform, value in raw_adjust.items()}
         values = mobile_values(args.environment, identifier, args.api_url, args.web_url, args.apns_mode, dsn, adjust)
+        values.update(tenjin_values(args.environment, raw_tenjin))
+        values.update(apple_team_id(raw_team))
         write_env(args.out, values)
     except ValueError as error:
         parser.exit(1, f"Invalid mobile configuration ({error}); no output updated.\n")
@@ -180,6 +233,10 @@ def main():
     for platform, value in raw_adjust.items():
         if value is None:
             print(f"warning: no Adjust {platform} app token for dev; Adjust is off on {platform} in this build", file=sys.stderr)
+    if all(value is None for value in raw_tenjin.values()):
+        print(f"warning: no Tenjin SDK keys in SSM for {args.environment} (GoGo-Infra#291); fill them with tenjin-mobile-env.py from bootstrap.env until put.sh writes them", file=sys.stderr)
+    if raw_team is None:
+        print(f"warning: no Apple team id in SSM for {args.environment} (GoGo-Infra#291); APPLE_TEAM_ID is not in this file", file=sys.stderr)
     print(f"Wrote {args.out}: {args.environment}, {len(values)} public variables, mode 0600")
 
 
