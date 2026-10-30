@@ -4,7 +4,14 @@ DEV is mini-production: identical integration, independent environment values.
 The SDK keys already supplied in bootstrap.env are public per-app build config.
 They are not a server API credential. Keep them out of the backend namespace.
 
-After generating the mobile environment with mobile-env.py:
+**Since GoGo-Infra#291 the keys live in SSM**: `mobile:tenjin/ios-sdk-key` and
+`mobile:tenjin/android-sdk-key` (plus `mobile:apple/team-id`), one value per
+environment, written with `put.sh <env> <path>` (value on stdin). `mobile-env.py`
+renders `TENJIN_IOS_SDK_KEY`, `TENJIN_ANDROID_SDK_KEY`, `TENJIN_CONFIG_ENV` and
+`APPLE_TEAM_ID` from them; nothing below is needed then.
+
+Fallback for one release cycle, while an environment's rows are not written yet
+(`mobile-env.py` warns): after generating the mobile environment with mobile-env.py,
 
 ```sh
 python3 scripts/secrets/tenjin-mobile-env.py dev \
