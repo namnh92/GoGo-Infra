@@ -19,7 +19,7 @@ named user.
 Mobile needs only the public App ID. Generate its build environment:
 
 ```sh
-python3 scripts/secrets/mobile-env.py dev --profile gogo-bootstrap \
+python3 scripts/secrets/mobile-env.py dev --profile gogobootstrap \
   --api-url https://api-dev.gogo.id.vn/v1 --web-url https://go-dev.gogo.id.vn \
   --apns-mode development --out <mobile-checkout>/.env
 ```

@@ -109,8 +109,8 @@ per capability, then `core`, then the failing rows, for the run summary.
 ### D-4 A metadata-only reader role, `gogo-<env>-readiness`
 
 Tag search uses CLI-auto-paginated `DescribeParameters` with `Name BeginsWith`, then
-`ListTagsForResource` per parameter; it needs no `tag:GetResources` and reads no values (GoGo-
-Infra#316).
+`ListTagsForResource` per parameter; it needs no `tag:GetResources` and reads no values
+(GoGo-Infra#316).
 
 Policy (`terraform/modules/aws-ssm-readiness`): Allow `ssm:DescribeParameters` on `*` and
 `ssm:ListTagsForResource` on `/gogo/<env>/*`, `/gogo/ci/<env>/*`, `/gogo/tools/*`; explicit Deny

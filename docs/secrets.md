@@ -319,7 +319,7 @@ copies.
 Two commands, two different questions.
 
 ```bash
-export AWS_PROFILE=gogo-bootstrap        # the scripts read this, they take no --profile
+export AWS_PROFILE=gogobootstrap        # the scripts read this, they take no --profile
 
 ./scripts/secrets/validate.sh dev              # names and types, best effort
 ./scripts/secrets/validate.sh dev --strict     # environment readiness
@@ -413,7 +413,7 @@ not a way to pass — that is the same failure as a namespace nobody could read.
 ### Bringing up stag or production
 
 ```bash
-export AWS_PROFILE=gogo-bootstrap
+export AWS_PROFILE=gogobootstrap
 
 ./scripts/secrets/validate.sh stag --strict --include-planned
 ```
@@ -740,7 +740,7 @@ Readiness reports them as a group: `validate.sh prod --strict --include-planned`
 
 ### Who may read them
 
-No GoGo role is granted these paths. They are read by the owner's own session (`gogo-bootstrap`
+No GoGo role is granted these paths. They are read by the owner's own session (`gogobootstrap`
 through SSO), which is the identity that wrote them; the permissions boundary allows a role's read
 ceiling to name `/gogo/ci/<env>/…`, but no role names `signing/*`, `store/*` or `firebase/*` and none should — the lanes run on a
 workstation, not in CI. When a release job does arrive, give it a role whose ceiling names exactly
@@ -1226,12 +1226,19 @@ F-09). So:
 3. **Confirm.** A fresh `plan (dev)` on this PR shows no change to `module.boundary`; otherwise the
    apply after the merge fails partway on the boundary.
 4. **Merge** this PR's reviewed head immediately; `terraform-apply-dev` applies the rest.
+   **A change that adds a declared role** (a new key in `local.boundary_role_keys`, as `readiness` in
+   #309) needs one more bootstrap step: `ProtectKnownRoles` denies `iam:CreateRole` on declared roles
+   to CI, so `terraform-apply-dev` fails creating it. After the merge, create the role and its policy
+   attachments from the bootstrap session with a targeted apply —
+   `-target='module.github_oidc.aws_iam_role.this["<key>"]'` plus each
+   `-target='module.github_oidc.aws_iam_role_policy_attachment.this["<key>:<policy>"]'`, same
+   variables as below, then re-run `terraform-apply-dev`; it must end with no changes (#318).
 5. **Unfreeze.** Only now let other apply-triggering merges and dispatches through. A branch cut
    before this change plans a boundary *rollback* until it is rebased onto `develop`: rebase it
    before merge, and never apply such a plan.
 
 ```bash
-export AWS_PROFILE=gogo-bootstrap
+export AWS_PROFILE=gogobootstrap
 source scripts/lib/r2-profile.sh && write_r2_profile /gogo/ci/dev/terraform/write
 export CLOUDFLARE_API_TOKEN="$(aws ssm get-parameter --name /gogo/ci/dev/terraform/write/cloudflare-token \
   --with-decryption --query Parameter.Value --output text)"
@@ -1240,8 +1247,8 @@ terraform -chdir=terraform/environments/dev apply -target=module.boundary \
 ```
 
 Tag search uses CLI-auto-paginated `DescribeParameters` with `Name BeginsWith`, then
-`ListTagsForResource` per parameter; it needs no `tag:GetResources` and reads no values (GoGo-
-Infra#316).
+`ListTagsForResource` per parameter; it needs no `tag:GetResources` and reads no values
+(GoGo-Infra#316).
 
 `validate.sh` is the detective half. It reports a declared row stored without the tag, and any
 tagged parameter in `/gogo/<env>/` or `/gogo/ci/<env>/` that is a `SecureString` or not declared

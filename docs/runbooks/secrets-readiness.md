@@ -41,8 +41,8 @@ section).
 The report's `collection.errors` says which tree or which tag read failed.
 
 Tag search uses CLI-auto-paginated `DescribeParameters` with `Name BeginsWith`, then
-`ListTagsForResource` per parameter; it needs no `tag:GetResources` and reads no values (GoGo-
-Infra#316).
+`ListTagsForResource` per parameter; it needs no `tag:GetResources` and reads no values
+(GoGo-Infra#316).
 
 - `cannot list /gogo/...` for the readiness role: its policy or the boundary does not reach that
   tree. Check `terraform output readiness_role_arn` matches the environment variable

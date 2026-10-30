@@ -29,7 +29,7 @@ The directory is `0700` and the file `0600`; the script refuses anything looser.
 ```sh
 cd GoGo-Infra
 ./scripts/secrets/put-identity-key.sh \
-  ~/.config/gogo/secrets/dev/onesignal-identity.pem dev --profile gogo-bootstrap
+  ~/.config/gogo/secrets/dev/onesignal-identity.pem dev --profile gogobootstrap
 ```
 
 Writes `/gogo/dev/backend/onesignal/identity-verification-key` as a
@@ -46,7 +46,7 @@ A second upload to an existing path is refused without it. Rotation invalidates
 every token already signed, so it is a decision, not a default:
 
 ```sh
-./scripts/secrets/put-identity-key.sh <pem> dev --profile gogo-bootstrap --overwrite
+./scripts/secrets/put-identity-key.sh <pem> dev --profile gogobootstrap --overwrite
 ```
 
 ## Why base64 rather than the raw PEM

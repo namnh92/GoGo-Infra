@@ -30,8 +30,8 @@ tfenv use "$(cat .terraform-version)"
 There is no default AWS profile, so every command needs the named one:
 
 ```bash
-export AWS_PROFILE=gogo-bootstrap
-aws sso login --profile gogo-bootstrap
+export AWS_PROFILE=gogobootstrap
+aws sso login --profile gogobootstrap
 ```
 
 Put the export in your shell profile. Without it the scripts report "not
