@@ -102,6 +102,7 @@ and not a label:
 | `gogo_be_<env>` | BE intent POC (JEV decisions) | `openrouter/api-key` (`seed`) | set at creation | `openrouter.decisions` |
 | `gogo_ai_harness_dev` | AI harness (JEV) | `tools:ai-harness/openrouter-api-key` (`/gogo/tools/`, #294) | $2 | `openrouter.dev_tooling` |
 | management key | Cost collector, read-only use | `openrouter/management-key` (dev only) | none, since it does not run inference | none |
+| workspace id (not a key) | Which workspace the collector lists: `/keys` without it shows only the Default Workspace (GoGo-Infra#321) | `openrouter/workspace-id` (dev only, the GoGo workspace UUID) | — | — |
 
 Three stops on the assistant's spend (ADR-0014 D-4): the key's credit limit (if the key page
 offers counting BYOK usage in the limit, turn it on), GoGo-BE's `ASSISTANT_MONTHLY_MAX_USD`, and
