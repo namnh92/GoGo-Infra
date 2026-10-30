@@ -166,7 +166,7 @@ Before bootstrapping an environment — and again before enabling a feature in o
 manifest what is missing rather than reading workflows to find out.
 
 ```bash
-export AWS_PROFILE=gogo-bootstrap
+export AWS_PROFILE=gogobootstrap
 
 ./scripts/secrets/validate.sh dev     --strict                    # what runs today
 ./scripts/secrets/validate.sh stag --strict --include-planned  # what it is meant to run

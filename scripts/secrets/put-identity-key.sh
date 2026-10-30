@@ -3,7 +3,7 @@
 # Upload the OneSignal Identity Verification signing key (NTF-BE-008) into SSM.
 #
 #   ./scripts/secrets/put-identity-key.sh ~/.config/gogo/secrets/dev/onesignal-identity.pem dev
-#   ./scripts/secrets/put-identity-key.sh <pem> dev --profile gogo-bootstrap --overwrite
+#   ./scripts/secrets/put-identity-key.sh <pem> dev --profile gogobootstrap --overwrite
 #
 # Why this exists rather than `cat key.pem | put.sh dev onesignal/...`:
 #
